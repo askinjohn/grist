@@ -56,7 +56,7 @@ struct MeetingGroup: Identifiable {
 }
 
 /// What the user is creating from the Create sheet.
-enum CreateKind: String, CaseIterable, Identifiable {
+enum CreateKind: String, CaseIterable, Identifiable, Hashable {
     case meeting
     case note
 
@@ -91,6 +91,17 @@ enum CreateKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// Sheet presentation token so the create UI always opens with the correct kind.
+struct CreateSheetRequest: Identifiable, Hashable {
+    let id: UUID
+    let kind: CreateKind
+
+    init(kind: CreateKind) {
+        self.id = UUID()
+        self.kind = kind
+    }
+}
+
 /// Sidebar library scope (fills the lower-left with real navigation).
 enum LibraryFilter: String, CaseIterable, Identifiable {
     case all
@@ -122,10 +133,8 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
 // MARK: - Root View (Handles Sheet + Keyboard)
 
 struct RootView: View {
-    @State private var showingNewMeetingSheet = false
-
     var body: some View {
-        MainView(showingNewMeetingSheet: $showingNewMeetingSheet)
+        MainView()
     }
 }
 
@@ -136,7 +145,6 @@ extension Notification.Name {
 // MARK: - Main View
 
 struct MainView: View {
-    @Binding var showingNewMeetingSheet: Bool
     @Environment(\.openSettings) private var openSettings
 
     // Data
@@ -175,7 +183,8 @@ struct MainView: View {
     /// When set, sidebar shows only this folder (overrides library filter).
     @State private var focusedFolder: String? = nil
 
-    // Create sheet form
+    // Create sheet form — present via item so kind is never stale
+    @State private var createSheetRequest: CreateSheetRequest? = nil
     @State private var createKind: CreateKind = .meeting
     @State private var newTitle = ""
     /// Empty string = Unfiled; otherwise an existing or newly named folder.
@@ -214,7 +223,14 @@ struct MainView: View {
         }
         .navigationTitle("")
         .toolbar { toolbarContent }
-        .sheet(isPresented: $showingNewMeetingSheet) { createSheet }
+        .sheet(item: $createSheetRequest) { request in
+            createSheet
+                .onAppear {
+                    // Re-apply in case the sheet content was built before state settled
+                    applyCreateKind(request.kind, resetTitle: true)
+                }
+                .id(request.id)
+        }
         .sheet(isPresented: $showingSettingsSheet) {
             SettingsView()
                 .frame(width: 600, height: 400)
@@ -1046,7 +1062,7 @@ struct MainView: View {
                 }
                 Spacer()
                 Button {
-                    showingNewMeetingSheet = false
+                    createSheetRequest = nil
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.title2)
@@ -1060,12 +1076,13 @@ struct MainView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    // Type tiles — single click
+                    // Type tiles — single click to switch Meeting ↔ Note
                     HStack(spacing: 12) {
                         ForEach(CreateKind.allCases) { kind in
                             createKindTile(kind)
                         }
                     }
+                    .padding(.bottom, 2)
 
                     // Title
                     VStack(alignment: .leading, spacing: 8) {
@@ -1195,7 +1212,7 @@ struct MainView: View {
             Divider()
 
             HStack {
-                Button("Cancel") { showingNewMeetingSheet = false }
+                Button("Cancel") { createSheetRequest = nil }
                 Spacer()
                 Button {
                     createSession()
@@ -1220,23 +1237,7 @@ struct MainView: View {
     private func createKindTile(_ kind: CreateKind) -> some View {
         let selected = createKind == kind
         return Button {
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
-                createKind = kind
-                // Sensible defaults when switching type
-                if kind == .meeting {
-                    autoStartRecording = true
-                    if newTitle.hasPrefix("Note ") || newTitle.isEmpty {
-                        newTitle = defaultTitle(for: .meeting)
-                    }
-                    if newTemplate == "Note" { newTemplate = "Standard Summary" }
-                } else {
-                    autoStartRecording = false
-                    if newTitle.hasPrefix("Meeting ") || newTitle.isEmpty {
-                        newTitle = defaultTitle(for: .note)
-                    }
-                    newTemplate = "Note"
-                }
-            }
+            applyCreateKind(kind, resetTitle: true)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
@@ -1244,10 +1245,8 @@ struct MainView: View {
                         .font(.system(size: 26))
                         .foregroundStyle(kind.accent)
                     Spacer()
-                    if selected {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(kind.accent)
-                    }
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? kind.accent : Color.secondary.opacity(0.35))
                 }
                 Text(kind.title)
                     .font(.headline)
@@ -1258,14 +1257,16 @@ struct MainView: View {
             }
             .padding(16)
             .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-            .background(selected ? kind.accent.opacity(0.12) : Color.primary.opacity(0.04))
+            .background(selected ? kind.accent.opacity(0.14) : Color.primary.opacity(0.04))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(selected ? kind.accent.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1)
+                    .stroke(selected ? kind.accent.opacity(0.65) : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1)
             )
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
+        .disabled(selected) // selected tile is already active; other tile remains tappable
     }
 
     private func folderChip(title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -1294,21 +1295,47 @@ struct MainView: View {
         kind == .meeting ? "Untitled Meeting" : "Untitled Note"
     }
 
-    /// Open create sheet pre-selecting a kind; seed folder from current selection if any.
-    func openCreateSheet(kind: CreateKind) {
+    /// Apply meeting vs note defaults (used when opening sheet and when tapping tiles).
+    func applyCreateKind(_ kind: CreateKind, resetTitle: Bool) {
         createKind = kind
         autoStartRecording = (kind == .meeting)
-        newTemplate = kind == .note ? "Note" : "Standard Summary"
-        newTitle = defaultTitle(for: kind)
+        if kind == .note {
+            newTemplate = "Note"
+            if resetTitle || isPlaceholderCreateTitle(newTitle) {
+                newTitle = defaultTitle(for: .note)
+            }
+        } else {
+            if newTemplate == "Note" { newTemplate = "Standard Summary" }
+            if resetTitle || isPlaceholderCreateTitle(newTitle) {
+                newTitle = defaultTitle(for: .meeting)
+            }
+        }
+    }
+
+    private func isPlaceholderCreateTitle(_ title: String) -> Bool {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return true }
+        if t.hasPrefix("Untitled ") { return true }
+        if t.hasPrefix("Meeting ") { return true }
+        if t.hasPrefix("Note ") { return true }
+        return false
+    }
+
+    /// Open create sheet pre-selecting a kind; seed folder from current selection if any.
+    func openCreateSheet(kind: CreateKind) {
+        applyCreateKind(kind, resetTitle: true)
         isCreatingNewFolder = false
         newFolderInlineName = ""
-        // Prefer folder of the currently selected item, else unfiled
-        if let g = selectedMeeting?.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty {
+        // Prefer focused folder, else folder of selected item, else unfiled
+        if let f = focusedFolder, !f.isEmpty {
+            newFolderSelection = f
+        } else if let g = selectedMeeting?.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty {
             newFolderSelection = g
         } else {
             newFolderSelection = ""
         }
-        showingNewMeetingSheet = true
+        // item-based sheet always carries the intended kind (fixes stale Meeting selection)
+        createSheetRequest = CreateSheetRequest(kind: kind)
     }
 
     // MARK: - Computed Data
@@ -1532,7 +1559,7 @@ struct MainView: View {
     }
 
     func createSession() {
-        showingNewMeetingSheet = false
+        createSheetRequest = nil
 
         let id = String(Int(Date().timeIntervalSince1970))
         let title = newTitle.trimmingCharacters(in: .whitespaces).isEmpty
