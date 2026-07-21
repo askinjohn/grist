@@ -16,6 +16,8 @@ Capture meetings (mic + system audio), write notes, import **articles** or **You
 | **Folders** | File items; **delete folder** with *Move to Unfiled* or *soft-delete contents* |
 | **Auto-organize** | One button: name untitled items + file unfiled ones; shows a summary popup |
 | **Library** | All / Unfiled / Meetings / Notes filters |
+| **Search** | Sidebar search across the whole library; jumps to the item + best tab; shows match snippets |
+| **Export** | Markdown for one note/meeting (toolbar **Export**); folder export as many `.md` files + `_index.md` |
 | **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
 | **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
@@ -109,6 +111,17 @@ Requires captions on the video (manual or auto). If none: install/check `yt-dlp`
 
 - On a **meeting/note**: Chat tab uses that item (and its folder if any)  
 - Sidebar **Ask everything**: chat over **all** notes and meetings (RAG when the library is large)
+
+### Search
+
+Sidebar search (top of the list) matches **title, notes, summary, transcript, folder** across the whole library (not only the current filter). Results show a short snippet; selecting a hit opens that item and switches to the tab where the match was found (Summary / Notes / Transcript). Press Return to open the top hit.
+
+### Export
+
+- Open an item → toolbar **Export** → **Export Markdown…** (or **Copy as Markdown**)  
+- Keyboard: **⌘⇧E** for export dialog  
+- Right-click a sidebar row → Export Markdown…  
+- Right-click a **folder** → Export folder as Markdown… (one `.md` per item + `_index.md`)
 
 ---
 
@@ -220,7 +233,8 @@ Signing prefers **Apple Development** (stable TCC). Override with `CODESIGN_IDEN
 | X / LinkedIn import fails | Expected — those pages need login; paste text into a Note |
 | Wrong folder on import | Import defaults to Unfiled — pick a chip explicitly |
 | Whisper process failed | Re-run setup Whisper step (`-DWHISPER_COREML=OFF`) |
-| Weak RAG / chat | `ollama pull nomic-embed-text` |
+| Weak RAG / chat | Embeddings missing — `ollama pull nomic-embed-text` (used to find relevant note chunks) |
+| Search finds nothing | Query is case-insensitive over title/body/summary; clear filters are ignored while searching |
 | Generic Dock icon | `killall Dock` after rebuild; open `~/Applications/Grist.app` only |
 | MCP not loading | Restart Claude; check binary path in config |
 

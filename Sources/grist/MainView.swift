@@ -160,6 +160,7 @@ struct RootView: View {
 
 extension Notification.Name {
     static let meetingDeleted = Notification.Name("meetingDeleted")
+    static let exportMeetingRequested = Notification.Name("exportMeetingRequested")
 }
 
 // MARK: - Main View
@@ -172,6 +173,8 @@ struct MainView: View {
     @State private var folders: [String] = []
     @State private var selectedMeeting: Meeting? = nil
     @State private var searchText = ""
+    /// When set, open the best tab for a search hit (summary / notes / transcript).
+    @State private var pendingSearchReveal = false
     @State private var showingNewFolderAlert = false
     @State private var newFolderName = ""
     @State private var showingImportUrlAlert = false
@@ -331,6 +334,11 @@ struct MainView: View {
                 selectedMeeting = meetings.first
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .exportMeetingRequested)) { note in
+            guard let id = note.object as? String,
+                  let m = meetings.first(where: { $0.id == id }) ?? db.getMeeting(id: id) else { return }
+            exportMeeting(m)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newMeetingRequested)) { note in
             let kind: CreateKind
             if let raw = note.object as? String, let k = CreateKind(rawValue: raw) {
@@ -345,8 +353,11 @@ struct MainView: View {
             if let id {
                 loadDetails(id: id)
                 if let m = selectedMeeting {
-                    // Notes open on Write; long imports default to Preview (reading mode)
-                    if m.isNoteType {
+                    if pendingSearchReveal || isSearching {
+                        pendingSearchReveal = false
+                        revealSearchMatch(in: m)
+                    } else if m.isNoteType {
+                        // Notes open on Write; long imports default to Preview (reading mode)
                         selectedTab = "notes"
                         let longBody = m.manualNotes.count > 400 || m.transcript.count > 400
                         noteShowPreview = longBody
@@ -356,6 +367,9 @@ struct MainView: View {
                     }
                 }
             }
+        }
+        .onChange(of: searchText) { _, query in
+            handleSearchQueryChange(query)
         }
 
         .frame(minWidth: 960, minHeight: 640)
@@ -459,22 +473,71 @@ struct MainView: View {
                     }
                 }
 
-                // ITEMS (filtered list)
-                ForEach(groupedMeetings) { group in
-                    Section(group.name) {
-                        ForEach(group.meetings) { meeting in
-                            SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
+                // ITEMS (filtered list) — while searching, a flat “Search results” section
+                if isSearching {
+                    Section {
+                        if filteredMeetings.isEmpty {
+                            Text("No matches for “\(searchText)”")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            ForEach(filteredMeetings) { meeting in
+                                SidebarRow(
+                                    meeting: meeting,
+                                    isSelected: selectedMeeting?.id == meeting.id,
+                                    searchQuery: searchText
+                                )
                                 .tag(meeting)
-                                .draggable(meeting.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    openSearchResult(meeting)
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Search results")
+                            Spacer()
+                            Text("\(filteredMeetings.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                         }
                     }
-                    .dropDestination(for: String.self) { items, _ in
-                        moveMeetings(items, toFolder: dropFolder(fromSection: group.name))
+                } else {
+                    ForEach(groupedMeetings) { group in
+                        Section(group.name) {
+                            ForEach(group.meetings) { meeting in
+                                SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
+                                    .tag(meeting)
+                                    .draggable(meeting.id)
+                                    .contextMenu {
+                                        Button {
+                                            exportMeeting(meeting)
+                                        } label: {
+                                            Label("Export Markdown…", systemImage: "square.and.arrow.up")
+                                        }
+                                        Button(role: .destructive) {
+                                            Database.shared.softDeleteMeeting(id: meeting.id)
+                                            NotificationCenter.default.post(name: .meetingDeleted, object: nil)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
+                        .dropDestination(for: String.self) { items, _ in
+                            moveMeetings(items, toFolder: dropFolder(fromSection: group.name))
+                        }
                     }
                 }
             }
             .listStyle(.sidebar)
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search notes & meetings")
+            .onSubmit(of: .search) {
+                if let first = filteredMeetings.first {
+                    openSearchResult(first)
+                }
+            }
         }
         .navigationTitle("Grist")
         .safeAreaInset(edge: .bottom) {
@@ -847,6 +910,11 @@ struct MainView: View {
             Button("New note here") {
                 focusedFolder = name
                 openCreateSheet(kind: .note)
+            }
+            Button {
+                exportFolder(name)
+            } label: {
+                Label("Export folder as Markdown…", systemImage: "square.and.arrow.up")
             }
             Divider()
             Button("Delete Folder…", role: .destructive) {
@@ -1975,13 +2043,38 @@ struct MainView: View {
 
         // Export & Record / Note actions
         ToolbarItemGroup(placement: .primaryAction) {
-            if selectedMeeting != nil && selectedTab == "summary" {
-                Button {
-                    copySummaryToClipboard()
+            if let m = selectedMeeting {
+                Menu {
+                    Button {
+                        exportMeeting(m)
+                    } label: {
+                        Label("Export Markdown…", systemImage: "square.and.arrow.up")
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    Button {
+                        copyFullExportToClipboard(m)
+                    } label: {
+                        Label("Copy as Markdown", systemImage: "doc.on.clipboard")
+                    }
+                    if !m.summary.isEmpty {
+                        Button {
+                            copySummaryToClipboard()
+                        } label: {
+                            Label("Copy Summary Only", systemImage: "doc.on.doc")
+                        }
+                    }
+                    if let folder = m.groupName, !folder.isEmpty {
+                        Divider()
+                        Button {
+                            exportFolder(folder)
+                        } label: {
+                            Label("Export Folder “\(folder)”…", systemImage: "folder")
+                        }
+                    }
                 } label: {
-                    Label("Copy Summary", systemImage: "doc.on.doc")
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help("Copy Markdown summary to clipboard")
+                .help("Export this note/meeting as Markdown")
             }
 
             if selectedMeeting?.isNoteType == true {
@@ -2046,8 +2139,26 @@ struct MainView: View {
 
     // MARK: - Computed Data
 
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var filteredMeetings: [Meeting] {
         var list = meetings
+
+        // While searching, look across the whole library (ignore folder / filter scope)
+        // so results always “jump” to the real item.
+        if isSearching {
+            let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return list.filter { Self.meeting($0, matchesSearch: q) }
+                .sorted { a, b in
+                    // Prefer title hits, then recency
+                    let at = a.title.localizedCaseInsensitiveContains(q)
+                    let bt = b.title.localizedCaseInsensitiveContains(q)
+                    if at != bt { return at && !bt }
+                    return a.timestamp > b.timestamp
+                }
+        }
 
         // Folder focus wins over library filter
         if let folder = focusedFolder {
@@ -2064,14 +2175,88 @@ struct MainView: View {
                 list = list.filter { $0.isNoteType }
             }
         }
+        return list
+    }
 
-        guard !searchText.isEmpty else { return list }
-        return list.filter {
-            $0.title.localizedCaseInsensitiveContains(searchText) ||
-            $0.transcript.localizedCaseInsensitiveContains(searchText) ||
-            $0.manualNotes.localizedCaseInsensitiveContains(searchText) ||
-            $0.summary.localizedCaseInsensitiveContains(searchText)
+    static func meeting(_ m: Meeting, matchesSearch q: String) -> Bool {
+        guard !q.isEmpty else { return true }
+        return m.title.localizedCaseInsensitiveContains(q)
+            || m.transcript.localizedCaseInsensitiveContains(q)
+            || m.manualNotes.localizedCaseInsensitiveContains(q)
+            || m.summary.localizedCaseInsensitiveContains(q)
+            || (m.groupName?.localizedCaseInsensitiveContains(q) ?? false)
+    }
+
+    /// Open a search hit in the detail pane and jump to the matching tab.
+    func openSearchResult(_ meeting: Meeting) {
+        pendingSearchReveal = true
+        // Clear folder focus so the row stays visible under “Search results”
+        focusedFolder = nil
+        libraryFilter = .all
+        selectedMeeting = meetings.first(where: { $0.id == meeting.id }) ?? meeting
+    }
+
+    private func handleSearchQueryChange(_ query: String) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        let hits = filteredMeetings
+        guard !hits.isEmpty else { return }
+        // If nothing selected or selection not in results, jump to the best hit
+        if selectedMeeting == nil || !hits.contains(where: { $0.id == selectedMeeting?.id }) {
+            openSearchResult(hits[0])
         }
+    }
+
+    /// Pick the tab where the search query appears (summary > notes > transcript).
+    private func revealSearchMatch(in m: Meeting) {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        if m.isNoteType {
+            if m.summary.localizedCaseInsensitiveContains(q) {
+                selectedTab = "summary"
+            } else {
+                selectedTab = "notes"
+                // Preview when the hit is in a long body
+                noteShowPreview = m.manualNotes.count > 400 || m.transcript.localizedCaseInsensitiveContains(q)
+            }
+            return
+        }
+        // Meeting
+        if m.summary.localizedCaseInsensitiveContains(q) {
+            selectedTab = "summary"
+        } else if m.manualNotes.localizedCaseInsensitiveContains(q) {
+            selectedTab = "notes"
+        } else if m.transcript.localizedCaseInsensitiveContains(q) {
+            selectedTab = "transcript"
+        } else {
+            selectedTab = m.summary.isEmpty ? "transcript" : "summary"
+        }
+    }
+
+    // MARK: - Export
+
+    func exportMeeting(_ m: Meeting) {
+        let md = NoteExporter.markdown(for: m)
+        if let url = NoteExporter.saveMarkdownPanel(defaultName: NoteExporter.safeFilename(for: m), contents: md) {
+            statusMessage = "Exported \(url.lastPathComponent)"
+        }
+    }
+
+    func exportFolder(_ name: String) {
+        let items = meetings.filter { ($0.groupName ?? "") == name }
+        guard !items.isEmpty else {
+            statusMessage = "Folder is empty"
+            return
+        }
+        if let dir = NoteExporter.saveFolderPanel(meetings: items, suggestedName: name) {
+            statusMessage = "Exported \(items.count) files → \(dir.lastPathComponent)"
+            NSWorkspace.shared.open(dir)
+        }
+    }
+
+    func copyFullExportToClipboard(_ m: Meeting) {
+        copyToPasteboard(NoteExporter.markdown(for: m))
+        statusMessage = "Copied Markdown"
     }
 
     var groupedMeetings: [MeetingGroup] {
@@ -3014,6 +3199,7 @@ struct MainView: View {
 struct SidebarRow: View {
     let meeting: Meeting
     let isSelected: Bool
+    var searchQuery: String = ""
 
     var body: some View {
         HStack(spacing: 8) {
@@ -3026,47 +3212,60 @@ struct SidebarRow: View {
                 Text(meeting.title)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(meeting.kindLabel)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(meeting.isNoteType ? .blue : .secondary)
-                    Text("·")
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
-                    Text(relativeTime)
+                if let snippet = matchSnippet {
+                    Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if let dur = meeting.formattedDuration {
+                        .lineLimit(2)
+                } else {
+                    HStack(spacing: 4) {
+                        Text(meeting.kindLabel)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(meeting.isNoteType ? .blue : .secondary)
                         Text("·")
                             .font(.caption2)
                             .foregroundStyle(.quaternary)
-                        Text(dur)
+                        Text(relativeTime)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-                    if let folder = meeting.groupName, !folder.isEmpty {
-                        Text("·")
-                            .font(.caption2)
-                            .foregroundStyle(.quaternary)
-                        Text(folder)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                    if !meeting.summary.isEmpty {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 5, height: 5)
-                    } else if !meeting.transcript.isEmpty {
-                        Circle()
-                            .fill(.orange)
-                            .frame(width: 5, height: 5)
+                        if let dur = meeting.formattedDuration {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                            Text(dur)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let folder = meeting.groupName, !folder.isEmpty {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                            Text(folder)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        if !meeting.summary.isEmpty {
+                            Circle()
+                                .fill(.green)
+                                .frame(width: 5, height: 5)
+                        } else if !meeting.transcript.isEmpty {
+                            Circle()
+                                .fill(.orange)
+                                .frame(width: 5, height: 5)
+                        }
                     }
                 }
             }
         }
         .padding(.vertical, 2)
         .contextMenu {
+            Button {
+                // Export is handled by parent when available; post so MainView can listen — use Notification
+                NotificationCenter.default.post(name: .exportMeetingRequested, object: meeting.id)
+            } label: {
+                Label("Export Markdown…", systemImage: "square.and.arrow.up")
+            }
             Button(role: .destructive) {
                 Database.shared.softDeleteMeeting(id: meeting.id)
                 NotificationCenter.default.post(name: .meetingDeleted, object: nil)
@@ -3074,6 +3273,38 @@ struct SidebarRow: View {
                 Label("Delete", systemImage: "trash")
             }
         }
+    }
+
+    /// Short excerpt around the first search hit (title hits skip snippet).
+    private var matchSnippet: String? {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return nil }
+        if meeting.title.localizedCaseInsensitiveContains(q) {
+            if let folder = meeting.groupName, !folder.isEmpty {
+                return "\(meeting.kindLabel) · \(folder)"
+            }
+            return meeting.kindLabel
+        }
+        for field in [meeting.summary, meeting.manualNotes, meeting.transcript] {
+            if let snip = Self.snippet(in: field, around: q) {
+                return snip
+            }
+        }
+        return nil
+    }
+
+    private static func snippet(in text: String, around query: String, radius: Int = 42) -> String? {
+        guard let range = text.range(of: query, options: .caseInsensitive) else { return nil }
+        let start = text.index(range.lowerBound, offsetBy: -radius, limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(range.upperBound, offsetBy: radius, limitedBy: text.endIndex) ?? text.endIndex
+        var s = String(text[start..<end])
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        s = s.trimmingCharacters(in: .whitespaces)
+        let prefix = start == text.startIndex ? "" : "…"
+        let suffix = end == text.endIndex ? "" : "…"
+        return prefix + s + suffix
     }
 
     var relativeTime: String {
