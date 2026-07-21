@@ -59,6 +59,7 @@ struct MeetingGroup: Identifiable {
 enum CreateKind: String, CaseIterable, Identifiable, Hashable {
     case meeting
     case note
+    case article
 
     var id: String { rawValue }
 
@@ -66,6 +67,7 @@ enum CreateKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .meeting: return "Meeting"
         case .note: return "Note"
+        case .article: return "Article"
         }
     }
 
@@ -73,6 +75,7 @@ enum CreateKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .meeting: return "Record mic + system audio, then AI summary"
         case .note: return "Write freely — no recording required"
+        case .article: return "Paste a URL — web page or YouTube captions"
         }
     }
 
@@ -80,6 +83,7 @@ enum CreateKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .meeting: return "waveform.circle.fill"
         case .note: return "note.text"
+        case .article: return "link.circle.fill"
         }
     }
 
@@ -87,6 +91,7 @@ enum CreateKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .meeting: return .red
         case .note: return .blue
+        case .article: return .orange
         }
     }
 }
@@ -110,6 +115,8 @@ struct CreateItemPayload {
     let template: String
     let model: String
     let autoStartRecording: Bool
+    /// Used when kind == .article
+    let articleURL: String?
 }
 
 /// Sidebar library scope (fills the lower-left with real navigation).
@@ -118,6 +125,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case unfiled
     case meetings
     case notes
+    case askEverything
 
     var id: String { rawValue }
 
@@ -127,6 +135,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .unfiled: return "Unfiled"
         case .meetings: return "Meetings"
         case .notes: return "Notes"
+        case .askEverything: return "Ask everything"
         }
     }
 
@@ -136,6 +145,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .unfiled: return "tray"
         case .meetings: return "waveform"
         case .notes: return "note.text"
+        case .askEverything: return "sparkles.rectangle.stack"
         }
     }
 }
@@ -238,7 +248,9 @@ struct MainView: View {
             sidebarContent
                 .navigationSplitViewColumnWidth(min: 260, ideal: 288, max: 360)
         } detail: {
-            if let _ = selectedMeeting {
+            if libraryFilter == .askEverything && focusedFolder == nil {
+                globalChatDetail
+            } else if let _ = selectedMeeting {
                 detailContent
             } else {
                 emptyDetailPlaceholder
@@ -343,10 +355,13 @@ struct MainView: View {
     @ViewBuilder
     var sidebarContent: some View {
         VStack(spacing: 0) {
-            // One-click create: Meeting | Note
-            HStack(spacing: 8) {
-                sidebarCreateButton(kind: .meeting)
-                sidebarCreateButton(kind: .note)
+            // One-click create: Meeting | Note | Article
+            VStack(spacing: 6) {
+                HStack(spacing: 8) {
+                    sidebarCreateButton(kind: .meeting)
+                    sidebarCreateButton(kind: .note)
+                }
+                sidebarCreateButton(kind: .article)
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
@@ -703,23 +718,61 @@ struct MainView: View {
         return Button {
             focusedFolder = nil
             libraryFilter = filter
+            if filter == .askEverything {
+                selectedMeeting = nil
+            }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: filter.icon)
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 16)
-                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                    .foregroundStyle(selected ? (filter == .askEverything ? .purple : Color.accentColor) : .secondary)
                 Text(filter.label)
                     .font(.callout.weight(selected ? .semibold : .regular))
                 Spacer()
-                Text("\(count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
+                if filter != .askEverything {
+                    Text("\(count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .listRowBackground(selected ? (filter == .askEverything ? Color.purple.opacity(0.12) : Color.accentColor.opacity(0.12)) : Color.clear)
+    }
+
+    @ViewBuilder
+    private var globalChatDetail: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Ask everything")
+                        .font(.headline)
+                    Text("Answers use all notes and meetings in your library")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Picker("", selection: $selectedModel) {
+                    ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.bar)
+
+            Divider()
+
+            ChatView(
+                scope: .global,
+                selectedModel: selectedModel,
+                customModelName: customModelName
+            )
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func folderNavRow(_ name: String) -> some View {
@@ -919,6 +972,7 @@ struct MainView: View {
         case .unfiled: return meetings.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
         case .meetings: return meetings.filter { !$0.isNoteType }.count
         case .notes: return meetings.filter { $0.isNoteType }.count
+        case .askEverything: return meetings.count
         }
     }
 
@@ -996,7 +1050,7 @@ struct MainView: View {
                     noteEmptyAIState
                 }
             } else if selectedTab == "chat", let m = selectedMeeting {
-                ChatView(meeting: m, selectedModel: selectedModel, customModelName: customModelName)
+                ChatView(scope: .item(m), selectedModel: selectedModel, customModelName: customModelName)
                     .id(m.id)
             } else {
                 noteWritingSurface
@@ -1504,7 +1558,7 @@ struct MainView: View {
             manualNotesView
         case "chat":
             if let m = selectedMeeting {
-                ChatView(meeting: m, selectedModel: selectedModel, customModelName: customModelName)
+                ChatView(scope: .item(m), selectedModel: selectedModel, customModelName: customModelName)
                     .id(m.id)
             }
         case "transcript":
@@ -1560,6 +1614,7 @@ struct MainView: View {
             HStack(spacing: 14) {
                 emptyCreateCard(kind: .meeting)
                 emptyCreateCard(kind: .note)
+                emptyCreateCard(kind: .article)
             }
             .padding(.top, 8)
         }
@@ -1766,7 +1821,7 @@ struct MainView: View {
             list = list.filter { ($0.groupName ?? "") == folder }
         } else {
             switch libraryFilter {
-            case .all:
+            case .all, .askEverything:
                 break
             case .unfiled:
                 list = list.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
@@ -1793,8 +1848,12 @@ struct MainView: View {
         }
 
         switch libraryFilter {
-        case .unfiled, .meetings, .notes:
+        case .unfiled, .meetings, .notes, .askEverything:
             // Don't re-split into every folder; show timeline (and folder name on each row)
+            // askEverything uses the detail pane for chat; list can still show All-style items
+            if libraryFilter == .askEverything {
+                return timeGrouped(filteredMeetings, headerPrefix: nil)
+            }
             return timeGrouped(filteredMeetings, headerPrefix: nil)
         case .all:
             var customGroups: [String: [Meeting]] = [:]
@@ -2004,6 +2063,23 @@ struct MainView: View {
     }
 
     func createSession(from payload: CreateItemPayload) {
+        // Article → same pipeline as Import URL
+        if payload.kind == .article {
+            let url = (payload.articleURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !url.isEmpty else {
+                statusMessage = "Enter a URL"
+                return
+            }
+            importUrlString = url
+            importIsCreatingFolder = false
+            importNewFolderName = ""
+            importFolderSelection = payload.folderName ?? ""
+            newModel = payload.model
+            selectedModel = payload.model
+            importFromUrl()
+            return
+        }
+
         let id = String(Int(Date().timeIntervalSince1970))
         let title = payload.title.trimmingCharacters(in: .whitespaces).isEmpty
             ? (payload.kind == .note ? "Untitled Note" : "Untitled Meeting")
@@ -2412,16 +2488,48 @@ struct SidebarRow: View {
     }
 }
 
-// MARK: - Chat View (RAG Multi-Meeting Chat)
+// MARK: - Chat View (item / folder / global)
+
+enum ChatScope: Equatable {
+    case item(Meeting)
+    case global
+
+    var historyKey: String {
+        switch self {
+        case .item(let m): return m.groupName ?? m.id
+        case .global: return "__global__"
+        }
+    }
+
+    var emptyTitle: String {
+        switch self {
+        case .item: return "Ask questions about this item"
+        case .global: return "Ask across your whole library"
+        }
+    }
+
+    var emptySubtitle: String {
+        switch self {
+        case .item(let m):
+            if let g = m.groupName {
+                return "This is in “\(g)” — answers use all items in that folder when possible."
+            }
+            return "Answers use this note or meeting’s content."
+        case .global:
+            return "RAG searches all notes and meetings. Best with nomic-embed-text installed."
+        }
+    }
+}
+
 struct ChatView: View {
-    let meeting: Meeting
+    let scope: ChatScope
     let selectedModel: String
     let customModelName: String
-    
+
     @State private var chatHistory: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var isThinking = false
-    
+
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
@@ -2431,16 +2539,14 @@ struct ChatView: View {
                             Image(systemName: "sparkles.rectangle.stack")
                                 .font(.system(size: 40, weight: .light))
                                 .foregroundStyle(.tertiary)
-                            Text("Ask questions about this meeting")
+                            Text(scope.emptyTitle)
                                 .font(.title3.weight(.medium))
                                 .foregroundStyle(.secondary)
-                            if let group = meeting.groupName {
-                                Text("Because this is in the '\(group)' group, the AI will answer using transcripts from ALL meetings in this group.")
-                                    .font(.callout)
-                                    .foregroundStyle(.tertiary)
-                                    .multilineTextAlignment(.center)
-                                    .frame(maxWidth: 320)
-                            }
+                            Text(scope.emptySubtitle)
+                                .font(.callout)
+                                .foregroundStyle(.tertiary)
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: 360)
                         }
                         .padding(.top, 60)
                     } else {
@@ -2462,7 +2568,7 @@ struct ChatView: View {
                 }
                 .padding()
             }
-            
+
             Divider()
             HStack(spacing: 12) {
                 TextField("Ask anything...", text: $inputText)
@@ -2474,7 +2580,7 @@ struct ChatView: View {
                     .clipShape(Capsule())
                     .overlay(Capsule().stroke(Color(NSColor.separatorColor).opacity(0.3), lineWidth: 1))
                     .onSubmit { sendMessage() }
-                
+
                 Button {
                     sendMessage()
                 } label: {
@@ -2494,65 +2600,87 @@ struct ChatView: View {
             .shadow(color: .black.opacity(0.05), radius: 10, y: -5)
         }
         .onAppear { loadHistory() }
-        .onChange(of: meeting.id) { _, _ in loadHistory() }
+        .onChange(of: scope.historyKey) { _, _ in loadHistory() }
     }
-    
+
     func loadHistory() {
-        let group = meeting.groupName ?? meeting.id
-        chatHistory = Database.shared.fetchChatMessages(forGroup: group)
+        chatHistory = Database.shared.fetchChatMessages(forGroup: scope.historyKey)
     }
-    
+
+    private func contextMeetings() -> [Meeting] {
+        let all = Database.shared.fetchActiveMeetings()
+        switch scope {
+        case .global:
+            return all
+        case .item(let meeting):
+            if let g = meeting.groupName, !g.isEmpty {
+                return all.filter { $0.groupName == g }
+            }
+            return [meeting]
+        }
+    }
+
+    private func contextBlob(for m: Meeting) -> String {
+        var parts: [String] = []
+        if !m.summary.isEmpty { parts.append("Summary:\n\(m.summary)") }
+        if !m.transcript.isEmpty { parts.append("Transcript:\n\(m.transcript)") }
+        if !m.manualNotes.isEmpty { parts.append("Notes:\n\(m.manualNotes)") }
+        return parts.joined(separator: "\n\n")
+    }
+
     func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
         inputText = ""
         isThinking = true
-        
-        let group = meeting.groupName ?? meeting.id
+
+        let group = scope.historyKey
         let userMsg = ChatMessage(id: UUID().uuidString, groupName: group, role: "user", content: text, timestamp: Date().timeIntervalSince1970)
         chatHistory.append(userMsg)
         Database.shared.saveChatMessage(userMsg)
-        
+
         Task {
             do {
                 let model = selectedModel == "custom" ? customModelName : selectedModel
-                
-                // Fetch context
-                let meetingsInContext: [Meeting]
-                if let g = meeting.groupName {
-                    meetingsInContext = Database.shared.fetchActiveMeetings().filter { $0.groupName == g }
-                } else {
-                    meetingsInContext = [meeting]
-                }
-                
-                var systemContext = "You are a helpful meeting assistant. Answer the user's questions based ONLY on the following meeting transcripts. If the answer is not in the transcripts, say so.\n\n"
-                
-                if meetingsInContext.count > 6 {
-                    // Use True RAG
+                let meetingsInContext = contextMeetings()
+
+                var systemContext = "You are a helpful knowledge assistant for Grist. Answer using ONLY the provided notes/meetings. If the answer is not present, say so. Cite note titles when useful.\n\n"
+
+                let useRAG = meetingsInContext.count > 6 || scope == .global
+                if useRAG {
                     let meetingIds = meetingsInContext.map { $0.id }
-                    let topChunks = try await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: 15)
-                    
-                    systemContext += "=== RELEVANT CONTEXT EXCERPTS ===\n"
-                    for chunk in topChunks {
-                        let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown Meeting"
-                        systemContext += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
+                    let topChunks = try await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: scope == .global ? 20 : 15)
+                    if topChunks.isEmpty {
+                        // Fall back to stuffing recent items with content
+                        for m in meetingsInContext.prefix(8) {
+                            let blob = contextBlob(for: m)
+                            if blob.isEmpty { continue }
+                            systemContext += "=== \(m.kindLabel): \(m.title) ===\n\(blob.prefix(3000))\n\n"
+                        }
+                    } else {
+                        systemContext += "=== RELEVANT EXCERPTS ===\n"
+                        for chunk in topChunks {
+                            let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
+                            systemContext += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
+                        }
                     }
                 } else {
-                    // Use Context Stuffing
                     for m in meetingsInContext {
-                        systemContext += "=== Meeting: \(m.title) (Date: \(Date(timeIntervalSince1970: m.timestamp))) ===\n"
-                        systemContext += "\(m.transcript)\n\n"
+                        let blob = contextBlob(for: m)
+                        if blob.isEmpty { continue }
+                        systemContext += "=== \(m.kindLabel): \(m.title) (Date: \(Date(timeIntervalSince1970: m.timestamp))) ===\n"
+                        systemContext += "\(blob)\n\n"
                     }
                 }
-                
+
                 var apiMessages: [OllamaClient.OllamaChatMessage] = []
                 apiMessages.append(OllamaClient.OllamaChatMessage(role: "system", content: systemContext))
                 for msg in chatHistory {
                     apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
                 }
-                
+
                 let response = try await OllamaClient.shared.chat(messages: apiMessages, model: model)
-                
+
                 await MainActor.run {
                     let aiMsg = ChatMessage(id: UUID().uuidString, groupName: group, role: "assistant", content: response.content, timestamp: Date().timeIntervalSince1970)
                     chatHistory.append(aiMsg)
@@ -2615,6 +2743,7 @@ struct CreateItemSheet: View {
 
     @State private var kind: CreateKind
     @State private var title: String
+    @State private var articleURL: String = ""
     @State private var folderSelection: String
     @State private var isCreatingNewFolder: Bool = false
     @State private var newFolderName: String = ""
@@ -2644,9 +2773,15 @@ struct CreateItemSheet: View {
         self.onCreate = onCreate
 
         _kind = State(initialValue: initialKind)
-        _title = State(initialValue: initialKind == .note ? "Untitled Note" : "Untitled Meeting")
+        let defaultTitle: String = {
+            switch initialKind {
+            case .note, .article: return "Untitled Note"
+            case .meeting: return "Untitled Meeting"
+            }
+        }()
+        _title = State(initialValue: defaultTitle)
         _folderSelection = State(initialValue: initialFolder)
-        _template = State(initialValue: initialKind == .note ? "Note" : "Standard Summary")
+        _template = State(initialValue: (initialKind == .note || initialKind == .article) ? "Note" : "Standard Summary")
         _model = State(initialValue: initialModel)
         _autoStartRecording = State(initialValue: initialKind == .meeting)
     }
@@ -2657,9 +2792,7 @@ struct CreateItemSheet: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Create \(kind.title)")
                         .font(.title2.weight(.bold))
-                    Text(kind == .note
-                         ? "Write freely — no recording required."
-                         : "Record mic + system audio, then AI summary.")
+                    Text(kind.subtitle)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -2677,21 +2810,45 @@ struct CreateItemSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
-                    HStack(spacing: 12) {
+                    // 3 type tiles can wrap — use LazyVGrid
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
                         ForEach(CreateKind.allCases) { k in
                             kindTile(k)
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("TITLE")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        TextField(kind == .meeting ? "e.g. Weekly Sync" : "e.g. Product ideas", text: $title)
-                            .textFieldStyle(.plain)
-                            .padding(12)
-                            .background(Color.primary.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    if kind == .article {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("URL")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            TextField("https://… article or YouTube", text: $articleURL)
+                                .textFieldStyle(.plain)
+                                .padding(12)
+                                .background(Color.primary.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            if YouTubeImporter.isYouTubeURL(articleURL) {
+                                Label(
+                                    YouTubeImporter.resolveYtDlpPath() == nil
+                                        ? "YouTube — install yt-dlp: brew install yt-dlp"
+                                        : "YouTube — will import captions",
+                                    systemImage: "play.rectangle.fill"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .secondary)
+                            }
+                        }
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("TITLE")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            TextField(kind == .meeting ? "e.g. Weekly Sync" : "e.g. Product ideas", text: $title)
+                                .textFieldStyle(.plain)
+                                .padding(12)
+                                .background(Color.primary.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
                     }
 
                     VStack(alignment: .leading, spacing: 10) {
@@ -2788,17 +2945,29 @@ struct CreateItemSheet: View {
                             .background(Color.primary.opacity(0.04))
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
-                    } else {
+                    } else if kind == .note {
                         HStack(spacing: 10) {
                             Image(systemName: "info.circle.fill")
                                 .foregroundStyle(.blue)
-                            Text("Creates a blank note (template “Note”). Opens the Notes editor — no recording.")
+                            Text("Creates a blank note. Opens the writing surface — no recording.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
                         .padding(12)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(Color.blue.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    } else {
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(.orange)
+                            Text("Fetches the page or YouTube captions, creates a Note, and can Enhance automatically if Auto is on.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                 }
@@ -2820,30 +2989,44 @@ struct CreateItemSheet: View {
                         let n = folderSelection.trimmingCharacters(in: .whitespaces)
                         return n.isEmpty ? nil : n
                     }()
+                    let url = articleURL.trimmingCharacters(in: .whitespacesAndNewlines)
                     onCreate(CreateItemPayload(
                         kind: kind,
                         title: title,
                         folderName: folder,
-                        template: kind == .note ? "Note" : template,
+                        template: (kind == .note || kind == .article) ? "Note" : template,
                         model: model,
-                        autoStartRecording: kind == .meeting && autoStartRecording
+                        autoStartRecording: kind == .meeting && autoStartRecording,
+                        articleURL: kind == .article ? url : nil
                     ))
                 } label: {
-                    Label(
-                        kind == .meeting
-                            ? (autoStartRecording ? "Start Meeting" : "Create Meeting")
-                            : "Create Note",
-                        systemImage: kind == .meeting ? "record.circle" : "square.and.pencil"
-                    )
+                    Label(createButtonTitle, systemImage: createButtonIcon)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(kind.accent)
+                .disabled(kind == .article && articleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(20)
         }
-        .frame(width: 520, height: kind == .meeting ? 620 : 480)
+        .frame(width: 560, height: kind == .meeting ? 640 : 520)
         .animation(.easeInOut(duration: 0.2), value: kind)
+    }
+
+    private var createButtonTitle: String {
+        switch kind {
+        case .meeting: return autoStartRecording ? "Start Meeting" : "Create Meeting"
+        case .note: return "Create Note"
+        case .article: return "Import Article"
+        }
+    }
+
+    private var createButtonIcon: String {
+        switch kind {
+        case .meeting: return "record.circle"
+        case .note: return "square.and.pencil"
+        case .article: return "square.and.arrow.down"
+        }
     }
 
     private func kindTile(_ k: CreateKind) -> some View {
@@ -2851,10 +3034,11 @@ struct CreateItemSheet: View {
         return Button {
             kind = k
             autoStartRecording = (k == .meeting)
-            if k == .note {
+            switch k {
+            case .note, .article:
                 template = "Note"
                 if isPlaceholderTitle(title) { title = "Untitled Note" }
-            } else {
+            case .meeting:
                 if template == "Note" { template = "Standard Summary" }
                 if isPlaceholderTitle(title) { title = "Untitled Meeting" }
             }
