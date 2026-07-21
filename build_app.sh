@@ -6,6 +6,8 @@ PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 APP_DIR="$PROJECT_DIR/Grist.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+ICON_SRC="$PROJECT_DIR/Resources/AppIcon.icns"
 
 # Pick a stable codesign identity so macOS TCC (Mic / Screen Recording) survives rebuilds.
 # Prefer: CODESIGN_IDENTITY env → Apple Development cert → ad-hoc fallback.
@@ -34,10 +36,19 @@ cd "$PROJECT_DIR"
 swift build -c debug
 
 echo "📦 Creating macOS App Bundle structure..."
-mkdir -p "$MACOS_DIR"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 echo "Copying binary to App Bundle..."
 cp "$PROJECT_DIR/.build/debug/grist" "$MACOS_DIR/Grist"
+
+if [[ -f "$ICON_SRC" ]]; then
+    echo "🎨 Installing app icon..."
+    cp "$ICON_SRC" "$RESOURCES_DIR/AppIcon.icns"
+    ICON_PLIST_KEYS=$'\n    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>\n    <key>CFBundleIconName</key>\n    <string>AppIcon</string>'
+else
+    echo "⚠️  No Resources/AppIcon.icns found — using default icon."
+    ICON_PLIST_KEYS=""
+fi
 
 echo "Writing Info.plist..."
 cat <<EOF > "$CONTENTS_DIR/Info.plist"
@@ -58,7 +69,7 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>
+    <string>15.0</string>${ICON_PLIST_KEYS}
     <key>NSMicrophoneUsageDescription</key>
     <string>Grist needs microphone access to transcribe your voice during meetings.</string>
     <key>NSScreenCaptureUsageDescription</key>
