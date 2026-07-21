@@ -103,6 +103,11 @@ struct GeneralSettingsView: View {
     @AppStorage("openAIBaseURL") private var openAIBaseURL: String = "https://api.openai.com/v1"
     @AppStorage("openAIAPIKey") private var openAIAPIKey: String = ""
     @AppStorage("openAIModel") private var openAIModel: String = "gpt-4o"
+
+    @State private var chunkCount = 0
+    @State private var isReindexing = false
+    @State private var reindexStatus = ""
+    @State private var reindexProgress: (done: Int, total: Int) = (0, 0)
     
     var body: some View {
         ScrollView {
@@ -134,6 +139,62 @@ struct GeneralSettingsView: View {
                         RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
                     )
                 }
+
+                // Library search / RAG
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Library search (RAG)")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Search index")
+                                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                                Text(chunkCount == 0
+                                     ? "Empty — Ask everything will use keywords only until you rebuild."
+                                     : "\(chunkCount) chunks indexed for semantic search.")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(.secondary)
+                                if !reindexStatus.isEmpty {
+                                    Text(reindexStatus)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            Spacer()
+                            Button {
+                                rebuildIndex()
+                            } label: {
+                                if isReindexing {
+                                    HStack(spacing: 8) {
+                                        ProgressView().controlSize(.small)
+                                        if reindexProgress.total > 0 {
+                                            Text("\(reindexProgress.done)/\(reindexProgress.total)")
+                                                .font(.caption.monospacedDigit())
+                                        }
+                                    }
+                                } else {
+                                    Text("Rebuild search index")
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(isReindexing)
+                        }
+
+                        Text("Requires local embeddings: `ollama pull nomic-embed-text`. New imports and saves re-index automatically.")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(16)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+                }
+                .onAppear { chunkCount = Database.shared.chunkCount() }
                 
                 // Section 2: AI Engine
                 VStack(alignment: .leading, spacing: 12) {
@@ -215,6 +276,33 @@ struct GeneralSettingsView: View {
                 }
             }
             .padding(32)
+        }
+    }
+
+    private func rebuildIndex() {
+        isReindexing = true
+        reindexStatus = "Indexing…"
+        let meetings = Database.shared.fetchActiveMeetings()
+        Task {
+            // Poll progress while reindex runs
+            let progressTask = Task { @MainActor in
+                while !Task.isCancelled {
+                    reindexProgress = RAGEngine.shared.reindexProgress
+                    try? await Task.sleep(nanoseconds: 200_000_000)
+                }
+            }
+            let result = await RAGEngine.shared.reindexAll(meetings: meetings)
+            progressTask.cancel()
+            await MainActor.run {
+                isReindexing = false
+                chunkCount = result.chunks
+                reindexProgress = (result.items, result.items)
+                if let err = result.error {
+                    reindexStatus = "Finished with errors: \(err) (\(result.chunks) chunks)"
+                } else {
+                    reindexStatus = "Indexed \(result.items) items → \(result.chunks) chunks"
+                }
+            }
         }
     }
 }

@@ -1047,6 +1047,7 @@ struct MainView: View {
                     )
                     db.saveMeeting(note)
                     db.saveFolder(name)
+                    RAGEngine.shared.indexMeetingNow(note)
                     loadMeetings()
                     focusedFolder = name
                     libraryFilter = .all
@@ -2957,6 +2958,7 @@ struct MainView: View {
                                     + "\n\n" + blockTranscript
                             }
                             db.saveMeeting(m)
+                            RAGEngine.shared.indexMeetingNow(m)
                             if selectedMeeting?.id == targetId {
                                 selectedMeeting = m
                             }
@@ -2997,6 +2999,7 @@ struct MainView: View {
 
                         await MainActor.run {
                             db.saveMeeting(newMeeting)
+                            RAGEngine.shared.indexMeetingNow(newMeeting)
                             successCount += 1
                             lastSuccessId = newMeeting.id
                             if let firstYT = ytLinks.first, hasYTOffer {
@@ -3153,6 +3156,7 @@ struct MainView: View {
                     m.title = title
                 }
                 db.saveMeeting(m)
+                RAGEngine.shared.indexMeetingNow(m)
                 if let idx = meetings.firstIndex(where: { $0.id == id }) {
                     meetings[idx] = m
                 }
@@ -3242,6 +3246,7 @@ struct MainView: View {
 
                     selectedMeeting = m
                     db.saveMeeting(m)
+                    RAGEngine.shared.indexMeetingNow(m)
                     loadMeetings()
                     selectedMeeting = meetings.first(where: { $0.id == meetingId })
                     selectedTab = "notes"
@@ -3295,6 +3300,19 @@ struct MainView: View {
         if let idx = meetings.firstIndex(where: { $0.id == m.id }) {
             meetings[idx] = m
         }
+        // Debounced RAG index so Ask everything sees notes/summaries
+        RAGEngine.shared.scheduleIndex(meeting: m)
+    }
+
+    /// Persist + index immediately (imports, enhance, folder summary).
+    func saveMeetingAndIndex(_ m: Meeting) {
+        db.saveMeeting(m)
+        if let idx = meetings.firstIndex(where: { $0.id == m.id }) {
+            meetings[idx] = m
+        } else if selectedMeeting?.id == m.id {
+            selectedMeeting = m
+        }
+        RAGEngine.shared.indexMeetingNow(m)
     }
 
     func createSession(from payload: CreateItemPayload) {
@@ -3415,20 +3433,16 @@ struct MainView: View {
                 saveMeeting()
                 statusMessage = ""
 
-                let meetingIdToRAG = selectedMeeting?.id
                 let transcriptToRAG = transcript
+                if let m = selectedMeeting {
+                    RAGEngine.shared.indexMeetingNow(m)
+                }
 
                 if autoEnhance {
                     runEnhance()
                 } else if !(transcriptToRAG.hasPrefix("[Error")) {
                     // Still name the item even if summary is skipped
                     generateAutoTitle(force: false)
-                }
-
-                if let mid = meetingIdToRAG, !transcriptToRAG.isEmpty, !transcriptToRAG.hasPrefix("[Error") {
-                    Task {
-                        await RAGEngine.shared.processTranscriptForRAG(meetingId: mid, transcript: transcriptToRAG)
-                    }
                 }
             }
         }
@@ -3489,6 +3503,9 @@ struct MainView: View {
                         selectedMeeting?.title = title
                     }
                     saveMeeting()
+                    if let m = selectedMeeting {
+                        RAGEngine.shared.indexMeetingNow(m)
+                    }
                     statusMessage = "Done"
                     selectedTab = "summary"
                 }
@@ -3799,7 +3816,7 @@ enum ChatScope: Equatable {
             }
             return "Answers use “\(name)” — AI summary, notes, and transcript."
         case .global:
-            return "Searches all notes and meetings. Best with nomic-embed-text installed."
+            return "Semantic search + keywords across your library. Rebuild index in Settings if answers miss notes (ollama pull nomic-embed-text)."
         }
     }
 
@@ -3968,50 +3985,69 @@ struct ChatView: View {
                         """
                     }
                 } else {
-                    // Global / multi: pin nothing; use RAG with stuffing fallback
-                    let useRAG = meetingsInContext.count > 4
-                    if useRAG {
-                        let meetingIds = meetingsInContext.map { $0.id }
-                        let topChunks = (try? await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: 20)) ?? []
-                        if topChunks.isEmpty {
-                            for m in meetingsInContext.prefix(10) {
-                                let blob = contextBlob(for: m, limit: multiItemContextLimit)
-                                if blob.isEmpty { continue }
-                                documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
-                            }
-                        } else {
-                            documentBlock += "=== RELEVANT EXCERPTS ===\n"
-                            for chunk in topChunks {
-                                let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
-                                documentBlock += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
-                            }
-                            // Also include full AI summaries for hit parents (cheap, high signal)
-                            var seen = Set<String>()
-                            for chunk in topChunks {
-                                guard seen.insert(chunk.meetingId).inserted,
-                                      let m = meetingsInContext.first(where: { $0.id == chunk.meetingId }),
-                                      !m.summary.isEmpty else { continue }
-                                documentBlock += "=== AI Summary: \(m.title) ===\n\(m.summary.prefix(4000))\n\n"
-                            }
+                    // Global library: catalog + vector RAG + keyword-ranked full items
+                    documentBlock += RAGEngine.shared.libraryCatalog(meetingsInContext)
+                    documentBlock += "\n\n"
+
+                    let meetingIds = meetingsInContext.map(\.id)
+                    var topChunks: [TranscriptChunk] = []
+                    var ragError: String?
+                    do {
+                        topChunks = try await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: 18)
+                    } catch {
+                        ragError = error.localizedDescription
+                        print("[Chat] RAG search failed: \(error)")
+                    }
+
+                    if !topChunks.isEmpty {
+                        documentBlock += "=== SEMANTIC MATCHES ===\n"
+                        for chunk in topChunks {
+                            let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
+                            documentBlock += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
                         }
-                    } else {
-                        for m in meetingsInContext {
-                            let blob = contextBlob(for: m, limit: multiItemContextLimit)
-                            if blob.isEmpty { continue }
-                            documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
+                    } else if let ragError {
+                        documentBlock += "(Vector search unavailable: \(ragError). Using keyword match. Install: ollama pull nomic-embed-text)\n\n"
+                    } else if Database.shared.chunkCount() == 0 {
+                        documentBlock += "(Search index empty — keyword match only. Settings → Rebuild search index.)\n\n"
+                    }
+
+                    // Keyword-ranked full items (always; complements RAG)
+                    var ranked = RAGEngine.shared.rankMeetingsByKeywords(meetingsInContext, query: text, topK: 8)
+                    if ranked.isEmpty {
+                        // No keyword hits — still give recent content so the model isn't empty-handed
+                        ranked = Array(meetingsInContext.sorted { $0.timestamp > $1.timestamp }.prefix(6))
+                    }
+                    // Prefer parents of RAG hits first
+                    var ordered: [Meeting] = []
+                    var seenIds = Set<String>()
+                    for chunk in topChunks {
+                        if seenIds.insert(chunk.meetingId).inserted,
+                           let m = meetingsInContext.first(where: { $0.id == chunk.meetingId }) {
+                            ordered.append(m)
                         }
+                    }
+                    for m in ranked where seenIds.insert(m.id).inserted {
+                        ordered.append(m)
+                    }
+
+                    documentBlock += "=== FULL ITEM CONTEXT (ranked) ===\n"
+                    for m in ordered.prefix(8) {
+                        let blob = contextBlob(for: m, limit: multiItemContextLimit)
+                        if blob.isEmpty { continue }
+                        documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
                     }
                 }
 
                 let systemPrompt = """
-                You are Grist’s knowledge assistant. You already have the user’s notes/meetings in the DOCUMENT block below.
+                You are Grist’s knowledge assistant for a personal notes/meetings library.
 
                 Rules:
-                1. Answer using ONLY that document (and prior chat turns).
-                2. NEVER ask the user to paste, upload, or “provide the blog/article” — it is already in DOCUMENT if available.
-                3. If DOCUMENT is empty, say this item has no content yet.
-                4. Prefer AI Summary when present; use Notes and Transcript for detail.
-                5. Cite the item title when useful. Be concrete.
+                1. Answer from the DOCUMENT block (catalog, semantic matches, full items) and prior chat turns only.
+                2. NEVER ask the user to paste content — it is already loaded when available.
+                3. Treat notes, AI summaries, articles, YouTube captions, and meetings as first-class sources (not only “discussions”).
+                4. For library-wide questions (popular topics, themes, what they recorded), use the catalog + full items; cite titles.
+                5. If DOCUMENT only has a catalog and empty bodies, say content is missing — don’t invent.
+                6. Be concrete; prefer AI Summary when present, then notes/transcript.
                 """
 
                 // Small local models often ignore pure system messages — put DOCUMENT in a user turn too.
