@@ -306,10 +306,16 @@ struct MainView: View {
         }
         .onChange(of: selectedMeeting?.id) { _, id in
             suggestedGroup = nil
-            if let id { 
-                loadDetails(id: id) 
-                if let m = selectedMeeting, (m.groupName?.isEmpty ?? true), !m.transcript.isEmpty {
-                    generateGroupSuggestion(for: m)
+            if let id {
+                loadDetails(id: id)
+                if let m = selectedMeeting {
+                    // Notes open on Write; meetings keep last tab or summary
+                    if m.isNoteType {
+                        selectedTab = "notes"
+                    }
+                    if (m.groupName?.isEmpty ?? true), !m.transcript.isEmpty {
+                        generateGroupSuggestion(for: m)
+                    }
                 }
             }
         }
@@ -654,29 +660,246 @@ struct MainView: View {
 
     @ViewBuilder
     var detailContent: some View {
-        aiPanel
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .toolbar { detailToolbar }
+        Group {
+            if selectedMeeting?.isNoteType == true {
+                noteDetailView
+            } else {
+                meetingDetailView
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .toolbar { detailToolbar }
     }
 
+    // MARK: Note-focused UI (writing surface)
+
     @ViewBuilder
-    var manualNotesView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            TextEditor(text: Binding(
-                get: { selectedMeeting?.manualNotes ?? "" },
-                set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
-            ))
-            .font(.body)
-            .scrollContentBackground(.hidden)
-            .background(Color(NSColor.textBackgroundColor))
-            .padding()
+    var noteDetailView: some View {
+        VStack(spacing: 0) {
+            // Compact note chrome
+            HStack(spacing: 12) {
+                Picker("", selection: $selectedTab) {
+                    Text("Write").tag("notes")
+                    Text("AI Summary").tag("summary")
+                    Text("Chat").tag("chat")
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 280)
+
+                Spacer()
+
+                if selectedTab == "summary" || selectedTab == "notes" {
+                    noteAIControls
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+            .background(.bar)
+
+            if let m = selectedMeeting {
+                noteMetadataBar(for: m)
+            }
+
+            Divider()
+
+            if selectedTab == "notes" {
+                noteWritingSurface
+            } else if selectedTab == "summary" {
+                if let summary = selectedMeeting?.summary, !summary.isEmpty {
+                    MarkdownView(markdown: summary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    noteEmptyAIState
+                }
+            } else if selectedTab == "chat", let m = selectedMeeting {
+                ChatView(meeting: m, selectedModel: selectedModel, customModelName: customModelName)
+                    .id(m.id)
+            } else {
+                noteWritingSurface
+            }
+        }
+        .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            if selectedTab == "transcript" || (selectedTab == "summary" && (selectedMeeting?.summary.isEmpty ?? true)) {
+                selectedTab = "notes"
+            }
         }
     }
 
     @ViewBuilder
-    var aiPanel: some View {
+    var noteWritingSurface: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                // Large inline title
+                TextField("Note title", text: Binding(
+                    get: { selectedMeeting?.title ?? "" },
+                    set: { selectedMeeting?.title = $0; saveMeeting() }
+                ))
+                .font(.system(size: 28, weight: .bold, design: .default))
+                .textFieldStyle(.plain)
+                .padding(.bottom, 8)
+
+                // Meta under title
+                if let m = selectedMeeting {
+                    HStack(spacing: 10) {
+                        Label(m.formattedCreated, systemImage: "calendar")
+                        if let folder = m.groupName, !folder.isEmpty {
+                            Label(folder, systemImage: "folder.fill")
+                        } else {
+                            Label("Unfiled", systemImage: "tray")
+                        }
+                        let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
+                        if words > 0 {
+                            Label("\(words) words", systemImage: "text.alignleft")
+                        }
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.bottom, 20)
+                }
+
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(height: 1)
+                    .padding(.bottom, 16)
+
+                // Body editor with placeholder
+                ZStack(alignment: .topLeading) {
+                    if (selectedMeeting?.manualNotes ?? "").isEmpty {
+                        Text("Start writing…\n\nCapture ideas, meeting follow-ups, or anything you want AI to organize later.")
+                            .font(.system(size: 16, weight: .regular, design: .default))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                    }
+
+                    TextEditor(text: Binding(
+                        get: { selectedMeeting?.manualNotes ?? "" },
+                        set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
+                    ))
+                    .font(.system(size: 16, weight: .regular, design: .default))
+                    .lineSpacing(6)
+                    .scrollContentBackground(.hidden)
+                    .frame(minHeight: 420)
+                    .padding(.leading, -5) // align with title
+                }
+            }
+            .padding(.horizontal, 48)
+            .padding(.vertical, 32)
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity)
+        }
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(NSColor.controlBackgroundColor).opacity(0.35),
+                    Color(NSColor.windowBackgroundColor)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+    }
+
+    @ViewBuilder
+    var noteAIControls: some View {
+        HStack(spacing: 8) {
+            Picker("", selection: $selectedModel) {
+                ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
+            }
+            .labelsHidden()
+            .frame(width: 130)
+
+            Button {
+                generateAutoTitle(force: true)
+            } label: {
+                Label("Title", systemImage: "textformat")
+            }
+            .help("Generate title from note body")
+            .disabled(noteBodyEmpty)
+
+            Button {
+                runEnhance()
+            } label: {
+                Label(statusMessage == "Enhancing…" ? "Working…" : "Enhance", systemImage: "wand.and.stars")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .disabled(statusMessage == "Enhancing…" || noteBodyEmpty)
+            .help("AI summary + title from what you wrote")
+        }
+    }
+
+    private var noteBodyEmpty: Bool {
+        let t = selectedMeeting?.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let s = selectedMeeting?.summary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return t.isEmpty && s.isEmpty
+    }
+
+    @ViewBuilder
+    var noteEmptyAIState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "sparkles.rectangle.stack")
+                .font(.system(size: 40, weight: .ultraLight))
+                .foregroundStyle(.blue.opacity(0.7))
+            Text("No AI summary yet")
+                .font(.title3.weight(.semibold))
+            Text("Write in the Write tab, then tap Enhance to get a structured summary and auto-title.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+            Button {
+                selectedTab = "notes"
+            } label: {
+                Label("Back to writing", systemImage: "square.and.pencil")
+            }
+            .buttonStyle(.bordered)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    func noteMetadataBar(for m: Meeting) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                metaChip(icon: "note.text", text: "Note")
+                metaChip(icon: "calendar", text: m.formattedCreated)
+                if let folder = m.groupName, !folder.isEmpty {
+                    metaChip(icon: "folder.fill", text: folder)
+                } else {
+                    metaChip(icon: "tray", text: "Unfiled")
+                }
+                let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
+                if words > 0 {
+                    metaChip(icon: "text.alignleft", text: "\(words) words")
+                }
+                if m.isPlaceholderTitle && !noteBodyEmpty {
+                    Button {
+                        generateAutoTitle(force: true)
+                    } label: {
+                        Label("Auto-title", systemImage: "sparkles")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.blue.opacity(0.12))
+                            .foregroundStyle(.blue)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+        }
+        .background(Color.blue.opacity(0.04))
+    }
+
+    // MARK: Meeting-focused UI
+
+    @ViewBuilder
+    var meetingDetailView: some View {
         VStack(spacing: 0) {
-            // AI toolbar
             HStack(spacing: 12) {
                 Picker("", selection: $selectedTab) {
                     Text("Summary").tag("summary")
@@ -701,7 +924,6 @@ struct MainView: View {
 
             Divider()
 
-            // Content area — WKWebView handles its own scrolling
             if let suggestion = suggestedGroup, (selectedMeeting?.groupName?.isEmpty ?? true) {
                 HStack {
                     Image(systemName: "sparkles")
@@ -724,10 +946,31 @@ struct MainView: View {
                 .padding()
                 .background(Color.purple.opacity(0.1))
             }
-            
+
             aiContentView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    @ViewBuilder
+    var manualNotesView: some View {
+        // Used inside meeting detail “Notes” tab — lighter than full note UI
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Scratch notes for this meeting")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+            TextEditor(text: Binding(
+                get: { selectedMeeting?.manualNotes ?? "" },
+                set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
+            ))
+            .font(.body)
+            .scrollContentBackground(.hidden)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
+        }
+        .background(Color(NSColor.textBackgroundColor))
     }
 
     @ViewBuilder
@@ -1038,7 +1281,7 @@ struct MainView: View {
             .frame(minWidth: 60)
         }
 
-        // Export & Record Actions
+        // Export & Record / Note actions
         ToolbarItemGroup(placement: .primaryAction) {
             if selectedMeeting != nil && selectedTab == "summary" {
                 Button {
@@ -1048,21 +1291,31 @@ struct MainView: View {
                 }
                 .help("Copy Markdown summary to clipboard")
             }
-            
-            Button {
-                toggleRecording()
-            } label: {
-                Label(
-                    isRecording ? "Stop Recording" : "Record",
-                    systemImage: isRecording ? "stop.circle.fill" : "record.circle"
-                )
-                .symbolRenderingMode(.multicolor)
-                .contentTransition(.symbolEffect(.replace))
+
+            if selectedMeeting?.isNoteType == true {
+                // Notes: recording is optional / secondary
+                Button {
+                    toggleRecording()
+                } label: {
+                    Label(isRecording ? "Stop" : "Record audio", systemImage: isRecording ? "stop.circle.fill" : "mic")
+                }
+                .help(isRecording ? "Stop and attach transcript" : "Optional: record audio into this note")
+            } else {
+                Button {
+                    toggleRecording()
+                } label: {
+                    Label(
+                        isRecording ? "Stop Recording" : "Record",
+                        systemImage: isRecording ? "stop.circle.fill" : "record.circle"
+                    )
+                    .symbolRenderingMode(.multicolor)
+                    .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(isRecording ? .red : .accentColor)
+                .help(isRecording ? "Stop and transcribe" : "Start recording")
+                .keyboardShortcut("r", modifiers: [.command, .shift])
             }
-            .buttonStyle(.borderedProminent)
-            .tint(isRecording ? .red : .accentColor)
-            .help(isRecording ? "Stop and transcribe" : "Start recording")
-            .keyboardShortcut("r", modifiers: [.command, .shift])
         }
     }
 
@@ -1443,26 +1696,47 @@ struct MainView: View {
     // MARK: - AI
 
     func runEnhance() {
-        guard let m = selectedMeeting, !m.transcript.isEmpty else { return }
-        // Don't "enhance" failed transcription error strings into fake summaries.
-        if m.transcript.hasPrefix("[Error") {
+        guard let m = selectedMeeting else { return }
+
+        // Prefer transcript; for notes fall back to written body.
+        let transcriptSource: String = {
+            if !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") {
+                return m.transcript
+            }
+            return m.manualNotes
+        }()
+        let notesSource: String = {
+            // If we're enhancing from note body, don't double-send as both fields
+            if m.transcript.isEmpty || m.transcript.hasPrefix("[Error") {
+                return ""
+            }
+            return m.manualNotes
+        }()
+
+        guard !transcriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = m.isNoteType ? "Write something first" : "No transcript yet"
+            return
+        }
+        if m.transcript.hasPrefix("[Error") && m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             statusMessage = "Transcription failed — fix capture/Whisper, then re-record"
             return
         }
+
         let model = selectedModel == "custom" ? customModelName : selectedModel
         guard !model.isEmpty else { statusMessage = "Enter model name"; return }
 
         statusMessage = "Enhancing…"
-        let templateName = m.template
-        let customPrompt = customTemplates.first(where: { $0.name == templateName })?.prompt
+        // Notes: use a readable summary style even if template is the type marker "Note"
+        let templateName = (m.template == "Note" || m.template.isEmpty) ? "Standard Summary" : m.template
+        let customPrompt = customTemplates.first(where: { $0.name == m.template || $0.name == templateName })?.prompt
         let applyTitle = m.isPlaceholderTitle
 
         Task {
             do {
-                // Single model call: TITLE: … + markdown summary (no second round-trip)
+                // Single model call: TITLE: … + markdown summary
                 let result = try await ollama.enhance(
-                    transcript: m.transcript,
-                    notes: m.manualNotes,
+                    transcript: transcriptSource,
+                    notes: notesSource,
                     template: templateName,
                     customPrompt: customPrompt,
                     model: model
