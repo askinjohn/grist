@@ -71,7 +71,7 @@ Sidebar:
 
 - **Meeting** — record + transcribe + summarize  
 - **Note** — blank writing surface  
-- **Article** — paste a URL (article HTML or YouTube captions)
+- **Article** — paste one or many URLs (article HTML or YouTube captions; each link → its own note)
 
 All support **folder chips** (Unfiled / existing / new). Import defaults to **Unfiled** so nothing is silently filed under the focused sidebar folder.
 
@@ -99,6 +99,9 @@ Purple **Auto-organize** under the create buttons:
 |----------|----------|
 | **YouTube** | `yt-dlp` pulls English captions → Note body + transcript → optional Enhance |
 | **Other** | HTML scrape → page text → Note |
+| **Linked YouTube** | After an article import, if the page links to YouTube (e.g. podcast posts), Grist asks: **Import captions & summarize?** |
+| **Add to item** | On an open meeting/note: **Add URL** appends article/YouTube into the same item (notes + transcript), then Enhance. Meetings also have a **Notes** tab for free writing. |
+| **Login walls** | X/Twitter, LinkedIn, etc. are detected — import **fails with a clear alert** (no junk note). Open in browser + paste into a Note. |
 
 Requires captions on the video (manual or auto). If none: install/check `yt-dlp`, or record system audio while playing the video.
 
@@ -214,6 +217,7 @@ Signing prefers **Apple Development** (stable TCC). Override with `CODESIGN_IDEN
 |---------|-----|
 | Mic-only / `you you` transcript | Enable **Screen & System Audio Recording**, quit & relaunch |
 | YouTube import fails | `brew install yt-dlp`; video needs captions |
+| X / LinkedIn import fails | Expected — those pages need login; paste text into a Note |
 | Wrong folder on import | Import defaults to Unfiled — pick a chip explicitly |
 | Whisper process failed | Re-run setup Whisper step (`-DWHISPER_COREML=OFF`) |
 | Weak RAG / chat | `ollama pull nomic-embed-text` |

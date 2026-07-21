@@ -90,8 +90,12 @@ struct MarkdownRenderer {
         s = applyRegex(s, pattern: #"_(.+?)_"#, replacement: "<em>$1</em>")
         // Inline code
         s = applyRegex(s, pattern: #"`(.+?)`"#, replacement: "<code>$1</code>")
-        // Links
-        s = applyRegex(s, pattern: #"\[(.+?)\]\((.+?)\)"#, replacement: "<a href=\"$2\">$1</a>")
+        // Links — show label + selectable/copyable URL
+        s = applyRegex(
+            s,
+            pattern: #"\[(.+?)\]\((.+?)\)"#,
+            replacement: #"<a href="$2" title="$2">$1</a> <code class="url-plain">$2</code>"#
+        )
         return s
     }
 
@@ -201,8 +205,18 @@ struct MarkdownRenderer {
             border-top: 1px solid var(--border);
             margin: 14px 0;
           }
-          a { color: var(--accent); text-decoration: none; }
+          a { color: var(--accent); text-decoration: none; user-select: text; -webkit-user-select: text; }
           a:hover { text-decoration: underline; }
+          code.url-plain {
+            background: transparent;
+            color: var(--subtext);
+            font-size: 0.85em;
+            padding: 0 2px;
+            word-break: break-all;
+            user-select: all;
+            -webkit-user-select: all;
+          }
+          body { user-select: text; -webkit-user-select: text; }
           strong { font-weight: 600; }
         </style>
         </head>

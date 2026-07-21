@@ -75,7 +75,7 @@ enum CreateKind: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .meeting: return "Record mic + system audio, then AI summary"
         case .note: return "Write freely — no recording required"
-        case .article: return "Paste a URL — web page or YouTube captions"
+        case .article: return "Paste one or more URLs — pages or YouTube"
         }
     }
 
@@ -177,8 +177,19 @@ struct MainView: View {
     @State private var showingImportUrlAlert = false
     @State private var importUrlString = ""
     @State private var isImportingUrl = false
+    /// When true (and an item is selected), fetch content into the current note/meeting instead of creating new ones.
+    @State private var importAppendToSelected = false
     @State private var showingImportErrorAlert = false
     @State private var importErrorMessage = ""
+    /// When set, Import Failed alert offers “Open in Browser”.
+    @State private var importErrorOpenURL: String? = nil
+    /// After a web article import: offer to pull linked YouTube captions.
+    @State private var showingYouTubeSuggestAlert = false
+    @State private var suggestedYouTubeURL: String = ""
+    @State private var suggestedYouTubeMeetingId: String? = nil
+    /// Queue when multi-import finds several pages with YouTube links.
+    @State private var pendingYouTubeSuggestions: [(meetingId: String, ytURL: String)] = []
+    @State private var isImportingSuggestedYouTube = false
     @State private var showingSettingsSheet = false
 
     // AI Config
@@ -470,9 +481,37 @@ struct MainView: View {
             sidebarFooter
         }
         .alert("Import Failed", isPresented: $showingImportErrorAlert) {
+            if let openURL = importErrorOpenURL, let url = URL(string: openURL) {
+                Button("Open in Browser") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
             Button("OK", role: .cancel) { }
         } message: {
             Text(importErrorMessage)
+        }
+        .alert("YouTube episode found", isPresented: $showingYouTubeSuggestAlert) {
+            Button("Import captions & summarize") {
+                importSuggestedYouTubeCaptions()
+            }
+            Button("Not now", role: .cancel) {
+                // Article-only: still run enhance if Auto is on
+                if autoEnhance {
+                    if let id = suggestedYouTubeMeetingId {
+                        selectedMeeting = meetings.first(where: { $0.id == id }) ?? selectedMeeting
+                    }
+                    runEnhance()
+                }
+                presentNextYouTubeSuggestion()
+            }
+        } message: {
+            let more = pendingYouTubeSuggestions.isEmpty
+                ? ""
+                : "\n\n(\(pendingYouTubeSuggestions.count) more linked video\(pendingYouTubeSuggestions.count == 1 ? "" : "s") after this)"
+            Text(
+                "This page links to a YouTube video.\n\n\(suggestedYouTubeURL)\n\nImport captions into this note and run an AI summary?\(more)"
+            )
+            .textSelection(.enabled)
         }
         .alert("New Folder", isPresented: $showingNewFolderAlert) {
             TextField("Folder Name", text: $newFolderName)
@@ -677,7 +716,7 @@ struct MainView: View {
     private var sidebarFooter: some View {
         HStack(spacing: 10) {
             Button {
-                openImportSheet()
+                openImportSheet(appendToCurrent: false)
             } label: {
                 Label(isImportingUrl ? "Importing…" : "Import URL", systemImage: "link")
                     .font(.system(size: 12, weight: .medium))
@@ -688,6 +727,7 @@ struct MainView: View {
             }
             .buttonStyle(.plain)
             .disabled(isImportingUrl)
+            .help("Import as new note(s). Open an item and use Add URL to append.")
 
             if isImportingUrl {
                 ProgressView()
@@ -852,12 +892,18 @@ struct MainView: View {
     }
 
     private var importURLSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let canAppend = selectedMeeting != nil
+        let appendTargetTitle = selectedMeeting?.title ?? "current item"
+        let n = Self.parseImportURLs(from: importUrlString).count
+
+        return VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Import URL")
+                    Text(importAppendToSelected && canAppend ? "Add to item" : "Import URL")
                         .font(.title2.weight(.bold))
-                    Text("YouTube → captions + summary. Articles → page text. Pick a folder if you want.")
+                    Text(importAppendToSelected && canAppend
+                         ? "Fetch page/YouTube content and append it to the open note or meeting, then you can re-Enhance."
+                         : "Paste one or many URLs. Each link becomes its own note (or append to the open item).")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -875,61 +921,116 @@ struct MainView: View {
             .padding(24)
 
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("URL")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    TextField("https://youtube.com/watch?v=… or article URL", text: $importUrlString)
-                        .textFieldStyle(.plain)
-                        .padding(12)
-                        .background(Color.primary.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    if YouTubeImporter.isYouTubeURL(importUrlString) {
-                        HStack(spacing: 6) {
-                            Image(systemName: YouTubeImporter.resolveYtDlpPath() == nil ? "exclamationmark.triangle.fill" : "play.rectangle.fill")
-                                .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .red)
-                            Text(YouTubeImporter.resolveYtDlpPath() == nil
-                                 ? "YouTube detected — install yt-dlp: brew install yt-dlp"
-                                 : "YouTube detected — will pull captions via yt-dlp")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                if canAppend {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("DESTINATION")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Picker("", selection: $importAppendToSelected) {
+                            Text("New note(s)").tag(false)
+                            Text("Add to current").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        if importAppendToSelected {
+                            HStack(spacing: 8) {
+                                Image(systemName: selectedMeeting?.isNoteType == true ? "note.text" : "waveform")
+                                    .foregroundStyle(.blue)
+                                Text(appendTargetTitle)
+                                    .font(.callout.weight(.medium))
+                                    .lineLimit(2)
+                                Spacer()
+                            }
+                            .padding(10)
+                            .background(Color.blue.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("FOLDER")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            folderChip(title: "Unfiled", icon: "tray", selected: importFolderSelection.isEmpty && !importIsCreatingFolder) {
-                                importIsCreatingFolder = false
-                                importFolderSelection = ""
-                                importNewFolderName = ""
-                            }
-                            ForEach(folders.sorted(), id: \.self) { name in
-                                folderChip(title: name, icon: "folder.fill", selected: importFolderSelection == name && !importIsCreatingFolder) {
-                                    importIsCreatingFolder = false
-                                    importFolderSelection = name
-                                    importNewFolderName = ""
-                                }
-                            }
-                            folderChip(title: "New folder", icon: "folder.badge.plus", selected: importIsCreatingFolder) {
-                                importIsCreatingFolder = true
-                                importFolderSelection = ""
-                            }
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("URL(S)")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if n > 1 {
+                            Text("\(n) links")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                         }
                     }
-                    if importIsCreatingFolder {
-                        TextField("Folder name", text: $importNewFolderName)
-                            .textFieldStyle(.plain)
-                            .padding(12)
-                            .background(Color.primary.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            .onChange(of: importNewFolderName) { _, val in
-                                importFolderSelection = val.trimmingCharacters(in: .whitespaces)
+                    TextEditor(text: $importUrlString)
+                        .font(.body)
+                        .frame(minHeight: 88, maxHeight: 140)
+                        .padding(8)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(alignment: .topLeading) {
+                            if importUrlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Text("One per line (or space-separated)\nhttps://…\nhttps://youtube.com/…")
+                                    .font(.body)
+                                    .foregroundStyle(.tertiary)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 16)
+                                    .allowsHitTesting(false)
                             }
+                        }
+                    let parsed = Self.parseImportURLs(from: importUrlString)
+                    let ytCount = parsed.filter { YouTubeImporter.isYouTubeURL($0) }.count
+                    if ytCount > 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: YouTubeImporter.resolveYtDlpPath() == nil ? "exclamationmark.triangle.fill" : "play.rectangle.fill")
+                                .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .red)
+                            Text(YouTubeImporter.resolveYtDlpPath() == nil
+                                 ? "\(ytCount) YouTube — install yt-dlp: brew install yt-dlp"
+                                 : "\(ytCount) YouTube — will pull captions via yt-dlp")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if parsed.count > 1 {
+                        Text(importAppendToSelected && canAppend
+                             ? "All \(parsed.count) pages will be appended to this item"
+                             : "Will import \(parsed.count) pages as separate notes")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if !(importAppendToSelected && canAppend) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("FOLDER")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                folderChip(title: "Unfiled", icon: "tray", selected: importFolderSelection.isEmpty && !importIsCreatingFolder) {
+                                    importIsCreatingFolder = false
+                                    importFolderSelection = ""
+                                    importNewFolderName = ""
+                                }
+                                ForEach(folders.sorted(), id: \.self) { name in
+                                    folderChip(title: name, icon: "folder.fill", selected: importFolderSelection == name && !importIsCreatingFolder) {
+                                        importIsCreatingFolder = false
+                                        importFolderSelection = name
+                                        importNewFolderName = ""
+                                    }
+                                }
+                                folderChip(title: "New folder", icon: "folder.badge.plus", selected: importIsCreatingFolder) {
+                                    importIsCreatingFolder = true
+                                    importFolderSelection = ""
+                                }
+                            }
+                        }
+                        if importIsCreatingFolder {
+                            TextField("Folder name", text: $importNewFolderName)
+                                .textFieldStyle(.plain)
+                                .padding(12)
+                                .background(Color.primary.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .onChange(of: importNewFolderName) { _, val in
+                                    importFolderSelection = val.trimmingCharacters(in: .whitespaces)
+                                }
+                        }
                     }
                 }
             }
@@ -945,24 +1046,28 @@ struct MainView: View {
                     showingImportUrlAlert = false
                     importFromUrl()
                 } label: {
-                    Label("Import", systemImage: "square.and.arrow.down")
+                    if importAppendToSelected && canAppend {
+                        Label(n > 1 ? "Add \(n) to item" : "Add to item", systemImage: "plus.rectangle.on.rectangle")
+                    } else {
+                        Label(n > 1 ? "Import \(n) URLs" : "Import", systemImage: "square.and.arrow.down")
+                    }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(importUrlString.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(Self.parseImportURLs(from: importUrlString).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(20)
         }
-        .frame(width: 480, height: 380)
+        .frame(width: 500, height: canAppend ? 480 : 420)
     }
 
-    private func openImportSheet() {
+    private func openImportSheet(appendToCurrent: Bool = false) {
         importUrlString = ""
         importIsCreatingFolder = false
         importNewFolderName = ""
-        // Always start Unfiled — don't inherit Cooking/etc. from sidebar focus.
-        // User can pick a folder chip explicitly before Import.
+        // Always start Unfiled for new notes — don't inherit sidebar focus.
         importFolderSelection = ""
+        importAppendToSelected = appendToCurrent && selectedMeeting != nil
         showingImportUrlAlert = true
     }
 
@@ -1106,9 +1211,16 @@ struct MainView: View {
                         .textSelection(.enabled)
                         .multilineTextAlignment(.leading)
 
-                    if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
-                        noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                    if let m = selectedMeeting {
+                        let links = extractSourceURLs(from: m.manualNotes)
+                        if !links.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(links, id: \.self) { link in
+                                    noteSourceCard(urlString: link, isYouTube: isYouTubeLink(link))
+                                }
+                            }
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                 }
                 .padding(.horizontal, 24)
@@ -1150,11 +1262,18 @@ struct MainView: View {
             .padding(.bottom, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
-                noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+            if let m = selectedMeeting {
+                let links = extractSourceURLs(from: m.manualNotes)
+                if !links.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(links, id: \.self) { link in
+                            noteSourceCard(urlString: link, isYouTube: isYouTubeLink(link))
+                        }
+                    }
                     .padding(.horizontal, 28)
                     .padding(.bottom, 12)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             Rectangle()
@@ -1201,12 +1320,24 @@ struct MainView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 Text(urlString)
-                    .font(.caption)
+                    .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.primary)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .truncationMode(.middle)
+                    .textSelection(.enabled)
+                    .help(urlString)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             Spacer(minLength: 8)
+            Button {
+                copyToPasteboard(urlString)
+                statusMessage = "Link copied"
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Copy link to clipboard")
             Button("Open") {
                 if let u = URL(string: urlString) {
                     NSWorkspace.shared.open(u)
@@ -1214,6 +1345,7 @@ struct MainView: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+            .help("Open in browser")
         }
         .padding(12)
         .background(Color.primary.opacity(0.04))
@@ -1222,23 +1354,75 @@ struct MainView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
+        .contextMenu {
+            Button("Copy Link") {
+                copyToPasteboard(urlString)
+                statusMessage = "Link copied"
+            }
+            Button("Open in Browser") {
+                if let u = URL(string: urlString) {
+                    NSWorkspace.shared.open(u)
+                }
+            }
+        }
     }
 
-    /// Pull first markdown link or raw URL from note header.
+    private func copyToPasteboard(_ string: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(string, forType: .string)
+    }
+
+    private func isYouTubeLink(_ link: String) -> Bool {
+        link.localizedCaseInsensitiveContains("youtube.com") || link.localizedCaseInsensitiveContains("youtu.be")
+    }
+
+    /// Pull first markdown link or raw URL from note (legacy helpers).
     private func extractSourceURL(from notes: String) -> String? {
-        // [label](url)
-        if let regex = try? NSRegularExpression(pattern: #"\[[^\]]*\]\((https?://[^)\s]+)\)"#),
-           let match = regex.firstMatch(in: notes, range: NSRange(notes.startIndex..., in: notes)),
-           let r = Range(match.range(at: 1), in: notes) {
-            return String(notes[r])
+        extractSourceURLs(from: notes).first
+    }
+
+    /// Source / YouTube links meant for the copiable header cards (not every URL in the body).
+    private func extractSourceURLs(from notes: String) -> [String] {
+        var found: [String] = []
+        var seen = Set<String>()
+
+        func add(_ raw: String) {
+            var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            while let last = s.last, ".,;:)]}>\"'".contains(last) { s.removeLast() }
+            s = s.replacingOccurrences(of: "&amp;", with: "&")
+            guard s.hasPrefix("http://") || s.hasPrefix("https://") else { return }
+            if seen.insert(s).inserted { found.append(s) }
         }
-        // Source: https://...
-        if let regex = try? NSRegularExpression(pattern: #"https?://[^\s)]+"#),
-           let match = regex.firstMatch(in: notes, range: NSRange(notes.startIndex..., in: notes)),
-           let r = Range(match.range, in: notes) {
-            return String(notes[r])
+
+        // Explicit import markers we write: [Source](…), [Open on YouTube](…)
+        if let regex = try? NSRegularExpression(pattern: #"\[([^\]]*)\]\((https?://[^)\s]+)\)"#) {
+            let ns = notes as NSString
+            for m in regex.matches(in: notes, range: NSRange(location: 0, length: ns.length)) {
+                guard m.numberOfRanges >= 3 else { continue }
+                let label = ns.substring(with: m.range(at: 1)).lowercased()
+                let url = ns.substring(with: m.range(at: 2))
+                if label.contains("source")
+                    || label.contains("youtube")
+                    || label.contains("open")
+                    || label.hasPrefix("http") {
+                    add(url)
+                }
+            }
         }
-        return nil
+
+        // Fallback: first bare URL near the top of the note
+        if found.isEmpty {
+            let head = String(notes.prefix(800))
+            if let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>\"'`\[\]{}|\\^]+"#) {
+                let ns = head as NSString
+                if let m = regex.firstMatch(in: head, range: NSRange(location: 0, length: ns.length)) {
+                    add(ns.substring(with: m.range))
+                }
+            }
+        }
+
+        return found
     }
 
     /// Remove leading source markdown link lines so reading view isn't redundant with the card.
@@ -1265,6 +1449,14 @@ struct MainView: View {
             .frame(width: 130)
 
             Button {
+                openImportSheet(appendToCurrent: true)
+            } label: {
+                Label("Add URL", systemImage: "link.badge.plus")
+            }
+            .help("Fetch a page or YouTube captions into this note")
+            .disabled(isImportingUrl || selectedMeeting == nil)
+
+            Button {
                 generateAutoTitle(force: true)
             } label: {
                 Label("Title", systemImage: "textformat")
@@ -1286,8 +1478,10 @@ struct MainView: View {
 
     private var noteBodyEmpty: Bool {
         let t = selectedMeeting?.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tr = selectedMeeting?.transcript.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let s = selectedMeeting?.summary.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return t.isEmpty && s.isEmpty
+        let hasTranscript = !tr.isEmpty && !tr.hasPrefix("[Error")
+        return t.isEmpty && s.isEmpty && !hasTranscript
     }
 
     @ViewBuilder
@@ -1328,8 +1522,7 @@ struct MainView: View {
                 if words > 0 {
                     metaChip(icon: "text.alignleft", text: "\(words) words")
                 }
-                if let link = extractSourceURL(from: m.manualNotes),
-                   link.contains("youtube") || link.contains("youtu.be") {
+                if extractSourceURLs(from: m.manualNotes).contains(where: { isYouTubeLink($0) }) {
                     metaChip(icon: "play.rectangle.fill", text: "YouTube")
                 }
                 if m.isPlaceholderTitle && !noteBodyEmpty {
@@ -1412,21 +1605,43 @@ struct MainView: View {
 
     @ViewBuilder
     var manualNotesView: some View {
-        // Used inside meeting detail “Notes” tab — lighter than full note UI
+        // Meeting detail “Notes” tab — write freely; Add URL appends articles/YouTube into this same item
         VStack(alignment: .leading, spacing: 0) {
-            Text("Scratch notes for this meeting")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-            TextEditor(text: Binding(
-                get: { selectedMeeting?.manualNotes ?? "" },
-                set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
-            ))
-            .font(.body)
-            .scrollContentBackground(.hidden)
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Notes for this meeting")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text("Your thoughts, follow-ups, and anything you paste here are included when you Enhance.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Spacer()
+                Button {
+                    openImportSheet(appendToCurrent: true)
+                } label: {
+                    Label("Add URL", systemImage: "link.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Import an article or YouTube captions into this meeting")
+                .disabled(isImportingUrl || selectedMeeting == nil)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
+
+            MarkdownNoteEditor(
+                text: Binding(
+                    get: { selectedMeeting?.manualNotes ?? "" },
+                    set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
+                ),
+                pendingFormat: $noteFormatCommand,
+                fontSize: 15
+            )
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .background(Color(NSColor.textBackgroundColor))
     }
@@ -1523,6 +1738,15 @@ struct MainView: View {
             .labelsHidden()
             .frame(width: 140)
 
+            Button {
+                openImportSheet(appendToCurrent: true)
+            } label: {
+                Label("Add URL", systemImage: "link.badge.plus")
+            }
+            .help("Append article or YouTube content to this meeting")
+            .disabled(isImportingUrl || selectedMeeting == nil)
+            .controlSize(.regular)
+
             // Enhance button & Auto toggle
             Toggle("Auto", isOn: $autoEnhance)
                 .toggleStyle(.checkbox)
@@ -1535,9 +1759,18 @@ struct MainView: View {
                       systemImage: "wand.and.stars")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(statusMessage == "Enhancing…" || selectedMeeting?.transcript.isEmpty ?? true)
+            .disabled(statusMessage == "Enhancing…" || !meetingHasEnhanceableContent)
             .controlSize(.regular)
         }
+    }
+
+    /// Meeting can enhance from transcript and/or written notes.
+    private var meetingHasEnhanceableContent: Bool {
+        guard let m = selectedMeeting else { return false }
+        let t = m.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !t.isEmpty && !t.hasPrefix("[Error") { return true }
+        return !n.isEmpty
     }
 
     @ViewBuilder
@@ -1942,96 +2175,458 @@ struct MainView: View {
         }
     }
     
+    /// Pull http(s) URLs from a paste — newlines, spaces, commas, or embedded in text.
+    static func parseImportURLs(from raw: String) -> [String] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+
+        var found: [String] = []
+        var seen = Set<String>()
+
+        if let regex = try? NSRegularExpression(pattern: #"https?://[^\s<>\"'`\[\]{}|\\^]+"#, options: .caseInsensitive) {
+            let ns = trimmed as NSString
+            let matches = regex.matches(in: trimmed, range: NSRange(location: 0, length: ns.length))
+            for m in matches {
+                var s = ns.substring(with: m.range)
+                // Strip trailing punctuation common in pasted lists
+                while let last = s.last, ".,;:)]}>\"'".contains(last) {
+                    s.removeLast()
+                }
+                s = s.replacingOccurrences(of: "&amp;", with: "&")
+                guard let url = URL(string: s), url.scheme != nil, url.host != nil else { continue }
+                if seen.insert(s).inserted {
+                    found.append(s)
+                }
+            }
+        }
+
+        // Single bare URL without scheme (rare)
+        if found.isEmpty {
+            let one = trimmed.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).map(String.init)
+            for line in one {
+                var s = line
+                if !s.contains("://") { s = "https://\(s)" }
+                if let url = URL(string: s), url.host != nil, seen.insert(s).inserted {
+                    found.append(s)
+                }
+            }
+        }
+        return found
+    }
+
     func importFromUrl() {
-        logImport("importFromUrl called with string: '\(importUrlString)'")
-        let url = importUrlString.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !url.isEmpty else {
-            logImport("URL was empty, aborting.")
+        logImport("importFromUrl called with string: '\(importUrlString)' append=\(importAppendToSelected)")
+        let urls = Self.parseImportURLs(from: importUrlString)
+        guard !urls.isEmpty else {
+            logImport("No URLs parsed, aborting.")
+            statusMessage = "Enter at least one URL"
+            return
+        }
+
+        let appendMode = importAppendToSelected && selectedMeeting != nil
+        let appendTargetId = appendMode ? selectedMeeting?.id : nil
+
+        if appendMode, appendTargetId == nil {
+            statusMessage = "Select a note or meeting first"
             return
         }
 
         isImportingUrl = true
-        statusMessage = YouTubeImporter.isYouTubeURL(url)
-            ? "Fetching YouTube captions…"
-            : "Fetching page…"
+        statusMessage = urls.count == 1
+            ? (YouTubeImporter.isYouTubeURL(urls[0]) ? "Fetching YouTube captions…" : "Fetching page…")
+            : (appendMode ? "Adding 1/\(urls.count)…" : "Importing 1/\(urls.count)…")
+
+        // Snapshot folder choice for new-note batch only
+        let folderSnapshot: String? = {
+            guard !appendMode else { return nil }
+            if importIsCreatingFolder {
+                let name = importNewFolderName.trimmingCharacters(in: .whitespaces)
+                return name.isEmpty ? nil : name
+            }
+            let name = importFolderSelection.trimmingCharacters(in: .whitespaces)
+            return name.isEmpty ? nil : name
+        }()
 
         Task {
-            logImport("Starting Task to fetch URL: \(url)")
-            do {
-                let result = try await URLFetcher.shared.fetchContent(from: url)
-                logImport("Successfully fetched (\(result.sourceKind)): \(result.title) (length: \(result.content.count))")
+            var failures: [(url: String, message: String)] = []
+            var ytSuggestions: [(meetingId: String, ytURL: String)] = []
+            var lastSuccessId: String?
+            var successCount = 0
+            var anyHasYTOffer = false
 
+            if let folderSnapshot {
+                await MainActor.run { db.saveFolder(folderSnapshot) }
+            }
+
+            for (idx, url) in urls.enumerated() {
                 await MainActor.run {
-                    var folder: String? = nil
-                    if importIsCreatingFolder {
-                        let name = importNewFolderName.trimmingCharacters(in: .whitespaces)
-                        if !name.isEmpty {
-                            folder = name
-                            db.saveFolder(name)
-                        }
-                    } else {
-                        let name = importFolderSelection.trimmingCharacters(in: .whitespaces)
-                        folder = name.isEmpty ? nil : name
-                        if let folder { db.saveFolder(folder) }
-                    }
+                    statusMessage = urls.count == 1
+                        ? (YouTubeImporter.isYouTubeURL(url) ? "Fetching YouTube captions…" : "Fetching page…")
+                        : (appendMode ? "Adding \(idx + 1)/\(urls.count)…" : "Importing \(idx + 1)/\(urls.count)…")
+                }
+                logImport("Starting fetch \(idx + 1)/\(urls.count): \(url)")
 
-                    // Notes UI Write tab uses `manualNotes`; Enhance/RAG use `transcript`.
-                    // Keep body clean (paragraphs). Source is shown as a chip / markdown link header.
+                do {
+                    let result = try await URLFetcher.shared.fetchContent(from: url)
+                    logImport("Fetched (\(result.sourceKind)): \(result.title) (length: \(result.content.count))")
+
                     let body = result.content
-                    let notes: String = {
+                    let blockNotes: String = {
                         if result.sourceKind == "youtube" {
                             return """
+                            ## Added from YouTube
                             [Open on YouTube](\(url))
 
                             \(body)
                             """
                         }
                         return """
+                        ## Added from web
                         [Source](\(url))
 
                         \(body)
                         """
                     }()
+                    let blockTranscript: String = {
+                        if result.sourceKind == "youtube" {
+                            return "=== YouTube: \(result.title) ===\n\(body)"
+                        }
+                        return "=== Article: \(result.title) ===\n\(body)"
+                    }()
 
-                    let newMeeting = Meeting(
-                        id: UUID().uuidString,
-                        title: result.title,
-                        timestamp: Date().timeIntervalSince1970,
-                        manualNotes: notes,
-                        transcript: body,
-                        summary: "",
-                        template: "Note",
-                        groupName: folder,
-                        isDeleted: false
-                    )
+                    let ytLinks = result.relatedYouTubeURLs.filter { YouTubeImporter.isYouTubeURL($0) }
+                    let hasYTOffer = result.sourceKind == "web" && ytLinks.first != nil
 
-                    db.saveMeeting(newMeeting)
-                    loadMeetings()
-                    if let folder { focusedFolder = folder }
-                    selectedMeeting = meetings.first(where: { $0.id == newMeeting.id })
-                    selectedTab = "notes"
-                    // Long caption dumps are easier in reading mode first
-                    noteShowPreview = result.sourceKind == "youtube" || body.count > 400
-                    statusMessage = result.sourceKind == "youtube"
-                        ? "YouTube captions imported (\(body.count) chars)"
-                        : "Page imported"
+                    if appendMode, let targetId = appendTargetId {
+                        await MainActor.run {
+                            guard var m = db.getMeeting(id: targetId) ?? meetings.first(where: { $0.id == targetId }) else {
+                                failures.append((url: url, message: "Item no longer exists"))
+                                return
+                            }
+                            // Append to notes + transcript (Enhance uses both)
+                            if m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                m.manualNotes = blockNotes
+                            } else {
+                                m.manualNotes = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    + "\n\n---\n\n" + blockNotes
+                            }
+                            if m.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                m.transcript = blockTranscript
+                            } else {
+                                m.transcript = m.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                                    + "\n\n" + blockTranscript
+                            }
+                            db.saveMeeting(m)
+                            if selectedMeeting?.id == targetId {
+                                selectedMeeting = m
+                            }
+                            successCount += 1
+                            lastSuccessId = targetId
+                            if let firstYT = ytLinks.first, hasYTOffer {
+                                ytSuggestions.append((meetingId: targetId, ytURL: firstYT))
+                                anyHasYTOffer = true
+                            }
+                        }
+                    } else {
+                        let newNotes: String = {
+                            if result.sourceKind == "youtube" {
+                                return """
+                                [Open on YouTube](\(url))
 
-                    if autoEnhance {
-                        logImport("Triggering runEnhance()")
-                        runEnhance()
-                    } else if newMeeting.isPlaceholderTitle {
-                        generateAutoTitle(force: false)
+                                \(body)
+                                """
+                            }
+                            return """
+                            [Source](\(url))
+
+                            \(body)
+                            """
+                        }()
+
+                        let newMeeting = Meeting(
+                            id: UUID().uuidString,
+                            title: result.title,
+                            timestamp: Date().timeIntervalSince1970 + Double(idx) * 0.001,
+                            manualNotes: newNotes,
+                            transcript: body,
+                            summary: "",
+                            template: "Note",
+                            groupName: folderSnapshot,
+                            isDeleted: false
+                        )
+
+                        await MainActor.run {
+                            db.saveMeeting(newMeeting)
+                            successCount += 1
+                            lastSuccessId = newMeeting.id
+                            if let firstYT = ytLinks.first, hasYTOffer {
+                                ytSuggestions.append((meetingId: newMeeting.id, ytURL: firstYT))
+                            }
+                        }
+
+                        // Enhance each *new* note that isn't waiting on a YouTube offer
+                        if !hasYTOffer, autoEnhance {
+                            await enhanceMeetingById(newMeeting.id)
+                        } else if !hasYTOffer, newMeeting.isPlaceholderTitle {
+                            await MainActor.run {
+                                selectedMeeting = db.getMeeting(id: newMeeting.id) ?? newMeeting
+                                generateAutoTitle(force: false)
+                            }
+                        }
                     }
+                } catch {
+                    logImport("Import failed for \(url): \(error)")
+                    let message: String = {
+                        if let e = error as? URLFetchError { return e.localizedDescription }
+                        if let e = error as? LocalizedError, let d = e.errorDescription { return d }
+                        return error.localizedDescription
+                    }()
+                    failures.append((url: url, message: message))
+                }
+            }
+
+            // Append mode: one enhance after all URLs (unless YT offers pending)
+            if appendMode, let targetId = appendTargetId, successCount > 0, !anyHasYTOffer, autoEnhance {
+                await enhanceMeetingById(targetId)
+            }
+
+            await MainActor.run {
+                loadMeetings()
+                if let folderSnapshot, !appendMode { focusedFolder = folderSnapshot }
+                if let lastSuccessId {
+                    selectedMeeting = meetings.first(where: { $0.id == lastSuccessId })
+                    if appendMode {
+                        // Meetings: show Notes tab; Notes: Write tab
+                        selectedTab = "notes"
+                    } else {
+                        selectedTab = "notes"
+                        noteShowPreview = true
+                    }
+                }
+
+                if successCount > 0 {
+                    if appendMode {
+                        statusMessage = urls.count == 1
+                            ? "Added to item"
+                            : "Added \(successCount)/\(urls.count) to item"
+                    } else {
+                        statusMessage = urls.count == 1
+                            ? (successCount == 1 ? "Imported" : "Done")
+                            : "Imported \(successCount)/\(urls.count)"
+                    }
+                }
+
+                pendingYouTubeSuggestions = []
+                // Dedupe YT suggestions by meeting+url when appending multiple pages that share the same video
+                var seenYT = Set<String>()
+                var uniqueYT: [(meetingId: String, ytURL: String)] = []
+                for s in ytSuggestions {
+                    let key = "\(s.meetingId)|\(s.ytURL)"
+                    if seenYT.insert(key).inserted { uniqueYT.append(s) }
+                }
+                if let first = uniqueYT.first {
+                    pendingYouTubeSuggestions = Array(uniqueYT.dropFirst())
+                    suggestedYouTubeURL = first.ytURL
+                    suggestedYouTubeMeetingId = first.meetingId
+                    selectedMeeting = meetings.first(where: { $0.id == first.meetingId }) ?? selectedMeeting
+                    showingYouTubeSuggestAlert = true
+                }
+
+                if !failures.isEmpty {
+                    let lines = failures.map { "• \($0.url)\n  \($0.message)" }.joined(separator: "\n\n")
+                    let verb = appendMode ? "Added" : "Imported"
+                    importErrorMessage = successCount > 0
+                        ? "\(verb) \(successCount) of \(urls.count).\n\nFailed:\n\n\(lines)"
+                        : lines
+                    importErrorOpenURL = failures.count == 1 ? failures[0].url : nil
+                    showingImportErrorAlert = true
+                    if successCount == 0 {
+                        statusMessage = "Import failed"
+                    }
+                }
+
+                isImportingUrl = false
+                logImport("Batch import complete. append=\(appendMode) success=\(successCount) fail=\(failures.count)")
+            }
+        }
+    }
+
+    /// Show the next queued “YouTube on this page?” offer, if any.
+    func presentNextYouTubeSuggestion() {
+        guard let next = pendingYouTubeSuggestions.first else {
+            suggestedYouTubeMeetingId = nil
+            suggestedYouTubeURL = ""
+            return
+        }
+        pendingYouTubeSuggestions.removeFirst()
+        suggestedYouTubeURL = next.ytURL
+        suggestedYouTubeMeetingId = next.meetingId
+        selectedMeeting = meetings.first(where: { $0.id == next.meetingId }) ?? selectedMeeting
+        // slight delay so previous alert can dismiss cleanly
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            showingYouTubeSuggestAlert = true
+        }
+    }
+
+    /// Run enhance for a specific note (used by multi-URL import).
+    func enhanceMeetingById(_ id: String) async {
+        guard var m = await MainActor.run(body: { db.getMeeting(id: id) ?? meetings.first(where: { $0.id == id }) }) else {
+            return
+        }
+
+        let transcriptSource: String = {
+            if !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") { return m.transcript }
+            return m.manualNotes
+        }()
+        let notesSource: String = {
+            if m.transcript.isEmpty || m.transcript.hasPrefix("[Error") { return "" }
+            return m.manualNotes
+        }()
+        guard !transcriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        let model = await MainActor.run { selectedModel == "custom" ? customModelName : selectedModel }
+        guard !model.isEmpty else { return }
+
+        let templateName = (m.template == "Note" || m.template.isEmpty) ? "Standard Summary" : m.template
+        let customPrompt = await MainActor.run {
+            customTemplates.first(where: { $0.name == m.template || $0.name == templateName })?.prompt
+        }
+        let applyTitle = m.isPlaceholderTitle
+
+        await MainActor.run {
+            if selectedMeeting?.id == id {
+                statusMessage = "Enhancing…"
+            }
+        }
+
+        do {
+            let result = try await ollama.enhance(
+                transcript: transcriptSource,
+                notes: notesSource,
+                template: templateName,
+                customPrompt: customPrompt,
+                model: model
+            )
+            await MainActor.run {
+                m.summary = result.summary
+                if applyTitle, let title = result.title, !title.isEmpty, m.isPlaceholderTitle {
+                    m.title = title
+                }
+                db.saveMeeting(m)
+                if let idx = meetings.firstIndex(where: { $0.id == id }) {
+                    meetings[idx] = m
+                }
+                if selectedMeeting?.id == id {
+                    selectedMeeting = m
+                    statusMessage = "Done"
+                }
+            }
+        } catch {
+            await MainActor.run {
+                if selectedMeeting?.id == id {
+                    statusMessage = "Error: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Pull captions from a YouTube link discovered on an article page, merge into the note, then summarize.
+    func importSuggestedYouTubeCaptions() {
+        let ytURL = suggestedYouTubeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let meetingId = suggestedYouTubeMeetingId ?? selectedMeeting?.id
+        guard !ytURL.isEmpty, let meetingId else {
+            statusMessage = "No YouTube link to import"
+            return
+        }
+        guard YouTubeImporter.resolveYtDlpPath() != nil else {
+            importErrorMessage = YouTubeImporter.ImportError.ytDlpMissing.localizedDescription
+            importErrorOpenURL = nil
+            showingImportErrorAlert = true
+            statusMessage = "yt-dlp missing"
+            return
+        }
+
+        isImportingSuggestedYouTube = true
+        isImportingUrl = true
+        statusMessage = "Fetching YouTube captions…"
+
+        Task {
+            do {
+                let yt = try await YouTubeImporter.importVideo(urlString: ytURL)
+                await MainActor.run {
+                    // Prefer live selection; fall back to id
+                    if selectedMeeting?.id != meetingId {
+                        selectedMeeting = meetings.first(where: { $0.id == meetingId }) ?? db.getMeeting(id: meetingId)
+                    }
+                    guard var m = selectedMeeting, m.id == meetingId else {
+                        statusMessage = "Note not found for YouTube import"
+                        isImportingSuggestedYouTube = false
+                        isImportingUrl = false
+                        return
+                    }
+
+                    let captions = yt.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let articleBody = m.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                    // Transcript drives Enhance/RAG: article blurb + full captions
+                    m.transcript = """
+                    === Article page ===
+                    \(articleBody)
+
+                    === YouTube captions (\(yt.title)) ===
+                    \(captions)
+                    """
+
+                    let sourceHeader: String = {
+                        if m.manualNotes.contains("[Source]") || m.manualNotes.contains("[Open on YouTube]") {
+                            return m.manualNotes
+                        }
+                        return m.manualNotes
+                    }()
+
+                    m.manualNotes = """
+                    \(sourceHeader)
+
+                    ---
+
+                    ## Full episode (YouTube captions)
+                    [Open on YouTube](\(yt.sourceURL))
+
+                    \(captions)
+                    """
+
+                    // Prefer the video title if note still looks generic/scraped
+                    if m.isPlaceholderTitle || m.title.count > 80 {
+                        m.title = yt.title
+                    }
+
+                    selectedMeeting = m
+                    db.saveMeeting(m)
+                    loadMeetings()
+                    selectedMeeting = meetings.first(where: { $0.id == meetingId })
+                    selectedTab = "notes"
+                    noteShowPreview = true
+                    statusMessage = "YouTube captions added (\(captions.count) chars)"
+                    isImportingSuggestedYouTube = false
                     isImportingUrl = false
-                    logImport("Import complete.")
+                    suggestedYouTubeMeetingId = nil
+
+                    runEnhance()
+                    presentNextYouTubeSuggestion()
                 }
             } catch {
-                logImport("Import failed with error: \(error)")
                 await MainActor.run {
-                    importErrorMessage = error.localizedDescription
+                    importErrorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                    importErrorOpenURL = ytURL
                     showingImportErrorAlert = true
-                    statusMessage = "Import failed"
+                    statusMessage = "YouTube import failed"
+                    isImportingSuggestedYouTube = false
                     isImportingUrl = false
+                    // Still offer article enhance
+                    if autoEnhance {
+                        runEnhance()
+                    }
+                    presentNextYouTubeSuggestion()
                 }
             }
         }
@@ -2063,14 +2658,14 @@ struct MainView: View {
     }
 
     func createSession(from payload: CreateItemPayload) {
-        // Article → same pipeline as Import URL
+        // Article → same pipeline as Import URL (supports multi-URL paste)
         if payload.kind == .article {
-            let url = (payload.articleURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !url.isEmpty else {
-                statusMessage = "Enter a URL"
+            let raw = (payload.articleURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !Self.parseImportURLs(from: raw).isEmpty else {
+                statusMessage = "Enter at least one URL"
                 return
             }
-            importUrlString = url
+            importUrlString = raw
             importIsCreatingFolder = false
             importNewFolderName = ""
             importFolderSelection = payload.folderName ?? ""
@@ -2819,23 +3414,49 @@ struct CreateItemSheet: View {
 
                     if kind == .article {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("URL")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            TextField("https://… article or YouTube", text: $articleURL)
-                                .textFieldStyle(.plain)
-                                .padding(12)
+                            HStack {
+                                Text("URL(S)")
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                let n = MainView.parseImportURLs(from: articleURL).count
+                                if n > 1 {
+                                    Text("\(n) links")
+                                        .font(.caption.monospacedDigit())
+                                        .foregroundStyle(.tertiary)
+                                }
+                            }
+                            TextEditor(text: $articleURL)
+                                .font(.body)
+                                .frame(minHeight: 88, maxHeight: 130)
+                                .padding(8)
                                 .background(Color.primary.opacity(0.05))
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                            if YouTubeImporter.isYouTubeURL(articleURL) {
+                                .overlay(alignment: .topLeading) {
+                                    if articleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        Text("One or more links — one per line\nhttps://… article or YouTube")
+                                            .font(.body)
+                                            .foregroundStyle(.tertiary)
+                                            .padding(.horizontal, 12)
+                                            .padding(.vertical, 16)
+                                            .allowsHitTesting(false)
+                                    }
+                                }
+                            let parsed = MainView.parseImportURLs(from: articleURL)
+                            let ytCount = parsed.filter { YouTubeImporter.isYouTubeURL($0) }.count
+                            if ytCount > 0 {
                                 Label(
                                     YouTubeImporter.resolveYtDlpPath() == nil
-                                        ? "YouTube — install yt-dlp: brew install yt-dlp"
-                                        : "YouTube — will import captions",
+                                        ? "\(ytCount) YouTube — install yt-dlp: brew install yt-dlp"
+                                        : "\(ytCount) YouTube — will import captions",
                                     systemImage: "play.rectangle.fill"
                                 )
                                 .font(.caption)
                                 .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .secondary)
+                            } else if parsed.count > 1 {
+                                Text("Will import \(parsed.count) pages as separate notes")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     } else {
@@ -3004,7 +3625,7 @@ struct CreateItemSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(kind.accent)
-                .disabled(kind == .article && articleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(kind == .article && MainView.parseImportURLs(from: articleURL).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
             .padding(20)
@@ -3017,7 +3638,9 @@ struct CreateItemSheet: View {
         switch kind {
         case .meeting: return autoStartRecording ? "Start Meeting" : "Create Meeting"
         case .note: return "Create Note"
-        case .article: return "Import Article"
+        case .article:
+            let n = MainView.parseImportURLs(from: articleURL).count
+            return n > 1 ? "Import \(n) URLs" : "Import Article"
         }
     }
 
