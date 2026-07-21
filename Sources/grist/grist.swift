@@ -28,9 +28,13 @@ struct GristApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Meeting") {
-                    NotificationCenter.default.post(name: .newMeetingRequested, object: nil)
+                    NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.meeting.rawValue)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                Button("New Note") {
+                    NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.note.rawValue)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
         }
         
@@ -41,9 +45,12 @@ struct GristApp: App {
         MenuBarExtra("Grist", systemImage: "waveform") {
             Button("New Meeting") {
                 NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(name: .newMeetingRequested, object: nil)
+                NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.meeting.rawValue)
             }
-            .keyboardShortcut("n")
+            Button("New Note") {
+                NSApp.activate(ignoringOtherApps: true)
+                NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.note.rawValue)
+            }
             
             Divider()
             
