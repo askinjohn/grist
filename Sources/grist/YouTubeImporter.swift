@@ -151,13 +151,8 @@ enum YouTubeImporter {
             || captionURL.lastPathComponent.contains("auto")
         let lang = extractLang(from: captionURL.lastPathComponent)
 
-        // Prefix source for clarity in the note/transcript pane
-        let body = """
-        Source: \(urlString)
-        Captions: \(lang ?? "unknown")\(usedAuto ? " (auto-generated)" : "")
-
-        \(cleaned)
-        """
+        // Readable paragraphs for the note editor (not one giant caption blob)
+        let body = paragraphizeTranscript(cleaned)
 
         return Result(
             title: sanitizeTitle(title),
@@ -166,6 +161,39 @@ enum YouTubeImporter {
             captionLanguage: lang,
             usedAutoCaptions: usedAuto
         )
+    }
+
+    /// Turn caption stream into short paragraphs for reading / editing.
+    static func paragraphizeTranscript(_ text: String) -> String {
+        let collapsed = text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return text }
+
+        // Split into sentences (keep terminator)
+        var sentences: [String] = []
+        var current = ""
+        for ch in collapsed {
+            current.append(ch)
+            if ".!?".contains(ch) {
+                let s = current.trimmingCharacters(in: .whitespaces)
+                if !s.isEmpty { sentences.append(s) }
+                current = ""
+            }
+        }
+        let tail = current.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty { sentences.append(tail) }
+        if sentences.isEmpty { return collapsed }
+
+        // Group ~3 sentences per paragraph
+        var paragraphs: [String] = []
+        var i = 0
+        while i < sentences.count {
+            let end = min(i + 3, sentences.count)
+            paragraphs.append(sentences[i..<end].joined(separator: " "))
+            i = end
+        }
+        return paragraphs.joined(separator: "\n\n")
     }
 
     // MARK: - Caption file pick

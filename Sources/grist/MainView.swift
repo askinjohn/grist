@@ -312,9 +312,11 @@ struct MainView: View {
             if let id {
                 loadDetails(id: id)
                 if let m = selectedMeeting {
-                    // Notes open on Write; meetings keep last tab or summary
+                    // Notes open on Write; long imports default to Preview (reading mode)
                     if m.isNoteType {
                         selectedTab = "notes"
+                        let longBody = m.manualNotes.count > 400 || m.transcript.count > 400
+                        noteShowPreview = longBody
                     }
                     if (m.groupName?.isEmpty ?? true), !m.transcript.isEmpty {
                         generateGroupSuggestion(for: m)
@@ -743,131 +745,187 @@ struct MainView: View {
     @ViewBuilder
     var noteWritingSurface: some View {
         VStack(spacing: 0) {
-            // Format toolbar
-            HStack(spacing: 12) {
+            // Slim format bar
+            HStack(spacing: 10) {
                 MarkdownFormatToolbar(pendingFormat: $noteFormatCommand)
-                Spacer()
+                Spacer(minLength: 8)
                 Picker("", selection: $noteShowPreview) {
-                    Text("Edit").tag(false)
-                    Text("Preview").tag(true)
+                    Image(systemName: "square.and.pencil").tag(false)
+                    Image(systemName: "doc.richtext").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 140)
-                .help("Preview renders markdown (bold, lists, etc.)")
+                .frame(width: 88)
+                .help(noteShowPreview ? "Switch to edit" : "Preview markdown")
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.02))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
 
             Divider()
 
             if noteShowPreview {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
-                            .font(.system(size: 28, weight: .bold))
-                        if let body = selectedMeeting?.manualNotes, !body.isEmpty {
-                            MarkdownView(markdown: body)
-                                .frame(minHeight: 400)
-                        } else {
-                            Text("Nothing to preview yet — switch to Edit and write some markdown.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(48)
-                    .frame(maxWidth: 720)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                noteReadingView
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Large inline title
-                    TextField("Note title", text: Binding(
-                        get: { selectedMeeting?.title ?? "" },
-                        set: { selectedMeeting?.title = $0; saveMeeting() }
-                    ))
-                    .font(.system(size: 28, weight: .bold, design: .default))
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 48)
-                    .padding(.top, 28)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: 720)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if let m = selectedMeeting {
-                        HStack(spacing: 10) {
-                            Label(m.formattedCreated, systemImage: "calendar")
-                            if let folder = m.groupName, !folder.isEmpty {
-                                Label(folder, systemImage: "folder.fill")
-                            } else {
-                                Label("Unfiled", systemImage: "tray")
-                            }
-                            let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
-                            if words > 0 {
-                                Label("\(words) words", systemImage: "text.alignleft")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 48)
-                        .padding(.bottom, 12)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    Text("Select text, then use the toolbar — **bold**, *italic*, lists, and more (markdown).")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 48)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(height: 1)
-                        .padding(.horizontal, 48)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ZStack(alignment: .topLeading) {
-                        if (selectedMeeting?.manualNotes ?? "").isEmpty {
-                            Text("Start writing…\n\nTip: select a word → B for **bold**, or type markdown directly.")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 48)
-                                .padding(.top, 12)
-                                .allowsHitTesting(false)
-                        }
-
-                        MarkdownNoteEditor(
-                            text: Binding(
-                                get: { selectedMeeting?.manualNotes ?? "" },
-                                set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
-                            ),
-                            pendingFormat: $noteFormatCommand,
-                            fontSize: 16
-                        )
-                        .padding(.horizontal, 40)
-                        .padding(.bottom, 24)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, minHeight: 360, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                noteEditingView
             }
         }
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(NSColor.controlBackgroundColor).opacity(0.35),
-                    Color(NSColor.windowBackgroundColor)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+        .background(Color(NSColor.textBackgroundColor))
+    }
+
+    /// Clean reading layout (default for long YouTube / imports).
+    @ViewBuilder
+    var noteReadingView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
+                    .font(.system(size: 30, weight: .bold, design: .serif))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+
+                if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
+                    noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                }
+
+                if let body = selectedMeeting?.manualNotes, !body.isEmpty {
+                    let display = stripSourceHeader(from: body)
+                    MarkdownView(markdown: display)
+                        .frame(minHeight: 280)
+                        .textSelection(.enabled)
+                } else {
+                    Text("Nothing to preview yet — switch to edit and write.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 56)
+            .padding(.vertical, 36)
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+        .background(Color(NSColor.textBackgroundColor))
+    }
+
+    @ViewBuilder
+    var noteEditingView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Multi-line title (no truncation like the window toolbar)
+            TextField("Note title", text: Binding(
+                get: { selectedMeeting?.title ?? "" },
+                set: { selectedMeeting?.title = $0; saveMeeting() }
+            ), axis: .vertical)
+            .font(.system(size: 26, weight: .bold, design: .default))
+            .textFieldStyle(.plain)
+            .lineLimit(1...4)
+            .padding(.horizontal, 40)
+            .padding(.top, 24)
+            .padding(.bottom, 12)
+            .frame(maxWidth: 720)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
+                noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                    .padding(.horizontal, 40)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: 720)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 1)
+                .padding(.horizontal, 40)
+                .padding(.bottom, 4)
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            ZStack(alignment: .topLeading) {
+                if (selectedMeeting?.manualNotes ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Start writing…\n\nSelect text and use the toolbar for **bold**, lists, and more.")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 40)
+                        .padding(.top, 14)
+                        .allowsHitTesting(false)
+                }
+
+                MarkdownNoteEditor(
+                    text: Binding(
+                        get: { selectedMeeting?.manualNotes ?? "" },
+                        set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
+                    ),
+                    pendingFormat: $noteFormatCommand,
+                    fontSize: 16
+                )
+                .padding(.horizontal, 32)
+                .padding(.bottom, 20)
+                .frame(maxWidth: 720)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    func noteSourceCard(urlString: String, isYouTube: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: isYouTube ? "play.rectangle.fill" : "link.circle.fill")
+                .font(.title2)
+                .foregroundStyle(isYouTube ? .red : .blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isYouTube ? "YouTube source" : "Web source")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(urlString)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Button("Open") {
+                if let u = URL(string: urlString) {
+                    NSWorkspace.shared.open(u)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
+    }
+
+    /// Pull first markdown link or raw URL from note header.
+    private func extractSourceURL(from notes: String) -> String? {
+        // [label](url)
+        if let regex = try? NSRegularExpression(pattern: #"\[[^\]]*\]\((https?://[^)\s]+)\)"#),
+           let match = regex.firstMatch(in: notes, range: NSRange(notes.startIndex..., in: notes)),
+           let r = Range(match.range(at: 1), in: notes) {
+            return String(notes[r])
+        }
+        // Source: https://...
+        if let regex = try? NSRegularExpression(pattern: #"https?://[^\s)]+"#),
+           let match = regex.firstMatch(in: notes, range: NSRange(notes.startIndex..., in: notes)),
+           let r = Range(match.range, in: notes) {
+            return String(notes[r])
+        }
+        return nil
+    }
+
+    /// Remove leading source markdown link lines so reading view isn't redundant with the card.
+    private func stripSourceHeader(from notes: String) -> String {
+        var lines = notes.components(separatedBy: .newlines)
+        while let first = lines.first {
+            let t = first.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { lines.removeFirst(); continue }
+            if t.hasPrefix("[Open on YouTube]") || t.hasPrefix("[Source]") { lines.removeFirst(); continue }
+            if t.lowercased().hasPrefix("source:") { lines.removeFirst(); continue }
+            break
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @ViewBuilder
@@ -942,6 +1000,10 @@ struct MainView: View {
                 let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
                 if words > 0 {
                     metaChip(icon: "text.alignleft", text: "\(words) words")
+                }
+                if let link = extractSourceURL(from: m.manualNotes),
+                   link.contains("youtube") || link.contains("youtu.be") {
+                    metaChip(icon: "play.rectangle.fill", text: "YouTube")
                 }
                 if m.isPlaceholderTitle && !noteBodyEmpty {
                     Button {
@@ -1583,13 +1645,21 @@ struct MainView: View {
                     }
 
                     // Notes UI Write tab uses `manualNotes`; Enhance/RAG use `transcript`.
-                    // Keep both filled so Write shows the text and Enhance works.
+                    // Keep body clean (paragraphs). Source is shown as a chip / markdown link header.
                     let body = result.content
                     let notes: String = {
                         if result.sourceKind == "youtube" {
-                            return body
+                            return """
+                            [Open on YouTube](\(url))
+
+                            \(body)
+                            """
                         }
-                        return "Source: \(url)\n\n\(body)"
+                        return """
+                        [Source](\(url))
+
+                        \(body)
+                        """
                     }()
 
                     let newMeeting = Meeting(
@@ -1609,6 +1679,8 @@ struct MainView: View {
                     if let folder { focusedFolder = folder }
                     selectedMeeting = meetings.first(where: { $0.id == newMeeting.id })
                     selectedTab = "notes"
+                    // Long caption dumps are easier in reading mode first
+                    noteShowPreview = result.sourceKind == "youtube" || body.count > 400
                     statusMessage = result.sourceKind == "youtube"
                         ? "YouTube captions imported (\(body.count) chars)"
                         : "Page imported"
