@@ -472,24 +472,8 @@ struct MainView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
-        .alert(
-            "Delete folder?",
-            isPresented: $showingDeleteFolderConfirm,
-            presenting: folderPendingDelete
-        ) { name in
-            Button("Delete “\(name)”", role: .destructive) {
-                confirmDeleteFolder()
-            }
-            Button("Cancel", role: .cancel) {
-                folderPendingDelete = nil
-            }
-        } message: { name in
-            let count = meetings.filter { ($0.groupName ?? "") == name }.count
-            if count == 0 {
-                Text("“\(name)” is empty. This cannot be undone.")
-            } else {
-                Text("“\(name)” has \(count) item\(count == 1 ? "" : "s"). They will move to Unfiled. The folder will be removed.")
-            }
+        .sheet(isPresented: $showingDeleteFolderConfirm) {
+            deleteFolderSheet
         }
         .sheet(isPresented: $showingImportUrlAlert) {
             importURLSheet
@@ -497,6 +481,122 @@ struct MainView: View {
         .sheet(isPresented: $showingOrganizeReport) {
             organizeReportSheet
         }
+    }
+
+    @ViewBuilder
+    private var deleteFolderSheet: some View {
+        let name = folderPendingDelete ?? ""
+        let count = meetings.filter { ($0.groupName ?? "") == name }.count
+
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Delete folder")
+                        .font(.title2.weight(.bold))
+                    Text(name.isEmpty ? "" : "“\(name)”")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingDeleteFolderConfirm = false
+                    folderPendingDelete = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 16) {
+                if count == 0 {
+                    Text("This folder is empty. Deleting it only removes the folder.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("This folder has \(count) item\(count == 1 ? "" : "s"). Choose what to do with them:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    VStack(spacing: 10) {
+                        Button {
+                            confirmDeleteFolder(contents: .moveToUnfiled)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: "tray.and.arrow.down.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.blue)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Move to Unfiled")
+                                        .font(.headline)
+                                    Text("Keep all notes/meetings; only remove the folder.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer()
+                            }
+                            .padding(14)
+                            .background(Color.blue.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            confirmDeleteFolder(contents: .softDeleteContents)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: "trash.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.red)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Delete all contents")
+                                        .font(.headline)
+                                        .foregroundStyle(.red)
+                                    Text("Soft-delete every item in the folder (hidden, not erased from disk). Then remove the folder.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer()
+                            }
+                            .padding(14)
+                            .background(Color.red.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(24)
+
+            Spacer(minLength: 8)
+            Divider()
+            HStack {
+                if count == 0 {
+                    Button("Delete folder", role: .destructive) {
+                        confirmDeleteFolder(contents: .moveToUnfiled)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
+                Spacer()
+                Button("Cancel") {
+                    showingDeleteFolderConfirm = false
+                    folderPendingDelete = nil
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 440, height: count == 0 ? 220 : 360)
     }
 
     private var organizeReportSheet: some View {
@@ -663,20 +763,39 @@ struct MainView: View {
         }
     }
 
-    private func confirmDeleteFolder() {
+    private func confirmDeleteFolder(contents: Database.FolderDeleteContentsMode) {
         guard let name = folderPendingDelete else { return }
         let count = meetings.filter { ($0.groupName ?? "") == name }.count
-        db.deleteFolder(name)
+        let selectedWasInFolder = selectedMeeting?.groupName == name
+
+        db.deleteFolder(name, contents: contents)
+
         if focusedFolder == name {
             focusedFolder = nil
-            libraryFilter = .unfiled
+            libraryFilter = contents == .softDeleteContents ? .all : .unfiled
         }
-        // Refresh in-memory group names (deleteFolder already cleared DB)
         loadMeetings()
+
+        // If the open item was soft-deleted, clear selection
+        if selectedWasInFolder, contents == .softDeleteContents {
+            selectedMeeting = meetings.first
+        } else if let id = selectedMeeting?.id {
+            selectedMeeting = meetings.first(where: { $0.id == id }) ?? meetings.first
+        }
+
         folderPendingDelete = nil
-        statusMessage = count > 0
-            ? "Deleted “\(name)” — \(count) item\(count == 1 ? "" : "s") moved to Unfiled"
-            : "Deleted folder “\(name)”"
+        showingDeleteFolderConfirm = false
+
+        switch contents {
+        case .moveToUnfiled:
+            statusMessage = count > 0
+                ? "Deleted “\(name)” — \(count) item\(count == 1 ? "" : "s") → Unfiled"
+                : "Deleted folder “\(name)”"
+        case .softDeleteContents:
+            statusMessage = count > 0
+                ? "Deleted “\(name)” and soft-deleted \(count) item\(count == 1 ? "" : "s")"
+                : "Deleted folder “\(name)”"
+        }
     }
 
     private var importURLSheet: some View {
