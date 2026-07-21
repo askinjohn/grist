@@ -635,13 +635,9 @@ struct MainView: View {
         importUrlString = ""
         importIsCreatingFolder = false
         importNewFolderName = ""
-        if let f = focusedFolder {
-            importFolderSelection = f
-        } else if let g = selectedMeeting?.groupName, !g.isEmpty {
-            importFolderSelection = g
-        } else {
-            importFolderSelection = ""
-        }
+        // Always start Unfiled — don't inherit Cooking/etc. from sidebar focus.
+        // User can pick a folder chip explicitly before Import.
+        importFolderSelection = ""
         showingImportUrlAlert = true
     }
 
@@ -771,40 +767,45 @@ struct MainView: View {
         .background(Color(NSColor.textBackgroundColor))
     }
 
-    /// Full-width reading layout — no half-page column, no nested half-height webview.
+    /// Full-width reading layout — title + body span the whole detail pane.
     @ViewBuilder
     var noteReadingView: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 14) {
-                Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
-                    .font(.system(size: 28, weight: .bold, design: .default))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
+                        .font(.system(size: 28, weight: .bold, design: .default))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.leading)
 
-                if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
-                    noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                    if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
+                        noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+                .frame(width: geo.size.width, alignment: .leading)
+
+                Divider()
+
+                if let body = selectedMeeting?.manualNotes, !body.isEmpty {
+                    let display = stripSourceHeader(from: body)
+                    MarkdownView(markdown: display, bodyFontSize: 16, contentPadding: 24)
+                        .frame(width: geo.size.width, height: max(200, geo.size.height - 160), alignment: .topLeading)
+                } else {
+                    Text("Nothing to preview yet — switch to edit and write.")
+                        .foregroundStyle(.secondary)
+                        .padding(24)
+                        .frame(width: geo.size.width, alignment: .topLeading)
                 }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Divider()
-
-            if let body = selectedMeeting?.manualNotes, !body.isEmpty {
-                let display = stripSourceHeader(from: body)
-                // One scroller only: WKWebView fills remaining space (full width)
-                MarkdownView(markdown: display, bodyFontSize: 16, contentPadding: 28)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                Text("Nothing to preview yet — switch to edit and write.")
-                    .foregroundStyle(.secondary)
-                    .padding(28)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(NSColor.textBackgroundColor))
     }
 
@@ -1452,10 +1453,9 @@ struct MainView: View {
 
     // MARK: - Create Sheet helpers
 
+    /// Default create folder: Unfiled (don't inherit sidebar focus — that mis-filed YT into Cooking).
     private func preferredCreateFolder() -> String {
-        if let f = focusedFolder, !f.isEmpty { return f }
-        if let g = selectedMeeting?.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty { return g }
-        return ""
+        ""
     }
 
     /// Open create sheet; kind is owned entirely by the sheet view.

@@ -226,11 +226,34 @@ struct MarkdownView: NSViewRepresentable {
         let wv = WKWebView(frame: .zero, configuration: config)
         wv.setValue(false, forKey: "drawsBackground") // transparent bg, let SwiftUI control it
         wv.allowsMagnification = false
+        // Expand to whatever SwiftUI gives us (avoid intrinsic half-width sizing)
+        wv.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        wv.setContentHuggingPriority(.defaultLow, for: .vertical)
+        wv.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        wv.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
         return wv
     }
 
     func updateNSView(_ wv: WKWebView, context: Context) {
         let html = MarkdownRenderer.toHTML(markdown, bodyFontSize: bodyFontSize, contentPadding: contentPadding)
-        wv.loadHTMLString(html, baseURL: nil)
+        // Avoid reloading the same document on every layout pass
+        if context.coordinator.lastMarkdown != markdown
+            || context.coordinator.lastFontSize != bodyFontSize
+            || context.coordinator.lastPadding != contentPadding {
+            context.coordinator.lastMarkdown = markdown
+            context.coordinator.lastFontSize = bodyFontSize
+            context.coordinator.lastPadding = contentPadding
+            wv.loadHTMLString(html, baseURL: nil)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    final class Coordinator {
+        var lastMarkdown: String = ""
+        var lastFontSize: CGFloat = 0
+        var lastPadding: CGFloat = 0
     }
 }
