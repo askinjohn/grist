@@ -17,7 +17,7 @@ It also ships an **MCP server** so Claude Desktop (or any MCP client) can list f
 | **AI summaries & chat** | Ollama (local/remote) **or** OpenAI-compatible APIs |
 | **Folders & templates** | Organize meetings; custom summary prompts |
 | **RAG chat** | Ask questions across meetings in a folder |
-| **Import from URL** | Pull article text into a note |
+| **Import from URL** | Articles (page text) or **YouTube captions** via `yt-dlp` → note + optional AI summary |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
 | **One-shot setup** | `./setup.sh` wizard — AI, Whisper, MCP |
 
@@ -34,6 +34,7 @@ Optional:
 
 - [Claude Desktop](https://claude.ai/download) — for MCP
 - Free **Apple ID** signed into Xcode (recommended so Screen Recording / Mic permissions stick across rebuilds)
+- **`yt-dlp`** — YouTube caption import (`brew install yt-dlp`; also installed by `./setup.sh`)
 
 ---
 
@@ -210,6 +211,7 @@ Without a cert, it falls back to ad-hoc signing (permissions may re-prompt after
 | Problem | Fix |
 |---------|-----|
 | Transcript is `you you` / empty | Mic-only silence — enable **Screen & System Audio Recording**, quit & relaunch, play system audio while recording |
+| YouTube import fails | Install `yt-dlp` (`brew install yt-dlp`). Video must have captions (manual or auto). |
 | `Whisper.cpp process failed` | Rebuild whisper **without CoreML**: re-run `./setup.sh` Whisper step (uses `-DWHISPER_COREML=OFF`) |
 | No summaries | Check Ollama is running / API key; open Settings → AI Engine |
 | RAG chat weak | Ensure `nomic-embed-text` is pulled (`ollama pull nomic-embed-text`) |

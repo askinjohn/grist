@@ -67,6 +67,15 @@ fi
 echo "Installing ffmpeg..."
 brew install ffmpeg
 
+echo "Installing yt-dlp (YouTube captions import)..."
+brew install yt-dlp || true
+if command -v yt-dlp &>/dev/null; then
+    defaults write "$BUNDLE_ID" ytDlpPath "$(command -v yt-dlp)"
+    echo "✅ yt-dlp at $(command -v yt-dlp)"
+else
+    echo "⚠️ yt-dlp not found — YouTube caption import will be unavailable until you: brew install yt-dlp"
+fi
+
 mkdir -p "$GRIST_DATA_DIR"
 
 # ── 1. AI provider ───────────────────────────────────────────────────

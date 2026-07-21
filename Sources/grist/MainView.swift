@@ -530,7 +530,7 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Import URL")
                         .font(.title2.weight(.bold))
-                    Text("Article or page → note, optionally filed in a folder.")
+                    Text("YouTube → captions + summary. Articles → page text. Pick a folder if you want.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -552,11 +552,22 @@ struct MainView: View {
                     Text("URL")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    TextField("https://…", text: $importUrlString)
+                    TextField("https://youtube.com/watch?v=… or article URL", text: $importUrlString)
                         .textFieldStyle(.plain)
                         .padding(12)
                         .background(Color.primary.opacity(0.05))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    if YouTubeImporter.isYouTubeURL(importUrlString) {
+                        HStack(spacing: 6) {
+                            Image(systemName: YouTubeImporter.resolveYtDlpPath() == nil ? "exclamationmark.triangle.fill" : "play.rectangle.fill")
+                                .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .red)
+                            Text(YouTubeImporter.resolveYtDlpPath() == nil
+                                 ? "YouTube detected — install yt-dlp: brew install yt-dlp"
+                                 : "YouTube detected — will pull captions via yt-dlp")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -1540,19 +1551,23 @@ struct MainView: View {
     
     func importFromUrl() {
         logImport("importFromUrl called with string: '\(importUrlString)'")
-        let url = importUrlString.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else { 
+        let url = importUrlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else {
             logImport("URL was empty, aborting.")
-            return 
+            return
         }
-        
+
         isImportingUrl = true
+        statusMessage = YouTubeImporter.isYouTubeURL(url)
+            ? "Fetching YouTube captions…"
+            : "Fetching page…"
+
         Task {
             logImport("Starting Task to fetch URL: \(url)")
             do {
                 let result = try await URLFetcher.shared.fetchContent(from: url)
-                logImport("Successfully fetched content: \(result.title) (length: \(result.content.count))")
-                
+                logImport("Successfully fetched (\(result.sourceKind)): \(result.title) (length: \(result.content.count))")
+
                 await MainActor.run {
                     var folder: String? = nil
                     if importIsCreatingFolder {
@@ -1567,24 +1582,36 @@ struct MainView: View {
                         if let folder { db.saveFolder(folder) }
                     }
 
-                    var newMeeting = Meeting(
+                    // Notes UI Write tab uses `manualNotes`; Enhance/RAG use `transcript`.
+                    // Keep both filled so Write shows the text and Enhance works.
+                    let body = result.content
+                    let notes: String = {
+                        if result.sourceKind == "youtube" {
+                            return body
+                        }
+                        return "Source: \(url)\n\n\(body)"
+                    }()
+
+                    let newMeeting = Meeting(
                         id: UUID().uuidString,
                         title: result.title,
                         timestamp: Date().timeIntervalSince1970,
-                        manualNotes: "",
-                        transcript: result.content,
+                        manualNotes: notes,
+                        transcript: body,
                         summary: "",
                         template: "Note",
                         groupName: folder,
                         isDeleted: false
                     )
-                    newMeeting.transcript = result.content
 
                     db.saveMeeting(newMeeting)
                     loadMeetings()
                     if let folder { focusedFolder = folder }
                     selectedMeeting = meetings.first(where: { $0.id == newMeeting.id })
-                    selectedTab = "summary"
+                    selectedTab = "notes"
+                    statusMessage = result.sourceKind == "youtube"
+                        ? "YouTube captions imported (\(body.count) chars)"
+                        : "Page imported"
 
                     if autoEnhance {
                         logImport("Triggering runEnhance()")
@@ -1597,10 +1624,11 @@ struct MainView: View {
                 }
             } catch {
                 logImport("Import failed with error: \(error)")
-                await MainActor.run { 
+                await MainActor.run {
                     importErrorMessage = error.localizedDescription
                     showingImportErrorAlert = true
-                    isImportingUrl = false 
+                    statusMessage = "Import failed"
+                    isImportingUrl = false
                 }
             }
         }
