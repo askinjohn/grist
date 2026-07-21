@@ -102,6 +102,16 @@ struct CreateSheetRequest: Identifiable, Hashable {
     }
 }
 
+/// Result handed back from the create sheet (kind is explicit — never inferred from parent state).
+struct CreateItemPayload {
+    let kind: CreateKind
+    let title: String
+    let folderName: String?
+    let template: String
+    let model: String
+    let autoStartRecording: Bool
+}
+
 /// Sidebar library scope (fills the lower-left with real navigation).
 enum LibraryFilter: String, CaseIterable, Identifiable {
     case all
@@ -224,12 +234,21 @@ struct MainView: View {
         .navigationTitle("")
         .toolbar { toolbarContent }
         .sheet(item: $createSheetRequest) { request in
-            createSheet
-                .onAppear {
-                    // Re-apply in case the sheet content was built before state settled
-                    applyCreateKind(request.kind, resetTitle: true)
+            CreateItemSheet(
+                initialKind: request.kind,
+                folders: folders,
+                presetModels: presetModels,
+                templates: templates,
+                customTemplates: customTemplates,
+                initialFolder: preferredCreateFolder(),
+                initialModel: newModel,
+                onCancel: { createSheetRequest = nil },
+                onCreate: { payload in
+                    createSheetRequest = nil
+                    createSession(from: payload)
                 }
-                .id(request.id)
+            )
+            .id(request.id) // force fresh state per open (Meeting vs Note)
         }
         .sheet(isPresented: $showingSettingsSheet) {
             SettingsView()
@@ -486,12 +505,12 @@ struct MainView: View {
         .contextMenu {
             Button("Show only this folder") { focusedFolder = name }
             Button("New meeting here") {
+                focusedFolder = name
                 openCreateSheet(kind: .meeting)
-                newFolderSelection = name
             }
             Button("New note here") {
+                focusedFolder = name
                 openCreateSheet(kind: .note)
-                newFolderSelection = name
             }
         }
     }
@@ -1047,226 +1066,17 @@ struct MainView: View {
         }
     }
 
-    // MARK: - Create Sheet (Meeting / Note)
+    // MARK: - Create Sheet helpers
 
-    var createSheet: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Create")
-                        .font(.title2.weight(.bold))
-                    Text("One click to choose type — add to a folder if you want.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    createSheetRequest = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(24)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    // Type tiles — single click to switch Meeting ↔ Note
-                    HStack(spacing: 12) {
-                        ForEach(CreateKind.allCases) { kind in
-                            createKindTile(kind)
-                        }
-                    }
-                    .padding(.bottom, 2)
-
-                    // Title
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("TITLE")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        TextField(createKind == .meeting ? "e.g. Weekly Sync" : "e.g. Product ideas", text: $newTitle)
-                            .textFieldStyle(.plain)
-                            .padding(12)
-                            .background(Color.primary.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-
-                    // Folder picker — existing folders + unfiled + new
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("FOLDER")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(newFolderSelection.isEmpty ? "Unfiled" : newFolderSelection)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                folderChip(title: "Unfiled", icon: "tray", selected: newFolderSelection.isEmpty && !isCreatingNewFolder) {
-                                    isCreatingNewFolder = false
-                                    newFolderSelection = ""
-                                    newFolderInlineName = ""
-                                }
-                                ForEach(folders.sorted(), id: \.self) { name in
-                                    folderChip(title: name, icon: "folder.fill", selected: newFolderSelection == name && !isCreatingNewFolder) {
-                                        isCreatingNewFolder = false
-                                        newFolderSelection = name
-                                        newFolderInlineName = ""
-                                    }
-                                }
-                                folderChip(title: "New folder", icon: "folder.badge.plus", selected: isCreatingNewFolder) {
-                                    isCreatingNewFolder = true
-                                    newFolderSelection = ""
-                                }
-                            }
-                        }
-
-                        if isCreatingNewFolder {
-                            TextField("Folder name", text: $newFolderInlineName)
-                                .textFieldStyle(.plain)
-                                .padding(12)
-                                .background(Color.primary.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .onChange(of: newFolderInlineName) { _, val in
-                                    newFolderSelection = val.trimmingCharacters(in: .whitespaces)
-                                }
-                        }
-                    }
-
-                    if createKind == .meeting {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("MEETING OPTIONS")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-
-                            HStack {
-                                Text("Template")
-                                Spacer()
-                                Picker("", selection: $newTemplate) {
-                                    ForEach(templates, id: \.self) { t in Text(t).tag(t) }
-                                    if !customTemplates.isEmpty {
-                                        Divider()
-                                        ForEach(customTemplates) { ct in
-                                            Text(ct.name).tag(ct.name)
-                                        }
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(width: 200)
-                            }
-                            .padding(12)
-                            .background(Color.primary.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                            HStack {
-                                Text("AI Model")
-                                Spacer()
-                                Picker("", selection: $newModel) {
-                                    ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
-                                }
-                                .labelsHidden()
-                                .frame(width: 200)
-                            }
-                            .padding(12)
-                            .background(Color.primary.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                            Toggle(isOn: $autoStartRecording) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text("Start recording immediately")
-                                    Text("Uses mic + system audio when permitted")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(12)
-                            .background(Color.primary.opacity(0.04))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                    } else {
-                        HStack(spacing: 10) {
-                            Image(systemName: "info.circle.fill")
-                                .foregroundStyle(.blue)
-                            Text("Opens a blank note in the editor. You can record later from the toolbar if you need audio.")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(12)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.blue.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 8)
-            }
-
-            Divider()
-
-            HStack {
-                Button("Cancel") { createSheetRequest = nil }
-                Spacer()
-                Button {
-                    createSession()
-                } label: {
-                    Label(
-                        createKind == .meeting
-                            ? (autoStartRecording ? "Start Meeting" : "Create Meeting")
-                            : "Create Note",
-                        systemImage: createKind == .meeting ? "record.circle" : "square.and.pencil"
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(createKind.accent)
-                .keyboardShortcut(.defaultAction)
-            }
-            .padding(20)
-        }
-        .frame(width: 520, height: createKind == .meeting ? 620 : 480)
-        .animation(.easeInOut(duration: 0.2), value: createKind)
+    private func preferredCreateFolder() -> String {
+        if let f = focusedFolder, !f.isEmpty { return f }
+        if let g = selectedMeeting?.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty { return g }
+        return ""
     }
 
-    private func createKindTile(_ kind: CreateKind) -> some View {
-        let selected = createKind == kind
-        return Button {
-            applyCreateKind(kind, resetTitle: true)
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Image(systemName: kind.icon)
-                        .font(.system(size: 26))
-                        .foregroundStyle(kind.accent)
-                    Spacer()
-                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .foregroundStyle(selected ? kind.accent : Color.secondary.opacity(0.35))
-                }
-                Text(kind.title)
-                    .font(.headline)
-                Text(kind.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(16)
-            .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-            .background(selected ? kind.accent.opacity(0.14) : Color.primary.opacity(0.04))
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(selected ? kind.accent.opacity(0.65) : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1)
-            )
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .disabled(selected) // selected tile is already active; other tile remains tappable
+    /// Open create sheet; kind is owned entirely by the sheet view.
+    func openCreateSheet(kind: CreateKind) {
+        createSheetRequest = CreateSheetRequest(kind: kind)
     }
 
     private func folderChip(title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -1288,54 +1098,6 @@ struct MainView: View {
             )
         }
         .buttonStyle(.plain)
-    }
-
-    private func defaultTitle(for kind: CreateKind) -> String {
-        // Placeholder titles are replaced by AI after content exists.
-        kind == .meeting ? "Untitled Meeting" : "Untitled Note"
-    }
-
-    /// Apply meeting vs note defaults (used when opening sheet and when tapping tiles).
-    func applyCreateKind(_ kind: CreateKind, resetTitle: Bool) {
-        createKind = kind
-        autoStartRecording = (kind == .meeting)
-        if kind == .note {
-            newTemplate = "Note"
-            if resetTitle || isPlaceholderCreateTitle(newTitle) {
-                newTitle = defaultTitle(for: .note)
-            }
-        } else {
-            if newTemplate == "Note" { newTemplate = "Standard Summary" }
-            if resetTitle || isPlaceholderCreateTitle(newTitle) {
-                newTitle = defaultTitle(for: .meeting)
-            }
-        }
-    }
-
-    private func isPlaceholderCreateTitle(_ title: String) -> Bool {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty { return true }
-        if t.hasPrefix("Untitled ") { return true }
-        if t.hasPrefix("Meeting ") { return true }
-        if t.hasPrefix("Note ") { return true }
-        return false
-    }
-
-    /// Open create sheet pre-selecting a kind; seed folder from current selection if any.
-    func openCreateSheet(kind: CreateKind) {
-        applyCreateKind(kind, resetTitle: true)
-        isCreatingNewFolder = false
-        newFolderInlineName = ""
-        // Prefer focused folder, else folder of selected item, else unfiled
-        if let f = focusedFolder, !f.isEmpty {
-            newFolderSelection = f
-        } else if let g = selectedMeeting?.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty {
-            newFolderSelection = g
-        } else {
-            newFolderSelection = ""
-        }
-        // item-based sheet always carries the intended kind (fixes stale Meeting selection)
-        createSheetRequest = CreateSheetRequest(kind: kind)
     }
 
     // MARK: - Computed Data
@@ -1558,29 +1320,21 @@ struct MainView: View {
         }
     }
 
-    func createSession() {
-        createSheetRequest = nil
-
+    func createSession(from payload: CreateItemPayload) {
         let id = String(Int(Date().timeIntervalSince1970))
-        let title = newTitle.trimmingCharacters(in: .whitespaces).isEmpty
-            ? defaultTitle(for: createKind)
-            : newTitle.trimmingCharacters(in: .whitespaces)
+        let title = payload.title.trimmingCharacters(in: .whitespaces).isEmpty
+            ? (payload.kind == .note ? "Untitled Note" : "Untitled Meeting")
+            : payload.title.trimmingCharacters(in: .whitespaces)
 
-        // Resolve folder: chip selection or new folder name
-        var folder: String? = nil
-        if isCreatingNewFolder {
-            let name = newFolderInlineName.trimmingCharacters(in: .whitespaces)
-            if !name.isEmpty {
-                folder = name
-                db.saveFolder(name)
-            }
+        var folder = payload.folderName
+        if let folder, !folder.isEmpty {
+            db.saveFolder(folder)
         } else {
-            let name = newFolderSelection.trimmingCharacters(in: .whitespaces)
-            folder = name.isEmpty ? nil : name
-            if let folder { db.saveFolder(folder) } // ensure it exists in folders table
+            folder = nil
         }
 
-        let template = createKind == .note ? "Note" : newTemplate
+        // Notes are always template "Note" so the library filter / icons work.
+        let template = payload.kind == .note ? "Note" : payload.template
         let m = Meeting(
             id: id,
             title: title,
@@ -1593,18 +1347,21 @@ struct MainView: View {
             isDeleted: false
         )
 
-        selectedModel = newModel
+        selectedModel = payload.model
         selectedTemplate = template
+        newModel = payload.model
         db.saveMeeting(m)
         loadMeetings()
         if let folder { focusedFolder = folder }
-        selectedMeeting = m
-        selectedTab = createKind == .note ? "notes" : "summary"
+        selectedMeeting = meetings.first(where: { $0.id == id }) ?? m
+        selectedTab = payload.kind == .note ? "notes" : "summary"
 
-        if createKind == .meeting && autoStartRecording {
+        print("[Create] kind=\(payload.kind.rawValue) template=\(template) title=\(title) folder=\(folder ?? "nil")")
+
+        if payload.kind == .meeting && payload.autoStartRecording {
             startRecording(meetingId: id)
         } else {
-            statusMessage = createKind == .note ? "Note ready" : "Meeting created"
+            statusMessage = payload.kind == .note ? "Note ready" : "Meeting created"
         }
     }
 
@@ -2034,5 +1791,316 @@ struct ChatBubble: View {
                 Spacer()
             }
         }
+    }
+}
+
+// MARK: - Create Item Sheet (self-contained kind state)
+
+/// Owns Meeting/Note selection locally so parent state can never force "Meeting".
+struct CreateItemSheet: View {
+    let initialKind: CreateKind
+    let folders: [String]
+    let presetModels: [String]
+    let templates: [String]
+    let customTemplates: [AITemplate]
+    let initialFolder: String
+    let initialModel: String
+    let onCancel: () -> Void
+    let onCreate: (CreateItemPayload) -> Void
+
+    @State private var kind: CreateKind
+    @State private var title: String
+    @State private var folderSelection: String
+    @State private var isCreatingNewFolder: Bool = false
+    @State private var newFolderName: String = ""
+    @State private var template: String
+    @State private var model: String
+    @State private var autoStartRecording: Bool
+
+    init(
+        initialKind: CreateKind,
+        folders: [String],
+        presetModels: [String],
+        templates: [String],
+        customTemplates: [AITemplate],
+        initialFolder: String,
+        initialModel: String,
+        onCancel: @escaping () -> Void,
+        onCreate: @escaping (CreateItemPayload) -> Void
+    ) {
+        self.initialKind = initialKind
+        self.folders = folders
+        self.presetModels = presetModels
+        self.templates = templates
+        self.customTemplates = customTemplates
+        self.initialFolder = initialFolder
+        self.initialModel = initialModel
+        self.onCancel = onCancel
+        self.onCreate = onCreate
+
+        _kind = State(initialValue: initialKind)
+        _title = State(initialValue: initialKind == .note ? "Untitled Note" : "Untitled Meeting")
+        _folderSelection = State(initialValue: initialFolder)
+        _template = State(initialValue: initialKind == .note ? "Note" : "Standard Summary")
+        _model = State(initialValue: initialModel)
+        _autoStartRecording = State(initialValue: initialKind == .meeting)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Create \(kind.title)")
+                        .font(.title2.weight(.bold))
+                    Text(kind == .note
+                         ? "Write freely — no recording required."
+                         : "Record mic + system audio, then AI summary.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button(action: onCancel) {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(24)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    HStack(spacing: 12) {
+                        ForEach(CreateKind.allCases) { k in
+                            kindTile(k)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("TITLE")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        TextField(kind == .meeting ? "e.g. Weekly Sync" : "e.g. Product ideas", text: $title)
+                            .textFieldStyle(.plain)
+                            .padding(12)
+                            .background(Color.primary.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text("FOLDER")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text(folderSelection.isEmpty ? "Unfiled" : folderSelection)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                chip("Unfiled", icon: "tray", selected: folderSelection.isEmpty && !isCreatingNewFolder) {
+                                    isCreatingNewFolder = false
+                                    folderSelection = ""
+                                    newFolderName = ""
+                                }
+                                ForEach(folders.sorted(), id: \.self) { name in
+                                    chip(name, icon: "folder.fill", selected: folderSelection == name && !isCreatingNewFolder) {
+                                        isCreatingNewFolder = false
+                                        folderSelection = name
+                                        newFolderName = ""
+                                    }
+                                }
+                                chip("New folder", icon: "folder.badge.plus", selected: isCreatingNewFolder) {
+                                    isCreatingNewFolder = true
+                                    folderSelection = ""
+                                }
+                            }
+                        }
+
+                        if isCreatingNewFolder {
+                            TextField("Folder name", text: $newFolderName)
+                                .textFieldStyle(.plain)
+                                .padding(12)
+                                .background(Color.primary.opacity(0.05))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .onChange(of: newFolderName) { _, val in
+                                    folderSelection = val.trimmingCharacters(in: .whitespaces)
+                                }
+                        }
+                    }
+
+                    if kind == .meeting {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("MEETING OPTIONS")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+
+                            HStack {
+                                Text("Template")
+                                Spacer()
+                                Picker("", selection: $template) {
+                                    ForEach(templates, id: \.self) { t in Text(t).tag(t) }
+                                    if !customTemplates.isEmpty {
+                                        Divider()
+                                        ForEach(customTemplates) { ct in
+                                            Text(ct.name).tag(ct.name)
+                                        }
+                                    }
+                                }
+                                .labelsHidden()
+                                .frame(width: 200)
+                            }
+                            .padding(12)
+                            .background(Color.primary.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                            HStack {
+                                Text("AI Model")
+                                Spacer()
+                                Picker("", selection: $model) {
+                                    ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
+                                }
+                                .labelsHidden()
+                                .frame(width: 200)
+                            }
+                            .padding(12)
+                            .background(Color.primary.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                            Toggle(isOn: $autoStartRecording) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Start recording immediately")
+                                    Text("Uses mic + system audio when permitted")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(12)
+                            .background(Color.primary.opacity(0.04))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                    } else {
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(.blue)
+                            Text("Creates a blank note (template “Note”). Opens the Notes editor — no recording.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.blue.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
+            }
+
+            Divider()
+
+            HStack {
+                Button("Cancel", action: onCancel)
+                Spacer()
+                Button {
+                    let folder: String? = {
+                        if isCreatingNewFolder {
+                            let n = newFolderName.trimmingCharacters(in: .whitespaces)
+                            return n.isEmpty ? nil : n
+                        }
+                        let n = folderSelection.trimmingCharacters(in: .whitespaces)
+                        return n.isEmpty ? nil : n
+                    }()
+                    onCreate(CreateItemPayload(
+                        kind: kind,
+                        title: title,
+                        folderName: folder,
+                        template: kind == .note ? "Note" : template,
+                        model: model,
+                        autoStartRecording: kind == .meeting && autoStartRecording
+                    ))
+                } label: {
+                    Label(
+                        kind == .meeting
+                            ? (autoStartRecording ? "Start Meeting" : "Create Meeting")
+                            : "Create Note",
+                        systemImage: kind == .meeting ? "record.circle" : "square.and.pencil"
+                    )
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(kind.accent)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 520, height: kind == .meeting ? 620 : 480)
+        .animation(.easeInOut(duration: 0.2), value: kind)
+    }
+
+    private func kindTile(_ k: CreateKind) -> some View {
+        let selected = kind == k
+        return Button {
+            kind = k
+            autoStartRecording = (k == .meeting)
+            if k == .note {
+                template = "Note"
+                if isPlaceholderTitle(title) { title = "Untitled Note" }
+            } else {
+                if template == "Note" { template = "Standard Summary" }
+                if isPlaceholderTitle(title) { title = "Untitled Meeting" }
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: k.icon)
+                        .font(.system(size: 26))
+                        .foregroundStyle(k.accent)
+                    Spacer()
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(selected ? k.accent : Color.secondary.opacity(0.35))
+                }
+                Text(k.title)
+                    .font(.headline)
+                Text(k.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+            .background(selected ? k.accent.opacity(0.14) : Color.primary.opacity(0.04))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(selected ? k.accent.opacity(0.65) : Color.primary.opacity(0.08), lineWidth: selected ? 2 : 1)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chip(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.caption)
+                Text(title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
+            .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.85))
+            .clipShape(Capsule())
+            .overlay(Capsule().stroke(selected ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func isPlaceholderTitle(_ t: String) -> Bool {
+        let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty || s.hasPrefix("Untitled ") || s.hasPrefix("Meeting ") || s.hasPrefix("Note ")
     }
 }
