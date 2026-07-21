@@ -126,18 +126,19 @@ class RAGEngine: @unchecked Sendable {
         return top
     }
 
-    /// Keyword rank meetings — boost folder/title matches so “financial planning” beats a huge unrelated article.
-    func rankMeetingsByKeywords(_ meetings: [Meeting], query: String, topK: Int = 12) -> [Meeting] {
+    /// Keyword rank with scores — boost folder/title matches so “financial planning” beats Cooking.
+    func rankMeetingsByKeywordsScored(_ meetings: [Meeting], query: String) -> [(meeting: Meeting, score: Int)] {
         let q = query.lowercased()
         let stop: Set<String> = [
             "what", "about", "the", "and", "for", "you", "your", "from", "with", "this", "that",
             "know", "tell", "me", "let", "most", "popular", "does", "how", "are", "any", "all",
             "have", "has", "was", "were", "into", "docs", "doc", "content", "please", "recorded",
+            "based", "give", "need", "needs", "want", "should", "could", "would", "like", "just",
+            "be", "a", "an", "to", "do", "on", "in", "of", "is", "it", "my", "i",
         ]
         let terms = q
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { $0.count >= 2 && !stop.contains($0) }
-        // Multi-word phrase bonus (e.g. "financial planning")
         let phrases: [String] = {
             guard terms.count >= 2 else { return [] }
             var p: [String] = []
@@ -148,7 +149,7 @@ class RAGEngine: @unchecked Sendable {
         }()
 
         guard !terms.isEmpty || !phrases.isEmpty else {
-            return Array(meetings.sorted { $0.timestamp > $1.timestamp }.prefix(topK))
+            return meetings.sorted { $0.timestamp > $1.timestamp }.prefix(8).map { ($0, 1) }
         }
 
         func score(_ m: Meeting) -> Int {
@@ -157,7 +158,6 @@ class RAGEngine: @unchecked Sendable {
             let notes = m.manualNotes.lowercased()
             let transcript = m.transcript.lowercased()
             let folder = (m.groupName ?? "").lowercased()
-            // Normalize folder for matching (FinancialPlanning → financialplanning)
             let folderLoose = folder.replacingOccurrences(of: " ", with: "")
             var s = 0
 
@@ -181,16 +181,32 @@ class RAGEngine: @unchecked Sendable {
             return s
         }
 
-        let ranked = meetings
-            .map { ($0, score($0)) }
-            .filter { $0.1 > 0 }
+        return meetings
+            .map { (meeting: $0, score: score($0)) }
+            .filter { $0.score > 0 }
             .sorted {
-                if $0.1 != $1.1 { return $0.1 > $1.1 }
-                return $0.0.timestamp > $1.0.timestamp
+                if $0.score != $1.score { return $0.score > $1.score }
+                return $0.meeting.timestamp > $1.meeting.timestamp
             }
+    }
 
-        // Always surface positive keyword hits first; never drop a folder match for a 0-score giant article
-        return Array(ranked.prefix(topK).map(\.0))
+    /// Keyword rank meetings. `minScoreRatio` drops weak hits (e.g. Cooking when top is FinancialPlanning).
+    func rankMeetingsByKeywords(
+        _ meetings: [Meeting],
+        query: String,
+        topK: Int = 12,
+        minScoreRatio: Double = 0.25,
+        absoluteMinScore: Int = 8
+    ) -> [Meeting] {
+        let scored = rankMeetingsByKeywordsScored(meetings, query: query)
+        guard let top = scored.first?.score, top > 0 else {
+            return Array(meetings.sorted { $0.timestamp > $1.timestamp }.prefix(min(topK, 5)))
+        }
+        let floor = max(absoluteMinScore, Int(Double(top) * minScoreRatio))
+        return scored
+            .filter { $0.score >= floor }
+            .prefix(topK)
+            .map(\.meeting)
     }
 
     /// Catalog line for library-wide questions (“what do I have?”).

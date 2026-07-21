@@ -4065,8 +4065,8 @@ struct ChatView: View {
         }
     }
 
-    /// Prefer AI summary + written notes + transcript (all three).
-    private func contextBlob(for m: Meeting, limit: Int) -> String {
+    /// Prefer AI summary + written notes + transcript. Action questions lean on Summary first.
+    private func contextBlob(for m: Meeting, limit: Int, actionFocused: Bool = false) -> String {
         var parts: [String] = []
         let summary = m.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let notes = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4074,13 +4074,36 @@ struct ChatView: View {
         let folder = (m.groupName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !folder.isEmpty { parts.append("### Folder\n\(folder)") }
         if !summary.isEmpty { parts.append("### AI Summary\n\(summary)") }
-        if !notes.isEmpty { parts.append("### Notes / article body\n\(notes)") }
-        if !transcript.isEmpty { parts.append("### Transcript / captions\n\(transcript)") }
+        if actionFocused {
+            // Keep notes short — action lists should come from summary when present
+            if !notes.isEmpty {
+                let n = notes.count > 6000 ? String(notes.prefix(6000)) + "\n[…notes truncated…]" : notes
+                parts.append("### Notes (supporting)\n\(n)")
+            }
+            if summary.isEmpty, !transcript.isEmpty {
+                let t = transcript.count > 8000 ? String(transcript.prefix(8000)) + "\n[…truncated…]" : transcript
+                parts.append("### Transcript (supporting)\n\(t)")
+            }
+        } else {
+            if !notes.isEmpty { parts.append("### Notes / article body\n\(notes)") }
+            if !transcript.isEmpty { parts.append("### Transcript / captions\n\(transcript)") }
+        }
         var blob = parts.joined(separator: "\n\n")
         if blob.count > limit {
             blob = String(blob.prefix(limit)) + "\n\n[…truncated…]"
         }
         return blob
+    }
+
+    /// User wants steps / advice / “what should I do” — stay in DOCUMENT, no generic coaching.
+    private func isActionOrAdviceQuery(_ q: String) -> Bool {
+        let l = q.lowercased()
+        let keys = [
+            "what do i", "what should i", "need to do", "action", "steps", "plan",
+            "advisor", "advice", "recommend", "next step", "how do i", "to-do", "todo",
+            "give me what", "based on the content", "based on that",
+        ]
+        return keys.contains { l.contains($0) }
     }
 
     /// Locked list of real titles — small models must copy these exactly.
@@ -4183,6 +4206,8 @@ struct ChatView: View {
                     }
 
                 case .global:
+                    let actionFocused = isActionOrAdviceQuery(text)
+
                     // Prefer exact folder membership when the question names a folder
                     if let folderItems = meetingsMatchingFolderQuery(text, in: meetingsInContext) {
                         let folderName = folderItems.first?.groupName ?? "folder"
@@ -4191,90 +4216,113 @@ struct ChatView: View {
                             header: "AUTHORITATIVE TITLES IN FOLDER \"\(folderName)\" (complete list)"
                         )
                         documentBlock = titleInventory + "\n\n"
-                        documentBlock += "=== FULL CONTENT FOR THESE NOTES ONLY ===\n"
+                        documentBlock += "=== FULL CONTENT FOR THESE NOTES ONLY (do not mention other library notes) ===\n"
                         for m in folderItems.sorted(by: { $0.timestamp > $1.timestamp }) {
-                            let blob = contextBlob(for: m, limit: keywordHitLimit)
+                            let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: actionFocused)
                             documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob.isEmpty ? "(empty body)" : blob)\n"
                         }
                     } else {
-                        // Library-wide: full catalog + keyword priority + RAG
-                        titleInventory = authoritativeTitleList(
+                        // Keyword rank with score floor — drop weak Cooking hits when finance wins
+                        let scored = RAGEngine.shared.rankMeetingsByKeywordsScored(meetingsInContext, query: text)
+                        var ranked = RAGEngine.shared.rankMeetingsByKeywords(
                             meetingsInContext,
-                            header: "AUTHORITATIVE TITLES — ENTIRE LIBRARY (complete list)"
+                            query: text,
+                            topK: actionFocused ? 5 : 8,
+                            minScoreRatio: 0.35,
+                            absoluteMinScore: 10
                         )
-                        documentBlock = titleInventory + "\n\n"
-                        documentBlock += RAGEngine.shared.libraryCatalog(meetingsInContext)
-                        documentBlock += "\n\n"
-
-                        var ranked = RAGEngine.shared.rankMeetingsByKeywords(meetingsInContext, query: text, topK: 8)
-                        if ranked.isEmpty {
-                            ranked = Array(meetingsInContext.sorted { $0.timestamp > $1.timestamp }.prefix(5))
+                        if ranked.isEmpty, let first = scored.first {
+                            ranked = [first.meeting]
                         }
 
-                        // Repeat short list of ranked titles so model can't miss them
-                        documentBlock += authoritativeTitleList(
-                            ranked,
-                            header: "AUTHORITATIVE TITLES — BEST MATCHES FOR THIS QUESTION"
-                        )
-                        documentBlock += "\n\n=== CONTENT FOR BEST MATCHES ===\n"
-                        for m in ranked {
-                            let blob = contextBlob(for: m, limit: keywordHitLimit)
-                            if blob.isEmpty { continue }
-                            documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
-                        }
-
-                        let meetingIds = meetingsInContext.map(\.id)
-                        var topChunks: [TranscriptChunk] = []
-                        do {
-                            topChunks = try await RAGEngine.shared.search(
-                                query: text,
-                                meetingIds: meetingIds,
-                                topK: 12,
-                                maxPerMeeting: 2
+                        // For action/advice: only BEST MATCHES inventory (not whole library catalog)
+                        if actionFocused {
+                            titleInventory = authoritativeTitleList(
+                                ranked,
+                                header: "AUTHORITATIVE TITLES — ONLY THESE NOTES APPLY TO THIS QUESTION"
                             )
-                        } catch {
-                            print("[Chat] RAG search failed: \(error)")
-                            documentBlock += "\n(Vector search unavailable: \(error.localizedDescription))\n"
-                        }
+                            documentBlock = titleInventory + "\n\n"
+                            documentBlock += "=== SOURCE CONTENT (derive action items from AI Summary first) ===\n"
+                            for m in ranked {
+                                let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: true)
+                                if blob.isEmpty { continue }
+                                documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
+                            }
+                        } else {
+                            titleInventory = authoritativeTitleList(
+                                meetingsInContext,
+                                header: "AUTHORITATIVE TITLES — ENTIRE LIBRARY"
+                            )
+                            documentBlock = titleInventory + "\n\n"
+                            documentBlock += authoritativeTitleList(
+                                ranked,
+                                header: "AUTHORITATIVE TITLES — BEST MATCHES FOR THIS QUESTION"
+                            )
+                            documentBlock += "\n\n=== CONTENT FOR BEST MATCHES ===\n"
+                            for m in ranked {
+                                let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: false)
+                                if blob.isEmpty { continue }
+                                documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
+                            }
 
-                        if !topChunks.isEmpty {
-                            documentBlock += "\n=== SEMANTIC EXCERPTS (titles must still match AUTHORITATIVE list) ===\n"
-                            for chunk in topChunks {
-                                let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
-                                documentBlock += "[TITLE=\"\(parentTitle)\"]:\n\(chunk.text)\n\n"
+                            // Semantic only over ranked ids (not whole library) to avoid Cooking bleed
+                            let meetingIds = ranked.map(\.id)
+                            if !meetingIds.isEmpty {
+                                do {
+                                    let topChunks = try await RAGEngine.shared.search(
+                                        query: text,
+                                        meetingIds: meetingIds,
+                                        topK: 10,
+                                        maxPerMeeting: 2
+                                    )
+                                    if !topChunks.isEmpty {
+                                        documentBlock += "\n=== SEMANTIC EXCERPTS ===\n"
+                                        for chunk in topChunks {
+                                            let parentTitle = ranked.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
+                                            documentBlock += "[TITLE=\"\(parentTitle)\"]:\n\(chunk.text)\n\n"
+                                        }
+                                    }
+                                } catch {
+                                    print("[Chat] RAG search failed: \(error)")
+                                }
                             }
                         }
                     }
                 }
 
+                let actionFocused = isActionOrAdviceQuery(text)
                 let systemPrompt = """
                 You are Grist’s library assistant. You answer ONLY from DOCUMENT.
 
                 HARD RULES (never break):
                 1. NEVER invent note titles, folder names, or topics. If a title is not in AUTHORITATIVE TITLE LIST, do not write it.
                 2. When listing notes, copy each TITLE= value exactly (same spelling, punctuation, capitalization).
-                3. Summaries must come from that note’s AI Summary / Notes / Transcript in DOCUMENT.
+                3. Content must come from that note’s AI Summary / Notes / Transcript in DOCUMENT.
                 4. If the user asks for titles in a folder, list ONLY the AUTHORITATIVE list for that folder — nothing else.
-                5. Never invent generic finance titles like "Retirement Portfolio Optimization" or "Estate Planning Basics" unless those exact strings appear as TITLE=.
-                6. Prefer AI Summary text. Be concrete. Cite titles in quotes.
+                5. Never invent generic titles (e.g. "Estate Planning Basics") unless that exact TITLE= appears.
+                6. Prefer AI Summary. Be concrete. Cite titles in quotes.
                 7. Do not ask the user to paste content.
+                8. Do NOT mention notes that are not in the AUTHORITATIVE BEST MATCHES / FOLDER list for this question (e.g. do not drag in Cooking recipes when the topic is finance).
+                9. ACTION / ADVICE questions: output a numbered action list grounded ONLY in DOCUMENT. Quote or paraphrase principles from the summaries (e.g. debt snowball, stewardship, biblical principles IF present). FORBIDDEN: generic retail-finance boilerplate such as "consult a financial advisor", "diversify your portfolio", "build an emergency fund" UNLESS those exact ideas appear in DOCUMENT. Do not add disclaimers about being an AI instead of answering from the notes.
                 """
 
-                // Document + inventory + question as a single user turn (stronger for small models).
-                // Skip prior history for list/title questions so old hallucinations don't stick.
                 let listingish =
                     text.lowercased().contains("title")
                     || text.lowercased().contains("list")
                     || text.lowercased().contains("folder")
+                let skipHistory = listingish || actionFocused
 
                 var apiMessages: [OllamaClient.OllamaChatMessage] = [
                     OllamaClient.OllamaChatMessage(role: "system", content: systemPrompt),
                 ]
-                if !listingish {
+                if !skipHistory {
                     for msg in historySnapshot.dropLast() {
                         apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
                     }
                 }
+                let actionExtra = actionFocused
+                    ? "\nFormat: numbered actions. Each bullet must tie to a quoted note title and idea from DOCUMENT. No generic advice."
+                    : ""
                 apiMessages.append(
                     OllamaClient.OllamaChatMessage(
                         role: "user",
@@ -4290,7 +4338,7 @@ struct ChatView: View {
                         USER QUESTION:
                         \(text)
 
-                        Answer using only DOCUMENT. Copy titles exactly from AUTHORITATIVE TITLE LIST. Do not invent titles.
+                        Answer using only DOCUMENT. Copy titles exactly from AUTHORITATIVE TITLE LIST. Do not invent titles.\(actionExtra)
                         """
                     )
                 )
