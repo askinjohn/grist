@@ -13,11 +13,40 @@ struct Meeting: Identifiable, Codable, Hashable {
     var template: String
     var groupName: String? = nil
     var isDeleted: Bool = false
+    /// Recorded audio length in seconds (0 if unknown / note-only).
+    var durationSeconds: Int = 0
 
     /// Notes created via the Note flow use template `"Note"`.
     var isNoteType: Bool { template == "Note" }
 
     var kindLabel: String { isNoteType ? "Note" : "Meeting" }
+
+    /// Default titles we may safely replace with an AI title.
+    var isPlaceholderTitle: Bool {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return true }
+        if t.hasPrefix("Untitled ") { return true }
+        if t.hasPrefix("Meeting ") { return true }
+        if t.hasPrefix("Note ") { return true }
+        return false
+    }
+
+    var formattedCreated: String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f.string(from: Date(timeIntervalSince1970: timestamp))
+    }
+
+    var formattedDuration: String? {
+        guard durationSeconds > 0 else { return nil }
+        let m = durationSeconds / 60
+        let s = durationSeconds % 60
+        if m >= 60 {
+            return String(format: "%dh %02dm", m / 60, m % 60)
+        }
+        return String(format: "%d:%02d", m, s)
+    }
 }
 
 struct MeetingGroup: Identifiable {
@@ -631,6 +660,10 @@ struct MainView: View {
             .padding(.vertical, 10)
             .background(.bar)
 
+            if let m = selectedMeeting {
+                metadataBar(for: m)
+            }
+
             Divider()
 
             // Content area — WKWebView handles its own scrolling
@@ -660,6 +693,63 @@ struct MainView: View {
             aiContentView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    @ViewBuilder
+    func metadataBar(for m: Meeting) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                metaChip(icon: m.isNoteType ? "note.text" : "waveform", text: m.kindLabel)
+                metaChip(icon: "calendar", text: m.formattedCreated)
+                if let dur = m.formattedDuration {
+                    metaChip(icon: "timer", text: dur)
+                }
+                if let folder = m.groupName, !folder.isEmpty {
+                    metaChip(icon: "folder.fill", text: folder)
+                } else {
+                    metaChip(icon: "tray", text: "Unfiled")
+                }
+                if !m.transcript.isEmpty {
+                    let words = m.transcript.split { $0.isWhitespace || $0.isNewline }.count
+                    if words > 0 {
+                        metaChip(icon: "text.alignleft", text: "\(words) words")
+                    }
+                }
+                if m.isPlaceholderTitle && !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") {
+                    Button {
+                        generateAutoTitle(force: true)
+                    } label: {
+                        Label("Auto-title", systemImage: "sparkles")
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.purple.opacity(0.15))
+                            .foregroundStyle(.purple)
+                            .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Generate a title from the content")
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+        .background(Color.primary.opacity(0.03))
+    }
+
+    private func metaChip(icon: String, text: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .font(.caption2)
+            Text(text)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.05))
+        .clipShape(Capsule())
+        .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -1200,8 +1290,8 @@ struct MainView: View {
     }
 
     private func defaultTitle(for kind: CreateKind) -> String {
-        let stamp = DateFormatter.localizedString(from: Date(), dateStyle: .short, timeStyle: .short)
-        return kind == .meeting ? "Meeting \(stamp)" : "Note \(stamp)"
+        // Placeholder titles are replaced by AI after content exists.
+        kind == .meeting ? "Untitled Meeting" : "Untitled Note"
     }
 
     /// Open create sheet pre-selecting a kind; seed folder from current selection if any.
@@ -1399,6 +1489,8 @@ struct MainView: View {
                     if autoEnhance {
                         logImport("Triggering runEnhance()")
                         runEnhance()
+                    } else if newMeeting.isPlaceholderTitle {
+                        generateAutoTitle(force: false)
                     }
                     isImportingUrl = false
                     logImport("Import complete.")
@@ -1529,6 +1621,7 @@ struct MainView: View {
         isRecording = false
         recordingTimer?.invalidate()
         recordingTimer = nil
+        let capturedDuration = recordingSeconds
         recordingSeconds = 0
         statusMessage = "Transcribing…"
 
@@ -1538,17 +1631,23 @@ struct MainView: View {
             let transcript = await transcriber.transcribe(meetingId: m.id)
             await MainActor.run {
                 selectedMeeting?.transcript = transcript
+                if capturedDuration > 0 {
+                    selectedMeeting?.durationSeconds = max(selectedMeeting?.durationSeconds ?? 0, capturedDuration)
+                }
                 saveMeeting()
                 statusMessage = ""
-                
+
                 let meetingIdToRAG = selectedMeeting?.id
                 let transcriptToRAG = transcript
-                
+
                 if autoEnhance {
                     runEnhance()
+                } else if !(transcriptToRAG.hasPrefix("[Error")) {
+                    // Still name the item even if summary is skipped
+                    generateAutoTitle(force: false)
                 }
-                
-                if let mid = meetingIdToRAG, !transcriptToRAG.isEmpty {
+
+                if let mid = meetingIdToRAG, !transcriptToRAG.isEmpty, !transcriptToRAG.hasPrefix("[Error") {
                     Task {
                         await RAGEngine.shared.processTranscriptForRAG(meetingId: mid, transcript: transcriptToRAG)
                     }
@@ -1572,18 +1671,32 @@ struct MainView: View {
         statusMessage = "Enhancing…"
         let templateName = m.template
         let customPrompt = customTemplates.first(where: { $0.name == templateName })?.prompt
+        let shouldTitle = m.isPlaceholderTitle
+        let kind = m.kindLabel.lowercased()
+        let contentForTitle = m.transcript
 
         Task {
             do {
-                let enhanced = try await ollama.enhance(
+                async let enhancedTask = ollama.enhance(
                     transcript: m.transcript,
                     notes: m.manualNotes,
                     template: templateName,
                     customPrompt: customPrompt,
                     model: model
                 )
+                async let titleTask: String? = {
+                    guard shouldTitle else { return nil }
+                    return try? await ollama.suggestTitle(content: contentForTitle, kind: kind, model: model)
+                }()
+
+                let enhanced = try await enhancedTask
+                let title = await titleTask
+
                 await MainActor.run {
                     selectedMeeting?.summary = enhanced
+                    if let title, !title.isEmpty, selectedMeeting?.isPlaceholderTitle == true {
+                        selectedMeeting?.title = title
+                    }
                     saveMeeting()
                     statusMessage = "Done"
                     selectedTab = "summary"
@@ -1591,6 +1704,40 @@ struct MainView: View {
             } catch {
                 await MainActor.run {
                     statusMessage = "Error: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// AI title from transcript/summary. By default only replaces placeholder titles.
+    func generateAutoTitle(force: Bool = false) {
+        guard let m = selectedMeeting else { return }
+        let source: String = {
+            if !m.summary.isEmpty { return m.summary }
+            if !m.transcript.isEmpty { return m.transcript }
+            return m.manualNotes
+        }()
+        guard !source.isEmpty, !source.hasPrefix("[Error") else { return }
+        guard force || m.isPlaceholderTitle else { return }
+
+        let model = selectedModel == "custom" ? customModelName : selectedModel
+        guard !model.isEmpty else { return }
+        let kind = m.kindLabel.lowercased()
+        statusMessage = "Titling…"
+
+        Task {
+            do {
+                let title = try await ollama.suggestTitle(content: source, kind: kind, model: model)
+                await MainActor.run {
+                    if !title.isEmpty {
+                        selectedMeeting?.title = title
+                        saveMeeting()
+                    }
+                    statusMessage = ""
+                }
+            } catch {
+                await MainActor.run {
+                    statusMessage = "Title failed"
                 }
             }
         }
@@ -1637,6 +1784,14 @@ struct SidebarRow: View {
                     Text(relativeTime)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let dur = meeting.formattedDuration {
+                        Text("·")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                        Text(dur)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     if let folder = meeting.groupName, !folder.isEmpty {
                         Text("·")
                             .font(.caption2)

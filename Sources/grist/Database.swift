@@ -39,7 +39,8 @@ class Database {
             summary TEXT,
             template TEXT,
             group_name TEXT DEFAULT '',
-            is_deleted INTEGER DEFAULT 0
+            is_deleted INTEGER DEFAULT 0,
+            duration_seconds INTEGER DEFAULT 0
         );
         """
         execute(createTableString)
@@ -86,6 +87,7 @@ class Database {
         // Safely migrate existing databases
         execute("ALTER TABLE meetings ADD COLUMN group_name TEXT DEFAULT '';")
         execute("ALTER TABLE meetings ADD COLUMN is_deleted INTEGER DEFAULT 0;")
+        execute("ALTER TABLE meetings ADD COLUMN duration_seconds INTEGER DEFAULT 0;")
     }
     
     @discardableResult
@@ -98,8 +100,8 @@ class Database {
     
     func saveMeeting(_ meeting: Meeting) {
         let insertStatementString = """
-        INSERT OR REPLACE INTO meetings (id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+        INSERT OR REPLACE INTO meetings (id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted, duration_seconds)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         
         var insertStatement: OpaquePointer?
@@ -113,6 +115,7 @@ class Database {
             sqlite3_bind_text(insertStatement, 7, (meeting.template as NSString).utf8String, -1, nil)
             sqlite3_bind_text(insertStatement, 8, ((meeting.groupName ?? "") as NSString).utf8String, -1, nil)
             sqlite3_bind_int(insertStatement, 9, meeting.isDeleted ? 1 : 0)
+            sqlite3_bind_int(insertStatement, 10, Int32(meeting.durationSeconds))
             
             if sqlite3_step(insertStatement) != SQLITE_DONE {
                 print("Could not insert/replace meeting row.")
@@ -132,7 +135,7 @@ class Database {
     }
     
     func getMeeting(id: String) -> Meeting? {
-        let queryStatementString = "SELECT id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted FROM meetings WHERE id = ?;"
+        let queryStatementString = "SELECT id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted, COALESCE(duration_seconds, 0) FROM meetings WHERE id = ?;"
         var queryStatement: OpaquePointer?
         var meeting: Meeting? = nil
         
@@ -140,28 +143,7 @@ class Database {
             sqlite3_bind_text(queryStatement, 1, (id as NSString).utf8String, -1, nil)
             
             if sqlite3_step(queryStatement) == SQLITE_ROW {
-                let id = String(cString: sqlite3_column_text(queryStatement, 0))
-                let title = String(cString: sqlite3_column_text(queryStatement, 1))
-                let timestamp = sqlite3_column_double(queryStatement, 2)
-                
-                let manualNotes = sqlite3_column_text(queryStatement, 3) != nil ? String(cString: sqlite3_column_text(queryStatement, 3)) : ""
-                let transcript = sqlite3_column_text(queryStatement, 4) != nil ? String(cString: sqlite3_column_text(queryStatement, 4)) : ""
-                let summary = sqlite3_column_text(queryStatement, 5) != nil ? String(cString: sqlite3_column_text(queryStatement, 5)) : ""
-                let template = sqlite3_column_text(queryStatement, 6) != nil ? String(cString: sqlite3_column_text(queryStatement, 6)) : ""
-                let groupName = sqlite3_column_text(queryStatement, 7) != nil ? String(cString: sqlite3_column_text(queryStatement, 7)) : ""
-                let isDeleted = sqlite3_column_int(queryStatement, 8) == 1
-                
-                meeting = Meeting(
-                    id: id,
-                    title: title,
-                    timestamp: timestamp,
-                    manualNotes: manualNotes,
-                    transcript: transcript,
-                    summary: summary,
-                    template: template,
-                    groupName: groupName.isEmpty ? nil : groupName,
-                    isDeleted: isDeleted
-                )
+                meeting = meetingFromRow(queryStatement)
             }
         }
         sqlite3_finalize(queryStatement)
@@ -169,39 +151,45 @@ class Database {
     }
     
     func fetchActiveMeetings() -> [Meeting] {
-        let queryStatementString = "SELECT id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted FROM meetings WHERE is_deleted = 0 ORDER BY timestamp DESC;"
+        let queryStatementString = "SELECT id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted, COALESCE(duration_seconds, 0) FROM meetings WHERE is_deleted = 0 ORDER BY timestamp DESC;"
         var queryStatement: OpaquePointer?
         var meetings: [Meeting] = []
         
         if sqlite3_prepare_v2(db, queryStatementString, -1, &queryStatement, nil) == SQLITE_OK {
             while sqlite3_step(queryStatement) == SQLITE_ROW {
-                let id = String(cString: sqlite3_column_text(queryStatement, 0))
-                let title = String(cString: sqlite3_column_text(queryStatement, 1))
-                let timestamp = sqlite3_column_double(queryStatement, 2)
-                
-                let manualNotes = sqlite3_column_text(queryStatement, 3) != nil ? String(cString: sqlite3_column_text(queryStatement, 3)) : ""
-                let transcript = sqlite3_column_text(queryStatement, 4) != nil ? String(cString: sqlite3_column_text(queryStatement, 4)) : ""
-                let summary = sqlite3_column_text(queryStatement, 5) != nil ? String(cString: sqlite3_column_text(queryStatement, 5)) : ""
-                let template = sqlite3_column_text(queryStatement, 6) != nil ? String(cString: sqlite3_column_text(queryStatement, 6)) : ""
-                let groupName = sqlite3_column_text(queryStatement, 7) != nil ? String(cString: sqlite3_column_text(queryStatement, 7)) : ""
-                let isDeleted = sqlite3_column_int(queryStatement, 8) == 1
-                
-                let meeting = Meeting(
-                    id: id,
-                    title: title,
-                    timestamp: timestamp,
-                    manualNotes: manualNotes,
-                    transcript: transcript,
-                    summary: summary,
-                    template: template,
-                    groupName: groupName.isEmpty ? nil : groupName,
-                    isDeleted: isDeleted
-                )
-                meetings.append(meeting)
+                if let meeting = meetingFromRow(queryStatement) {
+                    meetings.append(meeting)
+                }
             }
         }
         sqlite3_finalize(queryStatement)
         return meetings
+    }
+
+    private func meetingFromRow(_ queryStatement: OpaquePointer?) -> Meeting? {
+        guard let queryStatement else { return nil }
+        let id = String(cString: sqlite3_column_text(queryStatement, 0))
+        let title = String(cString: sqlite3_column_text(queryStatement, 1))
+        let timestamp = sqlite3_column_double(queryStatement, 2)
+        let manualNotes = sqlite3_column_text(queryStatement, 3) != nil ? String(cString: sqlite3_column_text(queryStatement, 3)) : ""
+        let transcript = sqlite3_column_text(queryStatement, 4) != nil ? String(cString: sqlite3_column_text(queryStatement, 4)) : ""
+        let summary = sqlite3_column_text(queryStatement, 5) != nil ? String(cString: sqlite3_column_text(queryStatement, 5)) : ""
+        let template = sqlite3_column_text(queryStatement, 6) != nil ? String(cString: sqlite3_column_text(queryStatement, 6)) : ""
+        let groupName = sqlite3_column_text(queryStatement, 7) != nil ? String(cString: sqlite3_column_text(queryStatement, 7)) : ""
+        let isDeleted = sqlite3_column_int(queryStatement, 8) == 1
+        let durationSeconds = Int(sqlite3_column_int(queryStatement, 9))
+        return Meeting(
+            id: id,
+            title: title,
+            timestamp: timestamp,
+            manualNotes: manualNotes,
+            transcript: transcript,
+            summary: summary,
+            template: template,
+            groupName: groupName.isEmpty ? nil : groupName,
+            isDeleted: isDeleted,
+            durationSeconds: durationSeconds
+        )
     }
 
     // MARK: - Folders

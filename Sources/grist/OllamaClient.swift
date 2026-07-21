@@ -128,6 +128,72 @@ class OllamaClient: @unchecked Sendable {
         }
     }
     
+    /// Short human title for a note/meeting from transcript or body text.
+    func suggestTitle(content: String, kind: String = "meeting", model: String) async throws -> String {
+        let snippet = String(content.prefix(2500))
+        let prompt = """
+        Suggest a concise title for this \(kind) (maximum 8 words).
+        Rules:
+        - Capture the main topic clearly
+        - No quotation marks, no trailing period
+        - No prefixes like "Title:" or "Meeting:"
+        - Output ONLY the title text
+
+        Content:
+        \(snippet)
+        """
+        let raw: String
+        if isOllama {
+            let url = URL(string: "\(ollamaBaseURL)/api/generate")!
+            let payload = OllamaRequest(model: model, prompt: prompt, stream: false)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONEncoder().encode(payload)
+            request.timeoutInterval = 45
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to local Ollama."])
+            }
+            raw = try JSONDecoder().decode(OllamaResponse.self, from: data).response
+        } else {
+            let url = URL(string: "\(openAIBaseURL)/chat/completions")!
+            let msg = OllamaChatMessage(role: "user", content: prompt)
+            let actualModel = model.isEmpty ? openAIModel : model
+            let payload = OpenAIChatRequest(model: actualModel, messages: [msg], stream: false)
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            if !openAIAPIKey.isEmpty {
+                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+            }
+            request.httpBody = try JSONEncoder().encode(payload)
+            request.timeoutInterval = 45
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI endpoint."])
+            }
+            raw = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? ""
+        }
+        return Self.cleanTitle(raw)
+    }
+
+    private static func cleanTitle(_ raw: String) -> String {
+        var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        t = t.replacingOccurrences(of: "^\"|\"$", with: "", options: .regularExpression)
+        t = t.replacingOccurrences(of: "^'|'$", with: "", options: .regularExpression)
+        if let range = t.range(of: #"^(Title|Meeting|Note)\s*:\s*"#, options: [.regularExpression, .caseInsensitive]) {
+            t = String(t[range.upperBound...])
+        }
+        // Single line, trim length
+        if let nl = t.firstIndex(of: "\n") {
+            t = String(t[..<nl])
+        }
+        t = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.count > 80 { t = String(t.prefix(77)) + "…" }
+        return t
+    }
+
     func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> String {
         print("[OllamaClient] Starting AI enhancement using model: \(model)...")
         
