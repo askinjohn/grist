@@ -209,6 +209,9 @@ struct MainView: View {
     @State private var importFolderSelection: String = ""
     @State private var importIsCreatingFolder = false
     @State private var importNewFolderName = ""
+    /// Markdown format command for the note body editor.
+    @State private var noteFormatCommand: MarkdownFormatCommand? = nil
+    @State private var noteShowPreview = false
 
     private let db = Database.shared
     private let recorder = AudioRecorder.shared
@@ -728,66 +731,121 @@ struct MainView: View {
 
     @ViewBuilder
     var noteWritingSurface: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                // Large inline title
-                TextField("Note title", text: Binding(
-                    get: { selectedMeeting?.title ?? "" },
-                    set: { selectedMeeting?.title = $0; saveMeeting() }
-                ))
-                .font(.system(size: 28, weight: .bold, design: .default))
-                .textFieldStyle(.plain)
-                .padding(.bottom, 8)
-
-                // Meta under title
-                if let m = selectedMeeting {
-                    HStack(spacing: 10) {
-                        Label(m.formattedCreated, systemImage: "calendar")
-                        if let folder = m.groupName, !folder.isEmpty {
-                            Label(folder, systemImage: "folder.fill")
-                        } else {
-                            Label("Unfiled", systemImage: "tray")
-                        }
-                        let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
-                        if words > 0 {
-                            Label("\(words) words", systemImage: "text.alignleft")
-                        }
-                    }
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .padding(.bottom, 20)
+        VStack(spacing: 0) {
+            // Format toolbar
+            HStack(spacing: 12) {
+                MarkdownFormatToolbar(pendingFormat: $noteFormatCommand)
+                Spacer()
+                Picker("", selection: $noteShowPreview) {
+                    Text("Edit").tag(false)
+                    Text("Preview").tag(true)
                 }
-
-                Rectangle()
-                    .fill(Color.primary.opacity(0.08))
-                    .frame(height: 1)
-                    .padding(.bottom, 16)
-
-                // Body editor with placeholder
-                ZStack(alignment: .topLeading) {
-                    if (selectedMeeting?.manualNotes ?? "").isEmpty {
-                        Text("Start writing…\n\nCapture ideas, meeting follow-ups, or anything you want AI to organize later.")
-                            .font(.system(size: 16, weight: .regular, design: .default))
-                            .foregroundStyle(.tertiary)
-                            .padding(.top, 8)
-                            .allowsHitTesting(false)
-                    }
-
-                    TextEditor(text: Binding(
-                        get: { selectedMeeting?.manualNotes ?? "" },
-                        set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
-                    ))
-                    .font(.system(size: 16, weight: .regular, design: .default))
-                    .lineSpacing(6)
-                    .scrollContentBackground(.hidden)
-                    .frame(minHeight: 420)
-                    .padding(.leading, -5) // align with title
-                }
+                .pickerStyle(.segmented)
+                .frame(width: 140)
+                .help("Preview renders markdown (bold, lists, etc.)")
             }
-            .padding(.horizontal, 48)
-            .padding(.vertical, 32)
-            .frame(maxWidth: 720)
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.02))
+
+            Divider()
+
+            if noteShowPreview {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
+                            .font(.system(size: 28, weight: .bold))
+                        if let body = selectedMeeting?.manualNotes, !body.isEmpty {
+                            MarkdownView(markdown: body)
+                                .frame(minHeight: 400)
+                        } else {
+                            Text("Nothing to preview yet — switch to Edit and write some markdown.")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(48)
+                    .frame(maxWidth: 720)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Large inline title
+                    TextField("Note title", text: Binding(
+                        get: { selectedMeeting?.title ?? "" },
+                        set: { selectedMeeting?.title = $0; saveMeeting() }
+                    ))
+                    .font(.system(size: 28, weight: .bold, design: .default))
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 48)
+                    .padding(.top, 28)
+                    .padding(.bottom, 8)
+                    .frame(maxWidth: 720)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if let m = selectedMeeting {
+                        HStack(spacing: 10) {
+                            Label(m.formattedCreated, systemImage: "calendar")
+                            if let folder = m.groupName, !folder.isEmpty {
+                                Label(folder, systemImage: "folder.fill")
+                            } else {
+                                Label("Unfiled", systemImage: "tray")
+                            }
+                            let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
+                            if words > 0 {
+                                Label("\(words) words", systemImage: "text.alignleft")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 48)
+                        .padding(.bottom, 12)
+                        .frame(maxWidth: 720)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Text("Select text, then use the toolbar — **bold**, *italic*, lists, and more (markdown).")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 48)
+                        .padding(.bottom, 8)
+                        .frame(maxWidth: 720)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 1)
+                        .padding(.horizontal, 48)
+                        .padding(.bottom, 8)
+                        .frame(maxWidth: 720)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    ZStack(alignment: .topLeading) {
+                        if (selectedMeeting?.manualNotes ?? "").isEmpty {
+                            Text("Start writing…\n\nTip: select a word → B for **bold**, or type markdown directly.")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 48)
+                                .padding(.top, 12)
+                                .allowsHitTesting(false)
+                        }
+
+                        MarkdownNoteEditor(
+                            text: Binding(
+                                get: { selectedMeeting?.manualNotes ?? "" },
+                                set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
+                            ),
+                            pendingFormat: $noteFormatCommand,
+                            fontSize: 16
+                        )
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 24)
+                        .frame(maxWidth: 720)
+                        .frame(maxWidth: .infinity, minHeight: 360, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
         }
         .background(
             LinearGradient(
