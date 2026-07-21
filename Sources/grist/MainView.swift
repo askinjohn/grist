@@ -62,6 +62,34 @@ enum CreateKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// Sidebar library scope (fills the lower-left with real navigation).
+enum LibraryFilter: String, CaseIterable, Identifiable {
+    case all
+    case unfiled
+    case meetings
+    case notes
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .unfiled: return "Unfiled"
+        case .meetings: return "Meetings"
+        case .notes: return "Notes"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .all: return "square.stack.3d.up"
+        case .unfiled: return "tray"
+        case .meetings: return "waveform"
+        case .notes: return "note.text"
+        }
+    }
+}
+
 // MARK: - Root View (Handles Sheet + Keyboard)
 
 struct RootView: View {
@@ -114,8 +142,9 @@ struct MainView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var suggestedGroup: String? = nil
     @State private var isSuggestingGroup = false
-    
-
+    @State private var libraryFilter: LibraryFilter = .all
+    /// When set, sidebar shows only this folder (overrides library filter).
+    @State private var focusedFolder: String? = nil
 
     // Create sheet form
     @State private var createKind: CreateKind = .meeting
@@ -127,6 +156,11 @@ struct MainView: View {
     @State private var newTemplate = "Standard Summary"
     @State private var newModel = "gemma2:2b"
     @State private var autoStartRecording = true
+
+    // Import sheet folder (mirrors create chips)
+    @State private var importFolderSelection: String = ""
+    @State private var importIsCreatingFolder = false
+    @State private var importNewFolderName = ""
 
     private let db = Database.shared
     private let recorder = AudioRecorder.shared
@@ -141,7 +175,7 @@ struct MainView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebarContent
-                .navigationSplitViewColumnWidth(min: 240, ideal: 260, max: 320)
+                .navigationSplitViewColumnWidth(min: 260, ideal: 288, max: 360)
         } detail: {
             if let _ = selectedMeeting {
                 detailContent
@@ -231,87 +265,74 @@ struct MainView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
-            .padding(.bottom, 6)
-            
+            .padding(.bottom, 8)
+
             List(selection: $selectedMeeting) {
-            ForEach(groupedMeetings) { group in
-                Section(group.name) {
-                    ForEach(group.meetings) { meeting in
-                        SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
-                            .tag(meeting)
-                            .draggable(meeting.id)
+                // LIBRARY
+                Section {
+                    ForEach(LibraryFilter.allCases) { filter in
+                        libraryFilterRow(filter)
+                    }
+                } header: {
+                    Text("Library")
+                }
+
+                // FOLDERS (+ in header)
+                Section {
+                    if folders.isEmpty {
+                        Text("No folders yet")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        ForEach(folders.sorted(), id: \.self) { name in
+                            folderNavRow(name)
+                                .dropDestination(for: String.self) { items, _ in
+                                    moveMeetings(items, toFolder: name)
+                                }
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text("Folders")
+                        Spacer()
+                        Button {
+                            newFolderName = ""
+                            showingNewFolderAlert = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("New folder")
                     }
                 }
-                .dropDestination(for: String.self) { items, location in
-                    guard let meetingId = items.first else { return false }
-                    var destGroup: String? = group.name
-                    if destGroup == "Today" || destGroup == "Yesterday" || destGroup == "Last 7 Days" || destGroup == "Older" {
-                        destGroup = nil
-                    } else if destGroup?.hasPrefix("📁 ") == true {
-                        destGroup = String(destGroup!.dropFirst(2))
+
+                // ITEMS (filtered list)
+                ForEach(groupedMeetings) { group in
+                    Section(group.name) {
+                        ForEach(group.meetings) { meeting in
+                            SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
+                                .tag(meeting)
+                                .draggable(meeting.id)
+                        }
                     }
-                    
-                    if var m = db.getMeeting(id: meetingId) {
-                        m.groupName = destGroup
-                        db.saveMeeting(m)
-                        loadMeetings()
-                        return true
+                    .dropDestination(for: String.self) { items, _ in
+                        moveMeetings(items, toFolder: dropFolder(fromSection: group.name))
                     }
-                    return false
                 }
             }
+            .listStyle(.sidebar)
+            .searchable(text: $searchText, placement: .sidebar, prompt: "Search notes & meetings")
         }
-        .listStyle(.sidebar)
-        .searchable(text: $searchText, placement: .sidebar, prompt: "Search")
-        
-        } // End of VStack
         .navigationTitle("Grist")
         .safeAreaInset(edge: .bottom) {
-            HStack {
-                Button {
-                    newFolderName = ""
-                    showingNewFolderAlert = true
-                } label: {
-                    Label("Folder", systemImage: "folder.badge.plus")
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
-                }
-                .buttonStyle(.plain)
-                
-                Button {
-                    showingSettingsSheet = true
-                } label: {
-                    Image(systemName: "gear")
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 4)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                
-                Spacer()
-                
-                if isImportingUrl {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Button {
-                        importUrlString = ""
-                        showingImportUrlAlert = true
-                    } label: {
-                        Label("Import", systemImage: "link.badge.plus")
-                            .padding(.vertical, 8)
-                            .padding(.horizontal, 4)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 4)
-            .background(.bar)
-            .alert("Import Failed", isPresented: $showingImportErrorAlert) {
-                Button("OK", role: .cancel) { }
-            } message: {
-                Text(importErrorMessage)
-            }
+            sidebarFooter
+        }
+        .alert("Import Failed", isPresented: $showingImportErrorAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(importErrorMessage)
         }
         .alert("New Folder", isPresented: $showingNewFolderAlert) {
             TextField("Folder Name", text: $newFolderName)
@@ -320,30 +341,249 @@ struct MainView: View {
                 if !name.isEmpty {
                     db.saveFolder(name)
                     loadMeetings()
+                    focusedFolder = name
+                    libraryFilter = .all
                 }
             }
             Button("Cancel", role: .cancel) { }
         }
         .sheet(isPresented: $showingImportUrlAlert) {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Import from URL").font(.headline)
-                Text("Paste a Blog article or web link to instantly summarize it.")
-                TextField("https://youtube.com/...", text: $importUrlString)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(minWidth: 350)
-                HStack {
-                    Spacer()
-                    Button("Cancel") { showingImportUrlAlert = false }
-                    Button("Import") {
-                        showingImportUrlAlert = false
-                        importFromUrl()
+            importURLSheet
+        }
+    }
+
+    private var sidebarFooter: some View {
+        HStack(spacing: 10) {
+            Button {
+                openImportSheet()
+            } label: {
+                Label(isImportingUrl ? "Importing…" : "Import URL", systemImage: "link")
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isImportingUrl)
+
+            if isImportingUrl {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Button {
+                showingSettingsSheet = true
+            } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 34, height: 34)
+                    .background(Color.primary.opacity(0.05))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .help("Settings")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    private func libraryFilterRow(_ filter: LibraryFilter) -> some View {
+        let selected = focusedFolder == nil && libraryFilter == filter
+        let count = count(for: filter)
+        return Button {
+            focusedFolder = nil
+            libraryFilter = filter
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: filter.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 16)
+                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                Text(filter.label)
+                    .font(.callout.weight(selected ? .semibold : .regular))
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+    }
+
+    private func folderNavRow(_ name: String) -> some View {
+        let selected = focusedFolder == name
+        let count = meetings.filter { ($0.groupName ?? "") == name }.count
+        return Button {
+            focusedFolder = name
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                    .frame(width: 16)
+                Text(name)
+                    .font(.callout.weight(selected ? .semibold : .regular))
+                    .lineLimit(1)
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .contextMenu {
+            Button("Show only this folder") { focusedFolder = name }
+            Button("New meeting here") {
+                openCreateSheet(kind: .meeting)
+                newFolderSelection = name
+            }
+            Button("New note here") {
+                openCreateSheet(kind: .note)
+                newFolderSelection = name
+            }
+        }
+    }
+
+    private var importURLSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Import URL")
+                        .font(.title2.weight(.bold))
+                    Text("Article or page → note, optionally filed in a folder.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingImportUrlAlert = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("URL")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("https://…", text: $importUrlString)
+                        .textFieldStyle(.plain)
+                        .padding(12)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("FOLDER")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            folderChip(title: "Unfiled", icon: "tray", selected: importFolderSelection.isEmpty && !importIsCreatingFolder) {
+                                importIsCreatingFolder = false
+                                importFolderSelection = ""
+                                importNewFolderName = ""
+                            }
+                            ForEach(folders.sorted(), id: \.self) { name in
+                                folderChip(title: name, icon: "folder.fill", selected: importFolderSelection == name && !importIsCreatingFolder) {
+                                    importIsCreatingFolder = false
+                                    importFolderSelection = name
+                                    importNewFolderName = ""
+                                }
+                            }
+                            folderChip(title: "New folder", icon: "folder.badge.plus", selected: importIsCreatingFolder) {
+                                importIsCreatingFolder = true
+                                importFolderSelection = ""
+                            }
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
+                    if importIsCreatingFolder {
+                        TextField("Folder name", text: $importNewFolderName)
+                            .textFieldStyle(.plain)
+                            .padding(12)
+                            .background(Color.primary.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .onChange(of: importNewFolderName) { _, val in
+                                importFolderSelection = val.trimmingCharacters(in: .whitespaces)
+                            }
+                    }
                 }
             }
-            .padding()
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 16)
+
+            Divider()
+            HStack {
+                Button("Cancel") { showingImportUrlAlert = false }
+                Spacer()
+                Button {
+                    showingImportUrlAlert = false
+                    importFromUrl()
+                } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(importUrlString.trimmingCharacters(in: .whitespaces).isEmpty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
         }
+        .frame(width: 480, height: 380)
+    }
+
+    private func openImportSheet() {
+        importUrlString = ""
+        importIsCreatingFolder = false
+        importNewFolderName = ""
+        if let f = focusedFolder {
+            importFolderSelection = f
+        } else if let g = selectedMeeting?.groupName, !g.isEmpty {
+            importFolderSelection = g
+        } else {
+            importFolderSelection = ""
+        }
+        showingImportUrlAlert = true
+    }
+
+    private func count(for filter: LibraryFilter) -> Int {
+        switch filter {
+        case .all: return meetings.count
+        case .unfiled: return meetings.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
+        case .meetings: return meetings.filter { !$0.isNoteType }.count
+        case .notes: return meetings.filter { $0.isNoteType }.count
+        }
+    }
+
+    private func dropFolder(fromSection name: String) -> String? {
+        if name == "Today" || name == "Yesterday" || name == "Last 7 Days" || name == "Older" || name == "Items" {
+            return nil
+        }
+        if name.hasPrefix("📁 ") { return String(name.dropFirst(2)) }
+        return name
+    }
+
+    @discardableResult
+    private func moveMeetings(_ ids: [String], toFolder folder: String?) -> Bool {
+        guard let meetingId = ids.first, var m = db.getMeeting(id: meetingId) else { return false }
+        m.groupName = folder
+        db.saveMeeting(m)
+        if let folder { db.saveFolder(folder) }
+        loadMeetings()
+        return true
     }
 
     // MARK: - Detail
@@ -984,39 +1224,72 @@ struct MainView: View {
     // MARK: - Computed Data
 
     var filteredMeetings: [Meeting] {
-        guard !searchText.isEmpty else { return meetings }
-        return meetings.filter {
+        var list = meetings
+
+        // Folder focus wins over library filter
+        if let folder = focusedFolder {
+            list = list.filter { ($0.groupName ?? "") == folder }
+        } else {
+            switch libraryFilter {
+            case .all:
+                break
+            case .unfiled:
+                list = list.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+            case .meetings:
+                list = list.filter { !$0.isNoteType }
+            case .notes:
+                list = list.filter { $0.isNoteType }
+            }
+        }
+
+        guard !searchText.isEmpty else { return list }
+        return list.filter {
             $0.title.localizedCaseInsensitiveContains(searchText) ||
-            $0.transcript.localizedCaseInsensitiveContains(searchText)
+            $0.transcript.localizedCaseInsensitiveContains(searchText) ||
+            $0.manualNotes.localizedCaseInsensitiveContains(searchText) ||
+            $0.summary.localizedCaseInsensitiveContains(searchText)
         }
     }
 
     var groupedMeetings: [MeetingGroup] {
-        var customGroups: [String: [Meeting]] = [:]
-        var timeBased: [Meeting] = []
-        
-        for m in filteredMeetings {
-            if let g = m.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty {
-                customGroups[g, default: []].append(m)
-            } else {
-                timeBased.append(m)
+        // Single folder focus → one flat section by time still helps
+        if focusedFolder != nil {
+            return timeGrouped(filteredMeetings, headerPrefix: nil)
+        }
+
+        switch libraryFilter {
+        case .unfiled, .meetings, .notes:
+            // Don't re-split into every folder; show timeline (and folder name on each row)
+            return timeGrouped(filteredMeetings, headerPrefix: nil)
+        case .all:
+            var customGroups: [String: [Meeting]] = [:]
+            var timeBased: [Meeting] = []
+
+            for m in filteredMeetings {
+                if let g = m.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty {
+                    customGroups[g, default: []].append(m)
+                } else {
+                    timeBased.append(m)
+                }
             }
+
+            var result: [MeetingGroup] = []
+            // Only show folder sections that have items (nav already lists all folders)
+            for name in customGroups.keys.sorted() {
+                let list = customGroups[name] ?? []
+                result.append(MeetingGroup(name: name, meetings: list.sorted { $0.timestamp > $1.timestamp }))
+            }
+            result.append(contentsOf: timeGrouped(timeBased, headerPrefix: nil))
+            return result
         }
-        
-        var result: [MeetingGroup] = []
-        
-        let allFolderNames = Set(folders + customGroups.keys)
-        
-        for name in allFolderNames.sorted() {
-            let list = customGroups[name] ?? []
-            result.append(MeetingGroup(name: "📁 " + name, meetings: list.sorted { $0.timestamp > $1.timestamp }))
-        }
-        
+    }
+
+    private func timeGrouped(_ items: [Meeting], headerPrefix: String?) -> [MeetingGroup] {
         let cal = Calendar.current
         let now = Date()
         var today: [Meeting] = [], yesterday: [Meeting] = [], week: [Meeting] = [], older: [Meeting] = []
 
-        for m in timeBased {
+        for m in items {
             let d = Date(timeIntervalSince1970: m.timestamp)
             if cal.isDateInToday(d) { today.append(m) }
             else if cal.isDateInYesterday(d) { yesterday.append(m) }
@@ -1025,14 +1298,13 @@ struct MainView: View {
         }
 
         func grp(_ name: String, _ list: [Meeting]) -> MeetingGroup? {
-            list.isEmpty ? nil : MeetingGroup(name: name, meetings: list.sorted { $0.timestamp > $1.timestamp })
+            guard !list.isEmpty else { return nil }
+            let title = headerPrefix.map { "\($0) · \(name)" } ?? name
+            return MeetingGroup(name: title, meetings: list.sorted { $0.timestamp > $1.timestamp })
         }
 
-        let timeGroups = [grp("Today", today), grp("Yesterday", yesterday), grp("Last 7 Days", week), grp("Older", older)]
+        return [grp("Today", today), grp("Yesterday", yesterday), grp("Last 7 Days", week), grp("Older", older)]
             .compactMap { $0 }
-        
-        result.append(contentsOf: timeGroups)
-        return result
     }
 
     // MARK: - Data Methods
@@ -1092,6 +1364,19 @@ struct MainView: View {
                 logImport("Successfully fetched content: \(result.title) (length: \(result.content.count))")
                 
                 await MainActor.run {
+                    var folder: String? = nil
+                    if importIsCreatingFolder {
+                        let name = importNewFolderName.trimmingCharacters(in: .whitespaces)
+                        if !name.isEmpty {
+                            folder = name
+                            db.saveFolder(name)
+                        }
+                    } else {
+                        let name = importFolderSelection.trimmingCharacters(in: .whitespaces)
+                        folder = name.isEmpty ? nil : name
+                        if let folder { db.saveFolder(folder) }
+                    }
+
                     var newMeeting = Meeting(
                         id: UUID().uuidString,
                         title: result.title,
@@ -1099,17 +1384,18 @@ struct MainView: View {
                         manualNotes: "",
                         transcript: result.content,
                         summary: "",
-                        template: selectedTemplate
+                        template: "Note",
+                        groupName: folder,
+                        isDeleted: false
                     )
                     newMeeting.transcript = result.content
-                    newMeeting.template = selectedTemplate
-                    
+
                     db.saveMeeting(newMeeting)
                     loadMeetings()
+                    if let folder { focusedFolder = folder }
                     selectedMeeting = meetings.first(where: { $0.id == newMeeting.id })
                     selectedTab = "summary"
-                    
-                    // Auto-enhance
+
                     if autoEnhance {
                         logImport("Triggering runEnhance()")
                         runEnhance()
@@ -1192,6 +1478,7 @@ struct MainView: View {
         selectedTemplate = template
         db.saveMeeting(m)
         loadMeetings()
+        if let folder { focusedFolder = folder }
         selectedMeeting = m
         selectedTab = createKind == .note ? "notes" : "summary"
 
@@ -1331,9 +1618,9 @@ struct SidebarRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: meeting.template == "Note" ? "note.text" : "waveform")
+            Image(systemName: meeting.isNoteType ? "note.text" : "waveform")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(meeting.template == "Note" ? .blue : .secondary)
+                .foregroundStyle(meeting.isNoteType ? .blue : .secondary)
                 .frame(width: 16)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -1341,15 +1628,29 @@ struct SidebarRow: View {
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
                 HStack(spacing: 4) {
+                    Text(meeting.kindLabel)
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(meeting.isNoteType ? .blue : .secondary)
+                    Text("·")
+                        .font(.caption2)
+                        .foregroundStyle(.quaternary)
                     Text(relativeTime)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let folder = meeting.groupName, !folder.isEmpty {
+                        Text("·")
+                            .font(.caption2)
+                            .foregroundStyle(.quaternary)
+                        Text(folder)
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
                     if !meeting.summary.isEmpty {
                         Circle()
                             .fill(.green)
                             .frame(width: 5, height: 5)
-                    }
-                    if !meeting.transcript.isEmpty && meeting.summary.isEmpty {
+                    } else if !meeting.transcript.isEmpty {
                         Circle()
                             .fill(.orange)
                             .frame(width: 5, height: 5)
