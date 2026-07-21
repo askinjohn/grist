@@ -219,6 +219,10 @@ struct MainView: View {
     @State private var organizeReportLines: [String] = []
     @State private var organizeReportTitle = "Auto-organize"
 
+    // Delete folder
+    @State private var folderPendingDelete: String? = nil
+    @State private var showingDeleteFolderConfirm = false
+
     private let db = Database.shared
     private let recorder = AudioRecorder.shared
     private let transcriber = WhisperTranscriber.shared
@@ -468,6 +472,25 @@ struct MainView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
+        .alert(
+            "Delete folder?",
+            isPresented: $showingDeleteFolderConfirm,
+            presenting: folderPendingDelete
+        ) { name in
+            Button("Delete “\(name)”", role: .destructive) {
+                confirmDeleteFolder()
+            }
+            Button("Cancel", role: .cancel) {
+                folderPendingDelete = nil
+            }
+        } message: { name in
+            let count = meetings.filter { ($0.groupName ?? "") == name }.count
+            if count == 0 {
+                Text("“\(name)” is empty. This cannot be undone.")
+            } else {
+                Text("“\(name)” has \(count) item\(count == 1 ? "" : "s"). They will move to Unfiled. The folder will be removed.")
+            }
+        }
         .sheet(isPresented: $showingImportUrlAlert) {
             importURLSheet
         }
@@ -632,7 +655,28 @@ struct MainView: View {
                 focusedFolder = name
                 openCreateSheet(kind: .note)
             }
+            Divider()
+            Button("Delete Folder…", role: .destructive) {
+                folderPendingDelete = name
+                showingDeleteFolderConfirm = true
+            }
         }
+    }
+
+    private func confirmDeleteFolder() {
+        guard let name = folderPendingDelete else { return }
+        let count = meetings.filter { ($0.groupName ?? "") == name }.count
+        db.deleteFolder(name)
+        if focusedFolder == name {
+            focusedFolder = nil
+            libraryFilter = .unfiled
+        }
+        // Refresh in-memory group names (deleteFolder already cleared DB)
+        loadMeetings()
+        folderPendingDelete = nil
+        statusMessage = count > 0
+            ? "Deleted “\(name)” — \(count) item\(count == 1 ? "" : "s") moved to Unfiled"
+            : "Deleted folder “\(name)”"
     }
 
     private var importURLSheet: some View {

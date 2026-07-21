@@ -220,7 +220,17 @@ class Database {
         sqlite3_finalize(statement)
     }
     
+    /// Remove folder row and unfile any meetings that were in it.
     func deleteFolder(_ name: String) {
+        // Unfile meetings first so nothing points at a deleted folder name
+        let unfile = "UPDATE meetings SET group_name = '' WHERE group_name = ?;"
+        var unfileStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, unfile, -1, &unfileStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(unfileStmt, 1, (name as NSString).utf8String, -1, nil)
+            sqlite3_step(unfileStmt)
+        }
+        sqlite3_finalize(unfileStmt)
+
         let query = "DELETE FROM folders WHERE name = ?"
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {
