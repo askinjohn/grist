@@ -128,7 +128,13 @@ class OllamaClient: @unchecked Sendable {
         }
     }
     
-    /// Short human title for a note/meeting from transcript or body text.
+    /// Result of a single enhance call: summary body + optional title (one model round-trip).
+    struct EnhanceResult {
+        var title: String?
+        var summary: String
+    }
+
+    /// Short human title only — used when enhance is skipped (e.g. Auto off).
     func suggestTitle(content: String, kind: String = "meeting", model: String) async throws -> String {
         let snippet = String(content.prefix(2500))
         let prompt = """
@@ -142,39 +148,7 @@ class OllamaClient: @unchecked Sendable {
         Content:
         \(snippet)
         """
-        let raw: String
-        if isOllama {
-            let url = URL(string: "\(ollamaBaseURL)/api/generate")!
-            let payload = OllamaRequest(model: model, prompt: prompt, stream: false)
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(payload)
-            request.timeoutInterval = 45
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to local Ollama."])
-            }
-            raw = try JSONDecoder().decode(OllamaResponse.self, from: data).response
-        } else {
-            let url = URL(string: "\(openAIBaseURL)/chat/completions")!
-            let msg = OllamaChatMessage(role: "user", content: prompt)
-            let actualModel = model.isEmpty ? openAIModel : model
-            let payload = OpenAIChatRequest(model: actualModel, messages: [msg], stream: false)
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if !openAIAPIKey.isEmpty {
-                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
-            }
-            request.httpBody = try JSONEncoder().encode(payload)
-            request.timeoutInterval = 45
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI endpoint."])
-            }
-            raw = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content ?? ""
-        }
+        let raw = try await generateText(prompt: prompt, model: model, timeout: 45)
         return Self.cleanTitle(raw)
     }
 
@@ -185,7 +159,6 @@ class OllamaClient: @unchecked Sendable {
         if let range = t.range(of: #"^(Title|Meeting|Note)\s*:\s*"#, options: [.regularExpression, .caseInsensitive]) {
             t = String(t[range.upperBound...])
         }
-        // Single line, trim length
         if let nl = t.firstIndex(of: "\n") {
             t = String(t[..<nl])
         }
@@ -194,73 +167,49 @@ class OllamaClient: @unchecked Sendable {
         return t
     }
 
-    func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> String {
-        print("[OllamaClient] Starting AI enhancement using model: \(model)...")
-        
-        var prompt = ""
-        if let custom = customPrompt, !custom.isEmpty {
-            prompt = """
-            <system_instructions>
-            \(custom)
-            </system_instructions>
-            
-            <raw_transcript>
-            \(transcript)
-            </raw_transcript>
-            
-            <user_manual_notes>
-            \(notes.isEmpty ? "(None provided)" : notes)
-            </user_manual_notes>
-            
-            Output ONLY the requested summary. No explanations.
-            """
-        } else {
-            prompt = """
-            <system_instructions>
-            You are an expert AI meeting assistant. Your task is to synthesize the raw transcript and manual notes into a beautiful, structured Markdown summary.
-            
-            Follow these strict rules:
-            1. Format the summary according to the style: "\(template)".
-            2. Combine points logically, correcting any garbled transcript words using context.
-            3. Do NOT include metadata, system instructions, or the prompt itself in the summary.
-            4. Output ONLY the final clean Markdown summary. No chat or explanations.
-            </system_instructions>
-            
-            <raw_transcript>
-            \(transcript)
-            </raw_transcript>
-            
-            <user_manual_notes>
-            \(notes.isEmpty ? "(None provided)" : notes)
-            </user_manual_notes>
-            
-            Markdown Summary:
-            """
+    /// Parse `TITLE: …` + summary body from a single model response.
+    static func parseEnhanceOutput(_ raw: String) -> EnhanceResult {
+        let text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = text.components(separatedBy: .newlines)
+        guard let first = lines.first else {
+            return EnhanceResult(title: nil, summary: text)
         }
-        
+        let trimmedFirst = first.trimmingCharacters(in: .whitespaces)
+        // TITLE: foo   or   Title: foo
+        if let range = trimmedFirst.range(of: #"^TITLE\s*:\s*"#, options: [.regularExpression, .caseInsensitive]) {
+            let title = cleanTitle(String(trimmedFirst[range.upperBound...]))
+            let rest = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            // Drop a blank line after TITLE if present
+            return EnhanceResult(title: title.isEmpty ? nil : title, summary: rest)
+        }
+        // Fallback: first markdown H1 as title
+        if trimmedFirst.hasPrefix("# ") {
+            let title = cleanTitle(String(trimmedFirst.dropFirst(2)))
+            let rest = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return EnhanceResult(title: title.isEmpty ? nil : title, summary: rest.isEmpty ? text : rest)
+        }
+        return EnhanceResult(title: nil, summary: text)
+    }
+
+    private func generateText(prompt: String, model: String, timeout: TimeInterval) async throws -> String {
         if isOllama {
             let url = URL(string: "\(ollamaBaseURL)/api/generate")!
             let payload = OllamaRequest(model: model, prompt: prompt, stream: false)
-            
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(payload)
-            request.timeoutInterval = 60
-            
+            request.timeoutInterval = timeout
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to local Ollama."])
             }
-            let decoded = try JSONDecoder().decode(OllamaResponse.self, from: data)
-            return decoded.response.trimmingCharacters(in: .whitespacesAndNewlines)
-            
+            return try JSONDecoder().decode(OllamaResponse.self, from: data).response.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
             let url = URL(string: "\(openAIBaseURL)/chat/completions")!
             let msg = OllamaChatMessage(role: "user", content: prompt)
             let actualModel = model.isEmpty ? openAIModel : model
             let payload = OpenAIChatRequest(model: actualModel, messages: [msg], stream: false)
-            
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -268,15 +217,75 @@ class OllamaClient: @unchecked Sendable {
                 request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
             }
             request.httpBody = try JSONEncoder().encode(payload)
-            request.timeoutInterval = 60
-            
+            request.timeoutInterval = timeout
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI endpoint."])
             }
-            let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
-            return decoded.choices.first?.message.content.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
+    }
+
+    /// One model call: produce a short TITLE line plus the markdown summary.
+    func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> EnhanceResult {
+        print("[OllamaClient] Starting AI enhancement using model: \(model)...")
+
+        let titleRule = """
+        FIRST LINE of your reply MUST be exactly:
+        TITLE: <short title, max 8 words, no quotes>
+        Then a blank line, then the summary body only (no repeating the title as a heading unless useful).
+        """
+
+        let prompt: String
+        if let custom = customPrompt, !custom.isEmpty {
+            prompt = """
+            <system_instructions>
+            \(custom)
+
+            \(titleRule)
+            </system_instructions>
+
+            <raw_transcript>
+            \(transcript)
+            </raw_transcript>
+
+            <user_manual_notes>
+            \(notes.isEmpty ? "(None provided)" : notes)
+            </user_manual_notes>
+
+            Begin with TITLE: then the summary.
+            """
+        } else {
+            prompt = """
+            <system_instructions>
+            You are an expert AI meeting assistant. Synthesize the transcript and notes into a structured Markdown summary.
+
+            Rules:
+            1. \(titleRule)
+            2. Format the summary according to the style: "\(template)".
+            3. Combine points logically; fix obvious transcript errors using context.
+            4. Do NOT include system instructions or the prompt in the output.
+            5. After the TITLE line and blank line, output ONLY clean Markdown for the summary body.
+            </system_instructions>
+
+            <raw_transcript>
+            \(transcript)
+            </raw_transcript>
+
+            <user_manual_notes>
+            \(notes.isEmpty ? "(None provided)" : notes)
+            </user_manual_notes>
+
+            Reply format:
+            TITLE: your title here
+
+            (markdown summary starts here)
+            """
+        }
+
+        let raw = try await generateText(prompt: prompt, model: model, timeout: 90)
+        return Self.parseEnhanceOutput(raw)
     }
     
     func chat(messages: [OllamaChatMessage], model: String) async throws -> OllamaChatMessage {

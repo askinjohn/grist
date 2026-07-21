@@ -1671,30 +1671,22 @@ struct MainView: View {
         statusMessage = "Enhancing…"
         let templateName = m.template
         let customPrompt = customTemplates.first(where: { $0.name == templateName })?.prompt
-        let shouldTitle = m.isPlaceholderTitle
-        let kind = m.kindLabel.lowercased()
-        let contentForTitle = m.transcript
+        let applyTitle = m.isPlaceholderTitle
 
         Task {
             do {
-                async let enhancedTask = ollama.enhance(
+                // Single model call: TITLE: … + markdown summary (no second round-trip)
+                let result = try await ollama.enhance(
                     transcript: m.transcript,
                     notes: m.manualNotes,
                     template: templateName,
                     customPrompt: customPrompt,
                     model: model
                 )
-                async let titleTask: String? = {
-                    guard shouldTitle else { return nil }
-                    return try? await ollama.suggestTitle(content: contentForTitle, kind: kind, model: model)
-                }()
-
-                let enhanced = try await enhancedTask
-                let title = await titleTask
-
                 await MainActor.run {
-                    selectedMeeting?.summary = enhanced
-                    if let title, !title.isEmpty, selectedMeeting?.isPlaceholderTitle == true {
+                    selectedMeeting?.summary = result.summary
+                    if applyTitle, let title = result.title, !title.isEmpty,
+                       selectedMeeting?.isPlaceholderTitle == true {
                         selectedMeeting?.title = title
                     }
                     saveMeeting()
