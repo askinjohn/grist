@@ -4,7 +4,7 @@ import WebKit
 // MARK: - Markdown → HTML Converter (No external deps)
 
 struct MarkdownRenderer {
-    static func toHTML(_ markdown: String) -> String {
+    static func toHTML(_ markdown: String, bodyFontSize: CGFloat = 14, contentPadding: CGFloat = 24) -> String {
         let lines = markdown.components(separatedBy: "\n")
         var html = ""
         var inList = false
@@ -70,7 +70,7 @@ struct MarkdownRenderer {
         if inList { html += "</ul>\n" }
         if inCodeBlock { html += "</code></pre>\n" }
 
-        return wrapHTML(html)
+        return wrapHTML(html, bodyFontSize: bodyFontSize, contentPadding: contentPadding)
     }
 
     // Process inline styles: **bold**, *italic*, `code`, [link](url)
@@ -107,8 +107,10 @@ struct MarkdownRenderer {
         return regex.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: replacement)
     }
 
-    private static func wrapHTML(_ body: String) -> String {
-        """
+    private static func wrapHTML(_ body: String, bodyFontSize: CGFloat = 14, contentPadding: CGFloat = 24) -> String {
+        let fontSize = Int(bodyFontSize.rounded())
+        let pad = Int(contentPadding.rounded())
+        return """
         <!DOCTYPE html>
         <html>
         <head>
@@ -143,10 +145,14 @@ struct MarkdownRenderer {
             background: var(--bg);
             color: var(--text);
             font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
-            font-size: 14px;
-            line-height: 1.65;
-            padding: 20px 24px 40px;
+            font-size: \(fontSize)px;
+            line-height: 1.7;
+            padding: 16px \(pad)px 48px;
+            max-width: none;
+            width: 100%;
           }
+          /* Prefer paragraphs with spacing for long transcripts */
+          p { margin: 0 0 1em 0; max-width: none; }
           h1, h2, h3, h4 {
             color: var(--text);
             font-family: -apple-system, 'SF Pro Display', sans-serif;
@@ -158,7 +164,6 @@ struct MarkdownRenderer {
           h2 { font-size: 17px; }
           h3 { font-size: 15px; color: var(--subtext); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
           h4 { font-size: 14px; }
-          p  { margin: 6px 0; color: var(--text); }
           ul { padding-left: 20px; margin: 6px 0; }
           li { margin: 3px 0; }
           li::marker { color: var(--accent); }
@@ -166,7 +171,7 @@ struct MarkdownRenderer {
             background: var(--code-bg);
             color: var(--code-text);
             font-family: 'SF Mono', Menlo, Monaco, monospace;
-            font-size: 12.5px;
+            font-size: 0.9em;
             padding: 2px 5px;
             border-radius: 4px;
           }
@@ -182,7 +187,7 @@ struct MarkdownRenderer {
             background: none;
             color: var(--text);
             padding: 0;
-            font-size: 12.5px;
+            font-size: 0.9em;
           }
           blockquote {
             border-left: 3px solid var(--accent);
@@ -211,6 +216,10 @@ struct MarkdownRenderer {
 
 struct MarkdownView: NSViewRepresentable {
     let markdown: String
+    /// Body font size in CSS px (notes can use larger type).
+    var bodyFontSize: CGFloat = 14
+    /// Horizontal padding inside the web document.
+    var contentPadding: CGFloat = 24
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -221,7 +230,7 @@ struct MarkdownView: NSViewRepresentable {
     }
 
     func updateNSView(_ wv: WKWebView, context: Context) {
-        let html = MarkdownRenderer.toHTML(markdown)
+        let html = MarkdownRenderer.toHTML(markdown, bodyFontSize: bodyFontSize, contentPadding: contentPadding)
         wv.loadHTMLString(html, baseURL: nil)
     }
 }

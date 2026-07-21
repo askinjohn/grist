@@ -771,42 +771,46 @@ struct MainView: View {
         .background(Color(NSColor.textBackgroundColor))
     }
 
-    /// Clean reading layout (default for long YouTube / imports).
+    /// Full-width reading layout — no half-page column, no nested half-height webview.
     @ViewBuilder
     var noteReadingView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
                 Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
-                    .font(.system(size: 30, weight: .bold, design: .serif))
+                    .font(.system(size: 28, weight: .bold, design: .default))
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
 
                 if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
                     noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
                 }
-
-                if let body = selectedMeeting?.manualNotes, !body.isEmpty {
-                    let display = stripSourceHeader(from: body)
-                    MarkdownView(markdown: display)
-                        .frame(minHeight: 280)
-                        .textSelection(.enabled)
-                } else {
-                    Text("Nothing to preview yet — switch to edit and write.")
-                        .foregroundStyle(.secondary)
-                }
             }
-            .padding(.horizontal, 56)
-            .padding(.vertical, 36)
-            .frame(maxWidth: 680)
-            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 28)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Divider()
+
+            if let body = selectedMeeting?.manualNotes, !body.isEmpty {
+                let display = stripSourceHeader(from: body)
+                // One scroller only: WKWebView fills remaining space (full width)
+                MarkdownView(markdown: display, bodyFontSize: 16, contentPadding: 28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Text("Nothing to preview yet — switch to edit and write.")
+                    .foregroundStyle(.secondary)
+                    .padding(28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(NSColor.textBackgroundColor))
     }
 
     @ViewBuilder
     var noteEditingView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Multi-line title (no truncation like the window toolbar)
             TextField("Note title", text: Binding(
                 get: { selectedMeeting?.title ?? "" },
                 set: { selectedMeeting?.title = $0; saveMeeting() }
@@ -814,34 +818,30 @@ struct MainView: View {
             .font(.system(size: 26, weight: .bold, design: .default))
             .textFieldStyle(.plain)
             .lineLimit(1...4)
-            .padding(.horizontal, 40)
-            .padding(.top, 24)
+            .padding(.horizontal, 28)
+            .padding(.top, 20)
             .padding(.bottom, 12)
-            .frame(maxWidth: 720)
             .frame(maxWidth: .infinity, alignment: .leading)
 
             if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
                 noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
-                    .padding(.horizontal, 40)
+                    .padding(.horizontal, 28)
                     .padding(.bottom, 12)
-                    .frame(maxWidth: 720)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Rectangle()
                 .fill(Color.primary.opacity(0.06))
                 .frame(height: 1)
-                .padding(.horizontal, 40)
+                .padding(.horizontal, 28)
                 .padding(.bottom, 4)
-                .frame(maxWidth: 720)
-                .frame(maxWidth: .infinity, alignment: .leading)
 
             ZStack(alignment: .topLeading) {
                 if (selectedMeeting?.manualNotes ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text("Start writing…\n\nSelect text and use the toolbar for **bold**, lists, and more.")
                         .font(.system(size: 16))
                         .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 40)
+                        .padding(.horizontal, 28)
                         .padding(.top, 14)
                         .allowsHitTesting(false)
                 }
@@ -854,9 +854,8 @@ struct MainView: View {
                     pendingFormat: $noteFormatCommand,
                     fontSize: 16
                 )
-                .padding(.horizontal, 32)
-                .padding(.bottom, 20)
-                .frame(maxWidth: 720)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -923,6 +922,7 @@ struct MainView: View {
             if t.isEmpty { lines.removeFirst(); continue }
             if t.hasPrefix("[Open on YouTube]") || t.hasPrefix("[Source]") { lines.removeFirst(); continue }
             if t.lowercased().hasPrefix("source:") { lines.removeFirst(); continue }
+            if t.lowercased().hasPrefix("captions:") { lines.removeFirst(); continue }
             break
         }
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
