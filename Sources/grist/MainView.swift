@@ -213,6 +213,12 @@ struct MainView: View {
     @State private var noteFormatCommand: MarkdownFormatCommand? = nil
     @State private var noteShowPreview = false
 
+    // Auto-organize
+    @State private var isOrganizing = false
+    @State private var showingOrganizeReport = false
+    @State private var organizeReportLines: [String] = []
+    @State private var organizeReportTitle = "Auto-organize"
+
     private let db = Database.shared
     private let recorder = AudioRecorder.shared
     private let transcriber = WhisperTranscriber.shared
@@ -340,6 +346,46 @@ struct MainView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
+            .padding(.bottom, 6)
+
+            // Single-button auto-organize for unfiled / untitled items
+            Button {
+                runAutoOrganize()
+            } label: {
+                HStack(spacing: 8) {
+                    if isOrganizing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles.rectangle.stack")
+                    }
+                    Text(isOrganizing ? "Organizing…" : "Auto-organize")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    let n = itemsNeedingOrganize.count
+                    if n > 0 && !isOrganizing {
+                        Text("\(n)")
+                            .font(.caption.monospacedDigit().weight(.bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Color.purple.opacity(0.2))
+                            .clipShape(Capsule())
+                    }
+                }
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.purple.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.purple.opacity(0.25), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isOrganizing || itemsNeedingOrganize.isEmpty)
+            .help("Name untitled items and file unfiled ones, then show a summary")
+            .padding(.horizontal, 12)
             .padding(.bottom, 8)
 
             List(selection: $selectedMeeting) {
@@ -425,6 +471,69 @@ struct MainView: View {
         .sheet(isPresented: $showingImportUrlAlert) {
             importURLSheet
         }
+        .sheet(isPresented: $showingOrganizeReport) {
+            organizeReportSheet
+        }
+    }
+
+    private var organizeReportSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(organizeReportTitle)
+                        .font(.title2.weight(.bold))
+                    Text("Untitled items got names; unfiled items got folders when the AI found a fit.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingOrganizeReport = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            Divider()
+
+            if organizeReportLines.isEmpty {
+                Text("Nothing needed organizing.")
+                    .foregroundStyle(.secondary)
+                    .padding(24)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(organizeReportLines.enumerated()), id: \.offset) { _, line in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text(line)
+                                    .font(.callout)
+                                    .textSelection(.enabled)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .padding(24)
+                }
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { showingOrganizeReport = false }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 480, height: 420)
     }
 
     private var sidebarFooter: some View {
@@ -1913,6 +2022,107 @@ struct MainView: View {
                 await MainActor.run {
                     statusMessage = "Error: \(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+    /// Items missing a real title and/or a folder, with enough content to organize.
+    var itemsNeedingOrganize: [Meeting] {
+        meetings.filter { m in
+            let unfiled = (m.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            let untitled = m.isPlaceholderTitle
+            guard unfiled || untitled else { return false }
+            let content = organizeContent(for: m)
+            return !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !content.hasPrefix("[Error")
+        }
+    }
+
+    private func organizeContent(for m: Meeting) -> String {
+        if !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") { return m.transcript }
+        if !m.manualNotes.isEmpty { return m.manualNotes }
+        return m.summary
+    }
+
+    /// Single-button: fix missing titles + folders, then show a report popup.
+    func runAutoOrganize() {
+        let targets = itemsNeedingOrganize
+        guard !targets.isEmpty else {
+            organizeReportTitle = "Auto-organize"
+            organizeReportLines = ["Nothing to do — every item already has a name and folder (or no content yet)."]
+            showingOrganizeReport = true
+            return
+        }
+
+        let model = selectedModel == "custom" ? customModelName : selectedModel
+        guard !model.isEmpty else {
+            statusMessage = "Pick an AI model first"
+            return
+        }
+
+        isOrganizing = true
+        statusMessage = "Organizing \(targets.count)…"
+        let folderSnapshot = folders
+
+        Task {
+            var lines: [String] = []
+            var success = 0
+            var failed = 0
+
+            for m in targets {
+                let needsTitle = m.isPlaceholderTitle
+                let needsFolder = (m.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                let content = organizeContent(for: m)
+                let oldTitle = m.title
+
+                do {
+                    let result = try await ollama.organizeMetadata(
+                        content: content,
+                        kind: m.kindLabel.lowercased(),
+                        existingFolders: folderSnapshot,
+                        needsTitle: needsTitle,
+                        needsFolder: needsFolder,
+                        model: model
+                    )
+
+                    var updated = m
+                    var parts: [String] = []
+
+                    if needsTitle, let t = result.title, !t.isEmpty {
+                        updated.title = t
+                        parts.append("titled “\(t)”")
+                    }
+                    if needsFolder, let f = result.folder, !f.isEmpty {
+                        updated.groupName = f
+                        await MainActor.run { db.saveFolder(f) }
+                        parts.append("filed in “\(f)”")
+                    }
+
+                    if parts.isEmpty {
+                        lines.append("• \(oldTitle) — no change (AI returned KEEP/NONE)")
+                    } else {
+                        await MainActor.run {
+                            db.saveMeeting(updated)
+                        }
+                        success += 1
+                        let label = needsTitle ? oldTitle : updated.title
+                        lines.append("• \(label) → " + parts.joined(separator: ", "))
+                    }
+                } catch {
+                    failed += 1
+                    lines.append("• \(oldTitle) — failed: \(error.localizedDescription)")
+                }
+            }
+
+            await MainActor.run {
+                loadMeetings()
+                isOrganizing = false
+                statusMessage = "Organized \(success)"
+                organizeReportTitle = failed == 0
+                    ? "Organized \(success) item\(success == 1 ? "" : "s")"
+                    : "Organized \(success), \(failed) failed"
+                organizeReportLines = lines
+                showingOrganizeReport = true
             }
         }
     }
