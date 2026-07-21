@@ -4083,6 +4083,57 @@ struct ChatView: View {
         return blob
     }
 
+    /// Locked list of real titles — small models must copy these exactly.
+    private func authoritativeTitleList(_ meetings: [Meeting], header: String) -> String {
+        var lines = [
+            "=== \(header) ===",
+            "FORBIDDEN: inventing note titles, folders, or topics not listed here.",
+            "REQUIRED: when listing notes, copy titles CHARACTER-FOR-CHARACTER from this list.",
+            "",
+        ]
+        let sorted = meetings.sorted { $0.timestamp > $1.timestamp }
+        if sorted.isEmpty {
+            lines.append("(no matching notes)")
+        } else {
+            for (i, m) in sorted.enumerated() {
+                let folder = m.groupName.map { " | folder=\($0)" } ?? " | folder=(none)"
+                lines.append("\(i + 1). TITLE=\"\(m.title)\" | type=\(m.kindLabel)\(folder)")
+            }
+        }
+        lines.append("=== END TITLE LIST ===")
+        return lines.joined(separator: "\n")
+    }
+
+    /// If the question names a real folder, return its items (case-insensitive, space-insensitive).
+    private func meetingsMatchingFolderQuery(_ query: String, in all: [Meeting]) -> [Meeting]? {
+        let folders = Set(all.compactMap { $0.groupName }.filter { !$0.isEmpty })
+        guard !folders.isEmpty else { return nil }
+        let q = query.lowercased()
+        let qCompact = q.replacingOccurrences(of: " ", with: "")
+
+        var best: String?
+        var bestScore = 0
+        for f in folders {
+            let fl = f.lowercased()
+            let fCompact = fl.replacingOccurrences(of: " ", with: "")
+            var score = 0
+            if q.contains(fl) { score += 10 }
+            if qCompact.contains(fCompact) { score += 10 }
+            // "financial planning" vs FinancialPlanning
+            let parts = fl.replacingOccurrences(of: "planning", with: " planning")
+                .components(separatedBy: CharacterSet.alphanumerics.inverted)
+                .filter { $0.count >= 3 }
+            for p in parts where q.contains(p) { score += 3 }
+            if score > bestScore {
+                bestScore = score
+                best = f
+            }
+        }
+        guard let folder = best, bestScore >= 6 else { return nil }
+        let items = all.filter { ($0.groupName ?? "") == folder }
+        return items.isEmpty ? nil : items
+    }
+
     func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespaces)
         guard !text.isEmpty else { return }
@@ -4094,8 +4145,8 @@ struct ChatView: View {
         chatHistory.append(userMsg)
         Database.shared.saveChatMessage(userMsg)
 
-        // Keep last few turns only so old Sonam threads don't dominate weak models
-        let historySnapshot = Array(chatHistory.suffix(12))
+        // Short history for weak models (listing questions shouldn't inherit hallucinations)
+        let historySnapshot = Array(chatHistory.suffix(6))
 
         Task {
             do {
@@ -4103,6 +4154,7 @@ struct ChatView: View {
                 let meetingsInContext = contextMeetings()
 
                 var documentBlock = ""
+                var titleInventory = ""
 
                 switch scope {
                 case .selection(_, let title, let selText):
@@ -4113,95 +4165,135 @@ struct ChatView: View {
 
                     \(body.isEmpty ? "(empty selection)" : body)
                     """
+                    titleInventory = "SELECTION source title: \"\(title)\""
 
                 case .item(let meeting):
                     let m = meetingsInContext.first ?? meeting
+                    titleInventory = authoritativeTitleList([m], header: "AUTHORITATIVE TITLE (this item only)")
                     let blob = contextBlob(for: m, limit: itemContextLimit)
                     if blob.isEmpty {
-                        documentBlock = "(No summary, notes, or transcript saved on this item yet.)"
+                        documentBlock = titleInventory + "\n\n(No summary, notes, or transcript saved on this item yet.)"
                     } else {
                         documentBlock = """
-                        === OPEN ITEM: \(m.kindLabel) — \(m.title) ===
+                        \(titleInventory)
+
+                        === OPEN ITEM CONTENT: \(m.kindLabel) — \(m.title) ===
                         \(blob)
                         """
                     }
 
                 case .global:
-                    // 1) Catalog always
-                    documentBlock += RAGEngine.shared.libraryCatalog(meetingsInContext)
-                    documentBlock += "\n\n"
-
-                    // 2) Keyword-ranked FULL items FIRST (folder/title beats huge unrelated articles)
-                    var ranked = RAGEngine.shared.rankMeetingsByKeywords(meetingsInContext, query: text, topK: 8)
-                    if ranked.isEmpty {
-                        ranked = Array(meetingsInContext.sorted { $0.timestamp > $1.timestamp }.prefix(5))
-                    }
-
-                    documentBlock += "=== KEYWORD / FOLDER MATCHES (priority) ===\n"
-                    for m in ranked {
-                        let blob = contextBlob(for: m, limit: keywordHitLimit)
-                        if blob.isEmpty { continue }
-                        let folder = m.groupName.map { " [\($0)]" } ?? ""
-                        documentBlock += "=== \(m.kindLabel): \(m.title)\(folder) ===\n\(blob)\n\n"
-                    }
-
-                    // 3) Diversified semantic chunks (max 3 per meeting)
-                    let meetingIds = meetingsInContext.map(\.id)
-                    var topChunks: [TranscriptChunk] = []
-                    var ragError: String?
-                    do {
-                        topChunks = try await RAGEngine.shared.search(
-                            query: text,
-                            meetingIds: meetingIds,
-                            topK: 15,
-                            maxPerMeeting: 3
+                    // Prefer exact folder membership when the question names a folder
+                    if let folderItems = meetingsMatchingFolderQuery(text, in: meetingsInContext) {
+                        let folderName = folderItems.first?.groupName ?? "folder"
+                        titleInventory = authoritativeTitleList(
+                            folderItems,
+                            header: "AUTHORITATIVE TITLES IN FOLDER \"\(folderName)\" (complete list)"
                         )
-                    } catch {
-                        ragError = error.localizedDescription
-                        print("[Chat] RAG search failed: \(error)")
-                    }
-
-                    if !topChunks.isEmpty {
-                        documentBlock += "=== SEMANTIC EXCERPTS ===\n"
-                        for chunk in topChunks {
-                            let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
-                            documentBlock += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
+                        documentBlock = titleInventory + "\n\n"
+                        documentBlock += "=== FULL CONTENT FOR THESE NOTES ONLY ===\n"
+                        for m in folderItems.sorted(by: { $0.timestamp > $1.timestamp }) {
+                            let blob = contextBlob(for: m, limit: keywordHitLimit)
+                            documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob.isEmpty ? "(empty body)" : blob)\n"
                         }
-                    } else if let ragError {
-                        documentBlock += "(Vector search unavailable: \(ragError). Keyword matches above still apply. ollama pull nomic-embed-text)\n\n"
-                    } else if Database.shared.chunkCount() == 0 {
-                        documentBlock += "(Search index empty — keyword match only. Settings → Rebuild search index.)\n\n"
+                    } else {
+                        // Library-wide: full catalog + keyword priority + RAG
+                        titleInventory = authoritativeTitleList(
+                            meetingsInContext,
+                            header: "AUTHORITATIVE TITLES — ENTIRE LIBRARY (complete list)"
+                        )
+                        documentBlock = titleInventory + "\n\n"
+                        documentBlock += RAGEngine.shared.libraryCatalog(meetingsInContext)
+                        documentBlock += "\n\n"
+
+                        var ranked = RAGEngine.shared.rankMeetingsByKeywords(meetingsInContext, query: text, topK: 8)
+                        if ranked.isEmpty {
+                            ranked = Array(meetingsInContext.sorted { $0.timestamp > $1.timestamp }.prefix(5))
+                        }
+
+                        // Repeat short list of ranked titles so model can't miss them
+                        documentBlock += authoritativeTitleList(
+                            ranked,
+                            header: "AUTHORITATIVE TITLES — BEST MATCHES FOR THIS QUESTION"
+                        )
+                        documentBlock += "\n\n=== CONTENT FOR BEST MATCHES ===\n"
+                        for m in ranked {
+                            let blob = contextBlob(for: m, limit: keywordHitLimit)
+                            if blob.isEmpty { continue }
+                            documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
+                        }
+
+                        let meetingIds = meetingsInContext.map(\.id)
+                        var topChunks: [TranscriptChunk] = []
+                        do {
+                            topChunks = try await RAGEngine.shared.search(
+                                query: text,
+                                meetingIds: meetingIds,
+                                topK: 12,
+                                maxPerMeeting: 2
+                            )
+                        } catch {
+                            print("[Chat] RAG search failed: \(error)")
+                            documentBlock += "\n(Vector search unavailable: \(error.localizedDescription))\n"
+                        }
+
+                        if !topChunks.isEmpty {
+                            documentBlock += "\n=== SEMANTIC EXCERPTS (titles must still match AUTHORITATIVE list) ===\n"
+                            for chunk in topChunks {
+                                let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
+                                documentBlock += "[TITLE=\"\(parentTitle)\"]:\n\(chunk.text)\n\n"
+                            }
+                        }
                     }
                 }
 
                 let systemPrompt = """
-                You are Grist’s knowledge assistant for a personal notes/meetings library.
+                You are Grist’s library assistant. You answer ONLY from DOCUMENT.
 
-                Rules:
-                1. Answer from the DOCUMENT block and recent chat turns only.
-                2. NEVER ask the user to paste content — it is already loaded when available.
-                3. Notes, AI summaries, articles, YouTube captions, meetings, and folder summaries are all valid sources (not only “discussions” or “recordings”).
-                4. For library-wide questions (themes, popular topics, financial planning, etc.), use KEYWORD / FOLDER MATCHES first; cite note titles and folders.
-                5. If DOCUMENT lists relevant items, summarize them — do not claim they are missing.
-                6. For SELECTION chat, use only the selected text.
-                7. Be concrete; prefer AI Summary when present, then notes/transcript.
-                8. Do not invent external financial advice when the library has notes on the topic.
+                HARD RULES (never break):
+                1. NEVER invent note titles, folder names, or topics. If a title is not in AUTHORITATIVE TITLE LIST, do not write it.
+                2. When listing notes, copy each TITLE= value exactly (same spelling, punctuation, capitalization).
+                3. Summaries must come from that note’s AI Summary / Notes / Transcript in DOCUMENT.
+                4. If the user asks for titles in a folder, list ONLY the AUTHORITATIVE list for that folder — nothing else.
+                5. Never invent generic finance titles like "Retirement Portfolio Optimization" or "Estate Planning Basics" unless those exact strings appear as TITLE=.
+                6. Prefer AI Summary text. Be concrete. Cite titles in quotes.
+                7. Do not ask the user to paste content.
                 """
+
+                // Document + inventory + question as a single user turn (stronger for small models).
+                // Skip prior history for list/title questions so old hallucinations don't stick.
+                let listingish =
+                    text.lowercased().contains("title")
+                    || text.lowercased().contains("list")
+                    || text.lowercased().contains("folder")
 
                 var apiMessages: [OllamaClient.OllamaChatMessage] = [
                     OllamaClient.OllamaChatMessage(role: "system", content: systemPrompt),
+                ]
+                if !listingish {
+                    for msg in historySnapshot.dropLast() {
+                        apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
+                    }
+                }
+                apiMessages.append(
                     OllamaClient.OllamaChatMessage(
                         role: "user",
-                        content: "DOCUMENT (source material — use this to answer):\n\n\(documentBlock)"
-                    ),
-                    OllamaClient.OllamaChatMessage(
-                        role: "assistant",
-                        content: "I have the document loaded (including any folder matches). I will answer only from it."
-                    ),
-                ]
-                for msg in historySnapshot {
-                    apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
-                }
+                        content: """
+                        DOCUMENT:
+
+                        \(documentBlock)
+
+                        ---
+                        Reminder of authoritative titles:
+                        \(titleInventory)
+
+                        USER QUESTION:
+                        \(text)
+
+                        Answer using only DOCUMENT. Copy titles exactly from AUTHORITATIVE TITLE LIST. Do not invent titles.
+                        """
+                    )
+                )
 
                 let response = try await OllamaClient.shared.chat(messages: apiMessages, model: model)
 
