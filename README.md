@@ -1,10 +1,8 @@
 # Grist
 
-**Privacy-first AI meeting assistant for macOS.**
+**Privacy-first AI notes & meeting assistant for macOS.**
 
-Grist records your microphone **and** system audio (Zoom, Meet, Teams, YouTube, …), transcribes locally with [whisper.cpp](https://github.com/ggml-org/whisper.cpp), and generates summaries / action items with a local or remote LLM. Nothing is sent to a cloud unless **you** choose an OpenAI-compatible API.
-
-It also ships an **MCP server** so Claude Desktop (or any MCP client) can list folders and create notes in your Grist database.
+Capture meetings (mic + system audio), write notes, import **articles** or **YouTube captions**, and let local AI summarize, title, and organize. Optional OpenAI-compatible APIs. Optional **MCP** for Claude Desktop.
 
 ---
 
@@ -12,14 +10,17 @@ It also ships an **MCP server** so Claude Desktop (or any MCP client) can list f
 
 | Feature | Details |
 |--------|---------|
-| **Mic + system audio** | AVFoundation + ScreenCaptureKit (no BlackHole) |
-| **Local transcription** | whisper.cpp + Apple Metal |
-| **AI summaries & chat** | Ollama (local/remote) **or** OpenAI-compatible APIs |
-| **Folders & templates** | Organize meetings; custom summary prompts |
-| **RAG chat** | Ask questions across meetings in a folder |
-| **Import from URL** | Articles (page text) or **YouTube captions** via `yt-dlp` → note + optional AI summary |
+| **Meetings** | Mic + system audio via ScreenCaptureKit; Whisper transcription; AI summary |
+| **Notes** | First-class writing UI, markdown toolbar (bold/lists/etc.), Edit/Preview |
+| **Article / URL** | Import web pages or **YouTube** (captions via `yt-dlp`) → Note + optional Enhance |
+| **Folders** | File items; **delete folder** with *Move to Unfiled* or *soft-delete contents* |
+| **Auto-organize** | One button: name untitled items + file unfiled ones; shows a summary popup |
+| **Library** | All / Unfiled / Meetings / Notes filters |
+| **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
+| **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
-| **One-shot setup** | `./setup.sh` wizard — AI, Whisper, MCP |
+| **Setup** | `./setup.sh` + `./build_app.sh` → `~/Applications/Grist.app` |
+| **Icon** | Bundled macOS app icon |
 
 ---
 
@@ -28,13 +29,12 @@ It also ships an **MCP server** so Claude Desktop (or any MCP client) can list f
 - **macOS 15+**
 - [Homebrew](https://brew.sh/)
 - Xcode Command Line Tools (`xcode-select --install`)
-- Apple Silicon or Intel Mac
 
 Optional:
 
-- [Claude Desktop](https://claude.ai/download) — for MCP
-- Free **Apple ID** signed into Xcode (recommended so Screen Recording / Mic permissions stick across rebuilds)
-- **`yt-dlp`** — YouTube caption import (`brew install yt-dlp`; also installed by `./setup.sh`)
+- [Claude Desktop](https://claude.ai/download) — MCP  
+- Free **Apple ID** in Xcode — stable Mic/Screen permissions across rebuilds  
+- **`yt-dlp`** — YouTube captions (`brew install yt-dlp`; also via `./setup.sh`)
 
 ---
 
@@ -47,67 +47,91 @@ chmod +x setup.sh build_app.sh
 ./setup.sh
 ```
 
-The wizard asks you:
+Wizard steps:
 
-1. **AI configuration**
-   - Ollama on this Mac (default — pulls `gemma2:2b` + `nomic-embed-text`)
-   - Remote Ollama URL
-   - OpenAI-compatible API (base URL, key, model)
-2. **Whisper** — auto-build Metal whisper.cpp, or point at your own binary/model  
-3. **MCP** — compile a standalone server binary and optionally wire Claude Desktop  
-4. **Build** — run `./build_app.sh` and launch Grist
+1. **AI** — local Ollama, remote Ollama, or OpenAI-compatible API  
+2. **Whisper** — build Metal whisper.cpp (CoreML off) or custom paths  
+3. **yt-dlp** — installed for YouTube import  
+4. **MCP** — optional Bun-compiled server + Claude Desktop config  
+5. **Build** — `./build_app.sh` → `~/Applications/Grist.app`
 
-After setup you can always rebuild with:
+Rebuild anytime:
 
 ```bash
 ./build_app.sh
 ```
 
-That compiles Swift, signs the app (Apple Development cert if available), installs to:
+---
 
-```text
-~/Applications/Grist.app
-```
+## Using the app
 
-and launches it.
+### Create
+
+Sidebar:
+
+- **Meeting** — record + transcribe + summarize  
+- **Note** — blank writing surface  
+- **Article** — paste one or many URLs (article HTML or YouTube captions; each link → its own note)
+
+All support **folder chips** (Unfiled / existing / new). Import defaults to **Unfiled** so nothing is silently filed under the focused sidebar folder.
+
+### Auto-organize
+
+Purple **Auto-organize** under the create buttons:
+
+- Targets items that are **untitled** (placeholder names) and/or **unfiled**, with content  
+- AI suggests **title** and/or **folder** (prefers existing folders)  
+- Shows a **popup report** of what changed  
+
+### Folders
+
+- Click a folder to focus it  
+- **+** in the Folders header to create  
+- Right-click → **Delete Folder…**  
+  - **Move to Unfiled** — keep items, remove folder  
+  - **Delete all contents** — soft-delete items (`is_deleted = 1`), then remove folder  
+
+### YouTube & articles
+
+**Article** create or footer **Import URL**:
+
+| URL type | Behavior |
+|----------|----------|
+| **YouTube** | `yt-dlp` pulls English captions → Note body + transcript → optional Enhance |
+| **Other** | HTML scrape → page text → Note |
+| **Linked YouTube** | After an article import, if the page links to YouTube (e.g. podcast posts), Grist asks: **Import captions & summarize?** |
+| **Add to item** | On an open meeting/note: **Add URL** appends article/YouTube into the same item (notes + transcript), then Enhance. Meetings also have a **Notes** tab for free writing. |
+| **Login walls** | X/Twitter, LinkedIn, etc. are detected — import **fails with a clear alert** (no junk note). Open in browser + paste into a Note. |
+
+Requires captions on the video (manual or auto). If none: install/check `yt-dlp`, or record system audio while playing the video.
+
+### Chat
+
+- On a **meeting/note**: Chat tab uses that item (and its folder if any)  
+- Sidebar **Ask everything**: chat over **all** notes and meetings (RAG when the library is large)
 
 ---
 
 ## First-run permissions
 
-macOS will ask for access **once** per app identity:
-
 | Permission | Why |
 |------------|-----|
 | **Microphone** | Your voice |
-| **Screen & System Audio Recording** | Capture meeting / browser audio |
+| **Screen & System Audio Recording** | Call / browser audio |
 
-After enabling **Screen & System Audio Recording** for Grist, **fully quit and reopen** the app. Until then, recordings are mic-only (YouTube/Zoom won’t appear in the transcript).
-
-If the system keeps prompting even though the toggle looks on:
+After enabling Screen Recording for Grist, **quit and reopen** the app.
 
 ```bash
 tccutil reset ScreenCapture com.grist.meetingassistant
 ```
 
-Then open `~/Applications/Grist.app`, start a short recording, enable Grist again, quit, and relaunch.
+Then reopen `~/Applications/Grist.app` and re-enable Grist in System Settings if needed.
 
 ---
 
 ## AI configuration
 
-### During setup
-
-`./setup.sh` writes preferences under `com.grist.meetingassistant`.
-
-### Later (in the app)
-
-**Settings → General → AI Engine Configuration**
-
-- **Ollama (Local)** — URL, default `http://127.0.0.1:11434`
-- **OpenAI Compatible** — base URL, API key, model
-
-### Later (terminal)
+Setup writes `com.grist.meetingassistant` defaults. In-app: **Settings → General**.
 
 ```bash
 # Ollama
@@ -121,17 +145,19 @@ defaults write com.grist.meetingassistant openAIAPIKey "sk-..."
 defaults write com.grist.meetingassistant openAIModel "gpt-4o"
 ```
 
+Recommended local models: `gemma2:2b` (chat/summary), `nomic-embed-text` (RAG).
+
 ---
 
 ## MCP (Claude Desktop)
 
-Setup builds a **standalone** binary (via [Bun](https://bun.sh)) so Claude does not depend on your Node/NVM path:
-
-```text
-grist-mcp-server/grist-mcp-server
+```bash
+cd grist-mcp-server
+bun install
+bun build ./index.js --compile --outfile grist-mcp-server
 ```
 
-Claude Desktop config (written automatically if you opt in):
+Config (setup can write this):
 
 ```json
 {
@@ -144,24 +170,8 @@ Claude Desktop config (written automatically if you opt in):
 }
 ```
 
-Tools:
-
-- **`list_folders`** — folder names in Grist  
-- **`create_note`** — create a note (`title`, `content`, optional `folder`)
-
-Data lives in:
-
-```text
-~/Library/Application Support/Grist/meetings.db
-```
-
-Rebuild MCP only:
-
-```bash
-cd grist-mcp-server
-bun install
-bun build ./index.js --compile --outfile grist-mcp-server
-```
+Tools: `list_folders`, `create_note`  
+Data: `~/Library/Application Support/Grist/meetings.db`
 
 ---
 
@@ -170,9 +180,10 @@ bun build ./index.js --compile --outfile grist-mcp-server
 ```text
 grist/
 ├── Sources/grist/          # SwiftUI app
-├── grist-mcp-server/       # MCP server source (binary built by setup)
-├── setup.sh                # Interactive install wizard
-├── build_app.sh            # Build, sign, install to ~/Applications, launch
+├── Resources/AppIcon.icns  # App icon
+├── grist-mcp-server/       # MCP source (binary from setup)
+├── setup.sh
+├── build_app.sh
 ├── Package.swift
 └── README.md
 ```
@@ -181,28 +192,22 @@ grist/
 |-----------|------|
 | `AudioRecorder` | Mic + system audio |
 | `WhisperTranscriber` | ffmpeg + whisper.cpp |
-| `OllamaClient` | Ollama or OpenAI-compatible HTTP |
+| `YouTubeImporter` | yt-dlp captions → text |
+| `URLFetcher` | Web HTML or YouTube |
+| `OllamaClient` | Ollama / OpenAI-compatible |
 | `RAGEngine` | Chunk + embed + search |
-| `Database` | SQLite meetings / folders / chat / chunks |
-| MCP server | External agent access to notes |
+| `Database` | SQLite |
 
 ---
 
 ## Development
 
 ```bash
-./build_app.sh          # debug build + relaunch
-swift build -c debug    # compile only
+./build_app.sh          # build, sign, install, launch
+swift build -c debug
 ```
 
-Signing: `build_app.sh` prefers an **Apple Development** identity (free with an Apple ID in Xcode) so Mic/Screen permissions survive rebuilds. Override with:
-
-```bash
-export CODESIGN_IDENTITY="Apple Development: you@example.com (XXXXXXXX)"
-./build_app.sh
-```
-
-Without a cert, it falls back to ad-hoc signing (permissions may re-prompt after rebuilds).
+Signing prefers **Apple Development** (stable TCC). Override with `CODESIGN_IDENTITY=...`.
 
 ---
 
@@ -210,21 +215,22 @@ Without a cert, it falls back to ad-hoc signing (permissions may re-prompt after
 
 | Problem | Fix |
 |---------|-----|
-| Transcript is `you you` / empty | Mic-only silence — enable **Screen & System Audio Recording**, quit & relaunch, play system audio while recording |
-| YouTube import fails | Install `yt-dlp` (`brew install yt-dlp`). Video must have captions (manual or auto). |
-| `Whisper.cpp process failed` | Rebuild whisper **without CoreML**: re-run `./setup.sh` Whisper step (uses `-DWHISPER_COREML=OFF`) |
-| No summaries | Check Ollama is running / API key; open Settings → AI Engine |
-| RAG chat weak | Ensure `nomic-embed-text` is pulled (`ollama pull nomic-embed-text`) |
-| Claude can’t see Grist MCP | Restart Claude; confirm binary path in `claude_desktop_config.json` |
-| Permission sheet every launch | Open only `~/Applications/Grist.app`; use Development signing; avoid ad-hoc |
+| Mic-only / `you you` transcript | Enable **Screen & System Audio Recording**, quit & relaunch |
+| YouTube import fails | `brew install yt-dlp`; video needs captions |
+| X / LinkedIn import fails | Expected — those pages need login; paste text into a Note |
+| Wrong folder on import | Import defaults to Unfiled — pick a chip explicitly |
+| Whisper process failed | Re-run setup Whisper step (`-DWHISPER_COREML=OFF`) |
+| Weak RAG / chat | `ollama pull nomic-embed-text` |
+| Generic Dock icon | `killall Dock` after rebuild; open `~/Applications/Grist.app` only |
+| MCP not loading | Restart Claude; check binary path in config |
 
 ---
 
 ## Privacy
 
-- Default path: **all local** (mic, system audio, Whisper, Ollama).
-- OpenAI-compatible mode sends transcript/notes to the endpoint you configure — only if you choose it.
-- No telemetry in Grist itself.
+- Default: **local** (audio, Whisper, Ollama)  
+- OpenAI-compatible mode sends text to the endpoint you configure  
+- No Grist telemetry  
 
 ---
 
@@ -232,8 +238,6 @@ Without a cert, it falls back to ad-hoc signing (permissions may re-prompt after
 
 MIT — see [LICENSE](LICENSE).
 
----
-
 ## Contributing
 
-Issues and PRs welcome. Please keep the “clone → `./setup.sh` → record” path working for new contributors.
+PRs welcome. Keep **clone → `./setup.sh` → `./build_app.sh`** working for new users.
