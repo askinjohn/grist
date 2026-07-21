@@ -18,6 +18,8 @@ Capture meetings (mic + system audio), write notes, import **articles** or **You
 | **Library** | All / Unfiled / Meetings / Notes filters |
 | **Search** | Sidebar search across the whole library; jumps to the item + best tab; shows match snippets |
 | **Export** | Markdown for one note/meeting (toolbar **Export**); folder export as many `.md` files + `_index.md` |
+| **Folder summary** | Right-click a folder → **Summarize folder…** — choose action items / brief / custom specs; saves a new Note in that folder |
+| **Chat** | Per-item chat uses that item’s **AI summary + notes + transcript** (always re-fetched). Ask everything for whole library |
 | **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
 | **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
@@ -109,8 +111,17 @@ Requires captions on the video (manual or auto). If none: install/check `yt-dlp`
 
 ### Chat
 
-- On a **meeting/note**: Chat tab uses that item (and its folder if any)  
+- On a **meeting/note**: Chat uses **this item only** — AI summary, written notes, and transcript (re-loaded from the database on each message)  
 - Sidebar **Ask everything**: chat over **all** notes and meetings (RAG when the library is large)
+
+### Folder summary
+
+Collect blogs, videos, meetings, and notes in a folder, then:
+
+1. Right-click the folder → **Summarize folder…** (or Export menu when viewing an item in that folder)  
+2. Choose what you need: **Action items**, **Executive brief**, **Themes**, **Research**, or **Custom**  
+3. Edit the instructions if you want  
+4. Grist creates a new **Note** in that folder with the combined summary
 
 ### Search
 

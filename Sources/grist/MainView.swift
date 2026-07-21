@@ -150,6 +150,59 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// Presets for “Summarize folder” — user can also type free-form specs.
+enum FolderSummarizePreset: String, CaseIterable, Identifiable {
+    case actionItems
+    case executive
+    case themes
+    case research
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .actionItems: return "Action items & decisions"
+        case .executive: return "Executive brief"
+        case .themes: return "Themes & insights"
+        case .research: return "Research synthesis"
+        case .custom: return "Custom instructions"
+        }
+    }
+
+    var defaultSpecs: String {
+        switch self {
+        case .actionItems:
+            return """
+            Produce:
+            1) Key decisions (if any)
+            2) Concrete action items (bullet list; owner/deadline when mentioned)
+            3) Open questions / risks
+            4) One-paragraph overview of the folder
+            """
+        case .executive:
+            return """
+            Write a short executive brief for a busy reader:
+            - Bottom line up front (3–5 sentences)
+            - Why it matters
+            - Main takeaways (bullets)
+            - Recommended next steps
+            """
+        case .themes:
+            return """
+            Cluster content into themes across all items. For each theme: summary, supporting points with source titles, contradictions if any.
+            End with overall insights.
+            """
+        case .research:
+            return """
+            Research synthesis: claims vs evidence, key facts, sources cited by item title, gaps, and suggested follow-up reading/questions.
+            """
+        case .custom:
+            return ""
+        }
+    }
+}
+
 // MARK: - Root View (Handles Sheet + Keyboard)
 
 struct RootView: View {
@@ -194,6 +247,12 @@ struct MainView: View {
     @State private var pendingYouTubeSuggestions: [(meetingId: String, ytURL: String)] = []
     @State private var isImportingSuggestedYouTube = false
     @State private var showingSettingsSheet = false
+    /// Folder-level multi-item summarize
+    @State private var showingFolderSummarizeSheet = false
+    @State private var folderSummarizeName: String = ""
+    @State private var folderSummarizePreset: FolderSummarizePreset = .actionItems
+    @State private var folderSummarizeCustomSpecs: String = ""
+    @State private var isFolderSummarizing = false
 
     // AI Config
     @State private var selectedModel = "gemma2:2b"
@@ -598,6 +657,226 @@ struct MainView: View {
         .sheet(isPresented: $showingOrganizeReport) {
             organizeReportSheet
         }
+        .sheet(isPresented: $showingFolderSummarizeSheet) {
+            folderSummarizeSheet
+        }
+    }
+
+    // MARK: - Folder summarize sheet
+
+    private var folderSummarizeSheet: some View {
+        let count = meetings.filter { ($0.groupName ?? "") == folderSummarizeName }.count
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Summarize folder")
+                        .font(.title2.weight(.bold))
+                    Text("“\(folderSummarizeName)” · \(count) item\(count == 1 ? "" : "s")")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingFolderSummarizeSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .disabled(isFolderSummarizing)
+            }
+            .padding(24)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("What do you need from this folder?")
+                        .font(.headline)
+
+                    Text("Collect blogs, videos, meetings, and notes into one summary. Pick a style or write your own specs.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(FolderSummarizePreset.allCases) { preset in
+                            Button {
+                                folderSummarizePreset = preset
+                                if preset != .custom {
+                                    folderSummarizeCustomSpecs = preset.defaultSpecs
+                                } else if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    folderSummarizeCustomSpecs = "Describe what you want (e.g. action items for the product team, risks only, compare viewpoints…)"
+                                }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: folderSummarizePreset == preset ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(folderSummarizePreset == preset ? Color.accentColor : .secondary)
+                                    Text(preset.title)
+                                        .font(.callout.weight(folderSummarizePreset == preset ? .semibold : .regular))
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .padding(12)
+                                .background(folderSummarizePreset == preset ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("INSTRUCTIONS")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $folderSummarizeCustomSpecs)
+                            .font(.body)
+                            .frame(minHeight: 120, maxHeight: 180)
+                            .padding(8)
+                            .background(Color.primary.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+
+                    HStack {
+                        Text("Model")
+                        Spacer()
+                        Picker("", selection: $selectedModel) {
+                            ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 160)
+                    }
+                    .padding(12)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
+            }
+
+            Divider()
+            HStack {
+                Button("Cancel") { showingFolderSummarizeSheet = false }
+                    .disabled(isFolderSummarizing)
+                Spacer()
+                Button {
+                    runFolderSummarize()
+                } label: {
+                    if isFolderSummarizing {
+                        Label("Summarizing…", systemImage: "ellipsis")
+                    } else {
+                        Label("Summarize folder", systemImage: "sparkles")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isFolderSummarizing || count == 0
+                          || folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 520, height: 560)
+        .onAppear {
+            if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                folderSummarizeCustomSpecs = folderSummarizePreset.defaultSpecs
+            }
+        }
+    }
+
+    private func openFolderSummarize(name: String) {
+        folderSummarizeName = name
+        folderSummarizePreset = .actionItems
+        folderSummarizeCustomSpecs = FolderSummarizePreset.actionItems.defaultSpecs
+        showingFolderSummarizeSheet = true
+    }
+
+    private func runFolderSummarize() {
+        let name = folderSummarizeName
+        let items = meetings.filter { ($0.groupName ?? "") == name }
+        guard !items.isEmpty else {
+            statusMessage = "Folder is empty"
+            return
+        }
+        let specs = folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !specs.isEmpty else { return }
+
+        let model = selectedModel == "custom" ? customModelName : selectedModel
+        guard !model.isEmpty else {
+            statusMessage = "Pick a model"
+            return
+        }
+
+        isFolderSummarizing = true
+        statusMessage = "Summarizing folder…"
+
+        // Build content payloads (prefer summary; fall back to notes + transcript)
+        let payloads: [(title: String, kind: String, content: String)] = items.map { m in
+            var parts: [String] = []
+            if !m.summary.isEmpty { parts.append("AI Summary:\n\(m.summary)") }
+            if !m.manualNotes.isEmpty { parts.append("Notes:\n\(m.manualNotes.prefix(20_000))") }
+            if !m.transcript.isEmpty {
+                let t = m.transcript
+                parts.append("Transcript:\n\(t.prefix(20_000))")
+            }
+            let content = parts.joined(separator: "\n\n")
+            return (title: m.title, kind: m.kindLabel, content: content.isEmpty ? "(empty)" : content)
+        }
+
+        Task {
+            do {
+                let result = try await ollama.folderSummarize(
+                    folderName: name,
+                    items: payloads,
+                    userSpecs: specs,
+                    model: model
+                )
+                await MainActor.run {
+                    let title = result.title?.isEmpty == false
+                        ? result.title!
+                        : "Folder summary: \(name)"
+                    let id = UUID().uuidString
+                    let body = """
+                    [Folder summary of “\(name)” — \(items.count) items]
+
+                    ## Specs used
+                    \(specs)
+
+                    ---
+
+                    \(result.summary)
+                    """
+                    let note = Meeting(
+                        id: id,
+                        title: title,
+                        timestamp: Date().timeIntervalSince1970,
+                        manualNotes: body,
+                        transcript: payloads.map { "=== \($0.kind): \($0.title) ===\n\($0.content.prefix(8000))" }.joined(separator: "\n\n"),
+                        summary: result.summary,
+                        template: "Note",
+                        groupName: name,
+                        isDeleted: false
+                    )
+                    db.saveMeeting(note)
+                    db.saveFolder(name)
+                    loadMeetings()
+                    focusedFolder = name
+                    libraryFilter = .all
+                    selectedMeeting = meetings.first(where: { $0.id == id })
+                    selectedTab = "summary"
+                    noteShowPreview = true
+                    isFolderSummarizing = false
+                    showingFolderSummarizeSheet = false
+                    statusMessage = "Folder summary ready"
+                }
+            } catch {
+                await MainActor.run {
+                    isFolderSummarizing = false
+                    statusMessage = "Folder summary failed"
+                    importErrorMessage = error.localizedDescription
+                    importErrorOpenURL = nil
+                    showingImportErrorAlert = true
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -910,6 +1189,11 @@ struct MainView: View {
             Button("New note here") {
                 focusedFolder = name
                 openCreateSheet(kind: .note)
+            }
+            Button {
+                openFolderSummarize(name: name)
+            } label: {
+                Label("Summarize folder…", systemImage: "sparkles")
             }
             Button {
                 exportFolder(name)
@@ -2065,6 +2349,11 @@ struct MainView: View {
                     }
                     if let folder = m.groupName, !folder.isEmpty {
                         Divider()
+                        Button {
+                            openFolderSummarize(name: folder)
+                        } label: {
+                            Label("Summarize Folder “\(folder)”…", systemImage: "sparkles")
+                        }
                         Button {
                             exportFolder(folder)
                         } label: {
@@ -3314,22 +3603,23 @@ struct SidebarRow: View {
     }
 }
 
-// MARK: - Chat View (item / folder / global)
+// MARK: - Chat View (item / global)
 
 enum ChatScope: Equatable {
     case item(Meeting)
     case global
 
+    /// Per-item history so folder mates don’t share one thread with the open note.
     var historyKey: String {
         switch self {
-        case .item(let m): return m.groupName ?? m.id
+        case .item(let m): return "item:\(m.id)"
         case .global: return "__global__"
         }
     }
 
     var emptyTitle: String {
         switch self {
-        case .item: return "Ask questions about this item"
+        case .item: return "Ask about this note or meeting"
         case .global: return "Ask across your whole library"
         }
     }
@@ -3337,13 +3627,19 @@ enum ChatScope: Equatable {
     var emptySubtitle: String {
         switch self {
         case .item(let m):
-            if let g = m.groupName {
-                return "This is in “\(g)” — answers use all items in that folder when possible."
+            let name = m.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                return "Answers use this item’s AI summary, written notes, and transcript."
             }
-            return "Answers use this note or meeting’s content."
+            return "Answers use “\(name)” — AI summary, notes, and transcript."
         case .global:
-            return "RAG searches all notes and meetings. Best with nomic-embed-text installed."
+            return "Searches all notes and meetings. Best with nomic-embed-text installed."
         }
+    }
+
+    var focusedMeetingId: String? {
+        if case .item(let m) = self { return m.id }
+        return nil
     }
 }
 
@@ -3355,6 +3651,10 @@ struct ChatView: View {
     @State private var chatHistory: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var isThinking = false
+
+    /// Cap per item when stuffing (characters).
+    private let itemContextLimit = 80_000
+    private let multiItemContextLimit = 12_000
 
     var body: some View {
         VStack(spacing: 0) {
@@ -3397,7 +3697,7 @@ struct ChatView: View {
 
             Divider()
             HStack(spacing: 12) {
-                TextField("Ask anything...", text: $inputText)
+                TextField("Ask about this content…", text: $inputText)
                     .textFieldStyle(.plain)
                     .font(.body)
                     .padding(.horizontal, 16)
@@ -3433,25 +3733,37 @@ struct ChatView: View {
         chatHistory = Database.shared.fetchChatMessages(forGroup: scope.historyKey)
     }
 
+    /// Fresh copy from DB so Write / Enhance updates are always included.
+    private func freshMeeting(id: String, fallback: Meeting) -> Meeting {
+        Database.shared.getMeeting(id: id) ?? fallback
+    }
+
     private func contextMeetings() -> [Meeting] {
         let all = Database.shared.fetchActiveMeetings()
         switch scope {
         case .global:
             return all
         case .item(let meeting):
-            if let g = meeting.groupName, !g.isEmpty {
-                return all.filter { $0.groupName == g }
-            }
-            return [meeting]
+            // Chat on an open item = that item only (folder-wide synthesis is “Summarize folder”)
+            let m = freshMeeting(id: meeting.id, fallback: meeting)
+            return [m]
         }
     }
 
-    private func contextBlob(for m: Meeting) -> String {
+    /// Prefer AI summary + written notes + transcript (all three).
+    private func contextBlob(for m: Meeting, limit: Int) -> String {
         var parts: [String] = []
-        if !m.summary.isEmpty { parts.append("Summary:\n\(m.summary)") }
-        if !m.transcript.isEmpty { parts.append("Transcript:\n\(m.transcript)") }
-        if !m.manualNotes.isEmpty { parts.append("Notes:\n\(m.manualNotes)") }
-        return parts.joined(separator: "\n\n")
+        let summary = m.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transcript = m.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !summary.isEmpty { parts.append("### AI Summary\n\(summary)") }
+        if !notes.isEmpty { parts.append("### Notes / article body\n\(notes)") }
+        if !transcript.isEmpty { parts.append("### Transcript / captions\n\(transcript)") }
+        var blob = parts.joined(separator: "\n\n")
+        if blob.count > limit {
+            blob = String(blob.prefix(limit)) + "\n\n[…truncated…]"
+        }
+        return blob
     }
 
     func sendMessage() {
@@ -3465,43 +3777,90 @@ struct ChatView: View {
         chatHistory.append(userMsg)
         Database.shared.saveChatMessage(userMsg)
 
+        // Snapshot history for the request (includes the new user msg)
+        let historySnapshot = chatHistory
+
         Task {
             do {
                 let model = selectedModel == "custom" ? customModelName : selectedModel
                 let meetingsInContext = contextMeetings()
 
-                var systemContext = "You are a helpful knowledge assistant for Grist. Answer using ONLY the provided notes/meetings. If the answer is not present, say so. Cite note titles when useful.\n\n"
+                var documentBlock = ""
+                let isSingleItem = {
+                    if case .item = scope { return true }
+                    return false
+                }()
 
-                let useRAG = meetingsInContext.count > 6 || scope == .global
-                if useRAG {
-                    let meetingIds = meetingsInContext.map { $0.id }
-                    let topChunks = try await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: scope == .global ? 20 : 15)
-                    if topChunks.isEmpty {
-                        // Fall back to stuffing recent items with content
-                        for m in meetingsInContext.prefix(8) {
-                            let blob = contextBlob(for: m)
-                            if blob.isEmpty { continue }
-                            systemContext += "=== \(m.kindLabel): \(m.title) ===\n\(blob.prefix(3000))\n\n"
-                        }
+                if isSingleItem, let m = meetingsInContext.first {
+                    let blob = contextBlob(for: m, limit: itemContextLimit)
+                    if blob.isEmpty {
+                        documentBlock = "(No summary, notes, or transcript saved on this item yet.)"
                     } else {
-                        systemContext += "=== RELEVANT EXCERPTS ===\n"
-                        for chunk in topChunks {
-                            let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
-                            systemContext += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
-                        }
+                        documentBlock = """
+                        === OPEN ITEM: \(m.kindLabel) — \(m.title) ===
+                        \(blob)
+                        """
                     }
                 } else {
-                    for m in meetingsInContext {
-                        let blob = contextBlob(for: m)
-                        if blob.isEmpty { continue }
-                        systemContext += "=== \(m.kindLabel): \(m.title) (Date: \(Date(timeIntervalSince1970: m.timestamp))) ===\n"
-                        systemContext += "\(blob)\n\n"
+                    // Global / multi: pin nothing; use RAG with stuffing fallback
+                    let useRAG = meetingsInContext.count > 4
+                    if useRAG {
+                        let meetingIds = meetingsInContext.map { $0.id }
+                        let topChunks = (try? await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: 20)) ?? []
+                        if topChunks.isEmpty {
+                            for m in meetingsInContext.prefix(10) {
+                                let blob = contextBlob(for: m, limit: multiItemContextLimit)
+                                if blob.isEmpty { continue }
+                                documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
+                            }
+                        } else {
+                            documentBlock += "=== RELEVANT EXCERPTS ===\n"
+                            for chunk in topChunks {
+                                let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
+                                documentBlock += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
+                            }
+                            // Also include full AI summaries for hit parents (cheap, high signal)
+                            var seen = Set<String>()
+                            for chunk in topChunks {
+                                guard seen.insert(chunk.meetingId).inserted,
+                                      let m = meetingsInContext.first(where: { $0.id == chunk.meetingId }),
+                                      !m.summary.isEmpty else { continue }
+                                documentBlock += "=== AI Summary: \(m.title) ===\n\(m.summary.prefix(4000))\n\n"
+                            }
+                        }
+                    } else {
+                        for m in meetingsInContext {
+                            let blob = contextBlob(for: m, limit: multiItemContextLimit)
+                            if blob.isEmpty { continue }
+                            documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
+                        }
                     }
                 }
 
-                var apiMessages: [OllamaClient.OllamaChatMessage] = []
-                apiMessages.append(OllamaClient.OllamaChatMessage(role: "system", content: systemContext))
-                for msg in chatHistory {
+                let systemPrompt = """
+                You are Grist’s knowledge assistant. You already have the user’s notes/meetings in the DOCUMENT block below.
+
+                Rules:
+                1. Answer using ONLY that document (and prior chat turns).
+                2. NEVER ask the user to paste, upload, or “provide the blog/article” — it is already in DOCUMENT if available.
+                3. If DOCUMENT is empty, say this item has no content yet.
+                4. Prefer AI Summary when present; use Notes and Transcript for detail.
+                5. Cite the item title when useful. Be concrete.
+                """
+
+                // Small local models often ignore pure system messages — put DOCUMENT in a user turn too.
+                var apiMessages: [OllamaClient.OllamaChatMessage] = [
+                    OllamaClient.OllamaChatMessage(role: "system", content: systemPrompt),
+                    OllamaClient.OllamaChatMessage(
+                        role: "user",
+                        content: "DOCUMENT (source material — use this to answer):\n\n\(documentBlock)"
+                    ),
+                    OllamaClient.OllamaChatMessage(
+                        role: "assistant",
+                        content: "I have the document loaded. I will answer only from it and will not ask you to paste it."
+                    ),
+                ]
+                for msg in historySnapshot {
                     apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
                 }
 
