@@ -330,6 +330,16 @@ extension Database {
         sqlite3_finalize(stmt)
     }
     
+    func deleteChatMessages(forGroup groupName: String) {
+        let query = "DELETE FROM chat_messages WHERE group_name = ?;"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt, 1, (groupName as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+    }
+
     func fetchChatMessages(forGroup groupName: String) -> [ChatMessage] {
         let query = "SELECT id, role, content, timestamp FROM chat_messages WHERE group_name = ? ORDER BY timestamp ASC;"
         var stmt: OpaquePointer?

@@ -299,6 +299,10 @@ struct MainView: View {
     @State private var importNewFolderName = ""
     /// Markdown format command for the note body editor.
     @State private var noteFormatCommand: MarkdownFormatCommand? = nil
+    /// Live text selection from the note editor (for Chat with selection).
+    @State private var noteSelectedText: String = ""
+    /// When set, Chat tab uses only this selected text.
+    @State private var selectionChat: (id: String, title: String, text: String)? = nil
     @State private var noteShowPreview = false
 
     // Auto-organize
@@ -1698,8 +1702,18 @@ struct MainView: View {
                     noteEmptyAIState
                 }
             } else if selectedTab == "chat", let m = selectedMeeting {
-                ChatView(scope: .item(m), selectedModel: selectedModel, customModelName: customModelName)
-                    .id(m.id)
+                if let sel = selectionChat {
+                    ChatView(
+                        scope: .selection(id: sel.id, title: sel.title, text: sel.text),
+                        selectedModel: selectedModel,
+                        customModelName: customModelName,
+                        onExitSelection: { selectionChat = nil }
+                    )
+                    .id("sel-\(sel.id)")
+                } else {
+                    ChatView(scope: .item(m), selectedModel: selectedModel, customModelName: customModelName)
+                        .id(m.id)
+                }
             } else {
                 noteWritingSurface
             }
@@ -1710,6 +1724,22 @@ struct MainView: View {
                 selectedTab = "notes"
             }
         }
+        .onChange(of: selectedMeeting?.id) { _, _ in
+            selectionChat = nil
+            noteSelectedText = ""
+        }
+    }
+
+    private func startSelectionChat(text: String, title: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else {
+            statusMessage = "Select some text first"
+            return
+        }
+        let id = "\(selectedMeeting?.id ?? "note")-\(abs(t.hashValue))"
+        selectionChat = (id: id, title: title, text: t)
+        selectedTab = "chat"
+        statusMessage = "Chat scoped to selection"
     }
 
     @ViewBuilder
@@ -1719,6 +1749,18 @@ struct MainView: View {
             HStack(spacing: 10) {
                 MarkdownFormatToolbar(pendingFormat: $noteFormatCommand)
                 Spacer(minLength: 8)
+                if !noteSelectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        startSelectionChat(text: noteSelectedText, title: selectedMeeting?.title ?? "Note")
+                    } label: {
+                        Label("Chat with selection", systemImage: "bubble.left.and.text.bubble.right")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                    .help("Open Chat using only the highlighted text")
+                }
                 Picker("", selection: $noteShowPreview) {
                     Image(systemName: "square.and.pencil").tag(false)
                     Image(systemName: "doc.richtext").tag(true)
@@ -1841,6 +1883,7 @@ struct MainView: View {
                         set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
                     ),
                     pendingFormat: $noteFormatCommand,
+                    selectedText: $noteSelectedText,
                     fontSize: 16
                 )
                 .padding(.horizontal, 20)
@@ -1998,6 +2041,16 @@ struct MainView: View {
             }
             .help("Fetch a page or YouTube captions into this note")
             .disabled(isImportingUrl || selectedMeeting == nil)
+
+            Button {
+                let title = selectedMeeting?.title ?? "Note"
+                startSelectionChat(text: noteSelectedText, title: title)
+            } label: {
+                Label("Chat selection", systemImage: "text.quote")
+            }
+            .help("Select text in Write, then chat only about that selection")
+            .disabled(noteSelectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .tint(.purple)
 
             Button {
                 generateAutoTitle(force: true)
@@ -2160,6 +2213,16 @@ struct MainView: View {
                         .foregroundStyle(.tertiary)
                 }
                 Spacer()
+                if !noteSelectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button {
+                        startSelectionChat(text: noteSelectedText, title: selectedMeeting?.title ?? "Meeting")
+                    } label: {
+                        Label("Chat selection", systemImage: "text.quote")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+                    .controlSize(.small)
+                }
                 Button {
                     openImportSheet(appendToCurrent: true)
                 } label: {
@@ -2180,6 +2243,7 @@ struct MainView: View {
                     set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
                 ),
                 pendingFormat: $noteFormatCommand,
+                selectedText: $noteSelectedText,
                 fontSize: 15
             )
             .padding(.horizontal, 12)
@@ -2334,8 +2398,18 @@ struct MainView: View {
             manualNotesView
         case "chat":
             if let m = selectedMeeting {
-                ChatView(scope: .item(m), selectedModel: selectedModel, customModelName: customModelName)
-                    .id(m.id)
+                if let sel = selectionChat {
+                    ChatView(
+                        scope: .selection(id: sel.id, title: sel.title, text: sel.text),
+                        selectedModel: selectedModel,
+                        customModelName: customModelName,
+                        onExitSelection: { selectionChat = nil }
+                    )
+                    .id("sel-\(sel.id)")
+                } else {
+                    ChatView(scope: .item(m), selectedModel: selectedModel, customModelName: customModelName)
+                        .id(m.id)
+                }
             }
         case "transcript":
             if let transcript = selectedMeeting?.transcript, !transcript.isEmpty {
@@ -3786,17 +3860,20 @@ struct SidebarRow: View {
     }
 }
 
-// MARK: - Chat View (item / global)
+// MARK: - Chat View (item / global / selection)
 
 enum ChatScope: Equatable {
     case item(Meeting)
     case global
+    /// User-selected text only (from editor or summary).
+    case selection(id: String, title: String, text: String)
 
     /// Per-item history so folder mates don’t share one thread with the open note.
     var historyKey: String {
         switch self {
         case .item(let m): return "item:\(m.id)"
         case .global: return "__global__"
+        case .selection(let id, _, _): return "sel:\(id)"
         }
     }
 
@@ -3804,6 +3881,7 @@ enum ChatScope: Equatable {
         switch self {
         case .item: return "Ask about this note or meeting"
         case .global: return "Ask across your whole library"
+        case .selection: return "Ask about your selection"
         }
     }
 
@@ -3816,13 +3894,12 @@ enum ChatScope: Equatable {
             }
             return "Answers use “\(name)” — AI summary, notes, and transcript."
         case .global:
-            return "Semantic search + keywords across your library. Rebuild index in Settings if answers miss notes (ollama pull nomic-embed-text)."
+            return "Semantic search + keywords across your library. Use Clear chat if a previous topic sticks."
+        case .selection(_, let title, let text):
+            let preview = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let short = preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
+            return "Only the selected text from “\(title)” is used:\n\(short)"
         }
-    }
-
-    var focusedMeetingId: String? {
-        if case .item(let m) = self { return m.id }
-        return nil
     }
 }
 
@@ -3830,6 +3907,7 @@ struct ChatView: View {
     let scope: ChatScope
     let selectedModel: String
     let customModelName: String
+    var onExitSelection: (() -> Void)? = nil
 
     @State private var chatHistory: [ChatMessage] = []
     @State private var inputText: String = ""
@@ -3837,10 +3915,58 @@ struct ChatView: View {
 
     /// Cap per item when stuffing (characters).
     private let itemContextLimit = 80_000
-    private let multiItemContextLimit = 12_000
+    private let multiItemContextLimit = 14_000
+    private let keywordHitLimit = 24_000
 
     var body: some View {
         VStack(spacing: 0) {
+            // Toolbar: clear chat / leave selection mode
+            HStack(spacing: 10) {
+                if case .selection(_, let title, _) = scope {
+                    Label("Selection chat", systemImage: "text.quote")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.purple)
+                    Text(title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    Spacer()
+                    if let onExitSelection {
+                        Button("Exit selection") { onExitSelection() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                } else {
+                    Spacer()
+                }
+                Button {
+                    clearChat()
+                } label: {
+                    Label("Clear chat", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(chatHistory.isEmpty || isThinking)
+                .help("Start a fresh thread for this chat scope")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.03))
+
+            if case .selection(_, _, let sel) = scope {
+                ScrollView(.vertical, showsIndicators: false) {
+                    Text(sel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(maxHeight: 88)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.purple.opacity(0.06))
+            }
+
             ScrollView {
                 LazyVStack(spacing: 16) {
                     if chatHistory.isEmpty {
@@ -3916,6 +4042,11 @@ struct ChatView: View {
         chatHistory = Database.shared.fetchChatMessages(forGroup: scope.historyKey)
     }
 
+    func clearChat() {
+        Database.shared.deleteChatMessages(forGroup: scope.historyKey)
+        chatHistory = []
+    }
+
     /// Fresh copy from DB so Write / Enhance updates are always included.
     private func freshMeeting(id: String, fallback: Meeting) -> Meeting {
         Database.shared.getMeeting(id: id) ?? fallback
@@ -3927,9 +4058,10 @@ struct ChatView: View {
         case .global:
             return all
         case .item(let meeting):
-            // Chat on an open item = that item only (folder-wide synthesis is “Summarize folder”)
             let m = freshMeeting(id: meeting.id, fallback: meeting)
             return [m]
+        case .selection:
+            return []
         }
     }
 
@@ -3939,6 +4071,8 @@ struct ChatView: View {
         let summary = m.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let notes = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
         let transcript = m.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folder = (m.groupName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !folder.isEmpty { parts.append("### Folder\n\(folder)") }
         if !summary.isEmpty { parts.append("### AI Summary\n\(summary)") }
         if !notes.isEmpty { parts.append("### Notes / article body\n\(notes)") }
         if !transcript.isEmpty { parts.append("### Transcript / captions\n\(transcript)") }
@@ -3960,8 +4094,8 @@ struct ChatView: View {
         chatHistory.append(userMsg)
         Database.shared.saveChatMessage(userMsg)
 
-        // Snapshot history for the request (includes the new user msg)
-        let historySnapshot = chatHistory
+        // Keep last few turns only so old Sonam threads don't dominate weak models
+        let historySnapshot = Array(chatHistory.suffix(12))
 
         Task {
             do {
@@ -3969,12 +4103,19 @@ struct ChatView: View {
                 let meetingsInContext = contextMeetings()
 
                 var documentBlock = ""
-                let isSingleItem = {
-                    if case .item = scope { return true }
-                    return false
-                }()
 
-                if isSingleItem, let m = meetingsInContext.first {
+                switch scope {
+                case .selection(_, let title, let selText):
+                    let body = selText.trimmingCharacters(in: .whitespacesAndNewlines)
+                    documentBlock = """
+                    === USER SELECTION from “\(title)” ===
+                    (Answer ONLY using this selection. Ignore any other knowledge.)
+
+                    \(body.isEmpty ? "(empty selection)" : body)
+                    """
+
+                case .item(let meeting):
+                    let m = meetingsInContext.first ?? meeting
                     let blob = contextBlob(for: m, limit: itemContextLimit)
                     if blob.isEmpty {
                         documentBlock = "(No summary, notes, or transcript saved on this item yet.)"
@@ -3984,57 +4125,52 @@ struct ChatView: View {
                         \(blob)
                         """
                     }
-                } else {
-                    // Global library: catalog + vector RAG + keyword-ranked full items
+
+                case .global:
+                    // 1) Catalog always
                     documentBlock += RAGEngine.shared.libraryCatalog(meetingsInContext)
                     documentBlock += "\n\n"
 
+                    // 2) Keyword-ranked FULL items FIRST (folder/title beats huge unrelated articles)
+                    var ranked = RAGEngine.shared.rankMeetingsByKeywords(meetingsInContext, query: text, topK: 8)
+                    if ranked.isEmpty {
+                        ranked = Array(meetingsInContext.sorted { $0.timestamp > $1.timestamp }.prefix(5))
+                    }
+
+                    documentBlock += "=== KEYWORD / FOLDER MATCHES (priority) ===\n"
+                    for m in ranked {
+                        let blob = contextBlob(for: m, limit: keywordHitLimit)
+                        if blob.isEmpty { continue }
+                        let folder = m.groupName.map { " [\($0)]" } ?? ""
+                        documentBlock += "=== \(m.kindLabel): \(m.title)\(folder) ===\n\(blob)\n\n"
+                    }
+
+                    // 3) Diversified semantic chunks (max 3 per meeting)
                     let meetingIds = meetingsInContext.map(\.id)
                     var topChunks: [TranscriptChunk] = []
                     var ragError: String?
                     do {
-                        topChunks = try await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: 18)
+                        topChunks = try await RAGEngine.shared.search(
+                            query: text,
+                            meetingIds: meetingIds,
+                            topK: 15,
+                            maxPerMeeting: 3
+                        )
                     } catch {
                         ragError = error.localizedDescription
                         print("[Chat] RAG search failed: \(error)")
                     }
 
                     if !topChunks.isEmpty {
-                        documentBlock += "=== SEMANTIC MATCHES ===\n"
+                        documentBlock += "=== SEMANTIC EXCERPTS ===\n"
                         for chunk in topChunks {
                             let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
                             documentBlock += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
                         }
                     } else if let ragError {
-                        documentBlock += "(Vector search unavailable: \(ragError). Using keyword match. Install: ollama pull nomic-embed-text)\n\n"
+                        documentBlock += "(Vector search unavailable: \(ragError). Keyword matches above still apply. ollama pull nomic-embed-text)\n\n"
                     } else if Database.shared.chunkCount() == 0 {
                         documentBlock += "(Search index empty — keyword match only. Settings → Rebuild search index.)\n\n"
-                    }
-
-                    // Keyword-ranked full items (always; complements RAG)
-                    var ranked = RAGEngine.shared.rankMeetingsByKeywords(meetingsInContext, query: text, topK: 8)
-                    if ranked.isEmpty {
-                        // No keyword hits — still give recent content so the model isn't empty-handed
-                        ranked = Array(meetingsInContext.sorted { $0.timestamp > $1.timestamp }.prefix(6))
-                    }
-                    // Prefer parents of RAG hits first
-                    var ordered: [Meeting] = []
-                    var seenIds = Set<String>()
-                    for chunk in topChunks {
-                        if seenIds.insert(chunk.meetingId).inserted,
-                           let m = meetingsInContext.first(where: { $0.id == chunk.meetingId }) {
-                            ordered.append(m)
-                        }
-                    }
-                    for m in ranked where seenIds.insert(m.id).inserted {
-                        ordered.append(m)
-                    }
-
-                    documentBlock += "=== FULL ITEM CONTEXT (ranked) ===\n"
-                    for m in ordered.prefix(8) {
-                        let blob = contextBlob(for: m, limit: multiItemContextLimit)
-                        if blob.isEmpty { continue }
-                        documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
                     }
                 }
 
@@ -4042,15 +4178,16 @@ struct ChatView: View {
                 You are Grist’s knowledge assistant for a personal notes/meetings library.
 
                 Rules:
-                1. Answer from the DOCUMENT block (catalog, semantic matches, full items) and prior chat turns only.
+                1. Answer from the DOCUMENT block and recent chat turns only.
                 2. NEVER ask the user to paste content — it is already loaded when available.
-                3. Treat notes, AI summaries, articles, YouTube captions, and meetings as first-class sources (not only “discussions”).
-                4. For library-wide questions (popular topics, themes, what they recorded), use the catalog + full items; cite titles.
-                5. If DOCUMENT only has a catalog and empty bodies, say content is missing — don’t invent.
-                6. Be concrete; prefer AI Summary when present, then notes/transcript.
+                3. Notes, AI summaries, articles, YouTube captions, meetings, and folder summaries are all valid sources (not only “discussions” or “recordings”).
+                4. For library-wide questions (themes, popular topics, financial planning, etc.), use KEYWORD / FOLDER MATCHES first; cite note titles and folders.
+                5. If DOCUMENT lists relevant items, summarize them — do not claim they are missing.
+                6. For SELECTION chat, use only the selected text.
+                7. Be concrete; prefer AI Summary when present, then notes/transcript.
+                8. Do not invent external financial advice when the library has notes on the topic.
                 """
 
-                // Small local models often ignore pure system messages — put DOCUMENT in a user turn too.
                 var apiMessages: [OllamaClient.OllamaChatMessage] = [
                     OllamaClient.OllamaChatMessage(role: "system", content: systemPrompt),
                     OllamaClient.OllamaChatMessage(
@@ -4059,7 +4196,7 @@ struct ChatView: View {
                     ),
                     OllamaClient.OllamaChatMessage(
                         role: "assistant",
-                        content: "I have the document loaded. I will answer only from it and will not ask you to paste it."
+                        content: "I have the document loaded (including any folder matches). I will answer only from it."
                     ),
                 ]
                 for msg in historySnapshot {

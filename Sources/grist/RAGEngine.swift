@@ -98,8 +98,8 @@ class RAGEngine: @unchecked Sendable {
 
     // MARK: - Search
 
-    /// Vector search over stored chunks. Throws if embeddings API fails.
-    func search(query: String, meetingIds: [String], topK: Int = 10) async throws -> [TranscriptChunk] {
+    /// Vector search over stored chunks. Diversifies across meetings so one huge article can't own all top-K.
+    func search(query: String, meetingIds: [String], topK: Int = 10, maxPerMeeting: Int = 3) async throws -> [TranscriptChunk] {
         print("[RAGEngine] Search '\(query.prefix(80))' across \(meetingIds.count) meetings")
         let queryEmbedding = try await OllamaClient.shared.getEmbedding(text: query)
         let allChunks = Database.shared.fetchChunks(forMeetingIds: meetingIds)
@@ -111,17 +111,43 @@ class RAGEngine: @unchecked Sendable {
         let scored = allChunks.map { chunk -> (TranscriptChunk, Double) in
             (chunk, cosineSimilarity(a: queryEmbedding, b: chunk.embedding))
         }
-        let top = scored.sorted { $0.1 > $1.1 }.prefix(topK).map(\.0)
-        print("[RAGEngine] Top \(top.count) of \(allChunks.count) chunks")
-        return Array(top)
+        .sorted { $0.1 > $1.1 }
+
+        var perMeeting: [String: Int] = [:]
+        var top: [TranscriptChunk] = []
+        for (chunk, _) in scored {
+            let n = perMeeting[chunk.meetingId, default: 0]
+            if n >= maxPerMeeting { continue }
+            perMeeting[chunk.meetingId] = n + 1
+            top.append(chunk)
+            if top.count >= topK { break }
+        }
+        print("[RAGEngine] Top \(top.count) of \(allChunks.count) chunks (max \(maxPerMeeting)/meeting)")
+        return top
     }
 
-    /// Keyword rank meetings when vector index is empty or as a complement.
+    /// Keyword rank meetings — boost folder/title matches so “financial planning” beats a huge unrelated article.
     func rankMeetingsByKeywords(_ meetings: [Meeting], query: String, topK: Int = 12) -> [Meeting] {
-        let terms = query.lowercased()
+        let q = query.lowercased()
+        let stop: Set<String> = [
+            "what", "about", "the", "and", "for", "you", "your", "from", "with", "this", "that",
+            "know", "tell", "me", "let", "most", "popular", "does", "how", "are", "any", "all",
+            "have", "has", "was", "were", "into", "docs", "doc", "content", "please", "recorded",
+        ]
+        let terms = q
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { $0.count >= 2 }
-        guard !terms.isEmpty else {
+            .filter { $0.count >= 2 && !stop.contains($0) }
+        // Multi-word phrase bonus (e.g. "financial planning")
+        let phrases: [String] = {
+            guard terms.count >= 2 else { return [] }
+            var p: [String] = []
+            for i in 0..<(terms.count - 1) {
+                p.append("\(terms[i]) \(terms[i + 1])")
+            }
+            return p
+        }()
+
+        guard !terms.isEmpty || !phrases.isEmpty else {
             return Array(meetings.sorted { $0.timestamp > $1.timestamp }.prefix(topK))
         }
 
@@ -131,29 +157,40 @@ class RAGEngine: @unchecked Sendable {
             let notes = m.manualNotes.lowercased()
             let transcript = m.transcript.lowercased()
             let folder = (m.groupName ?? "").lowercased()
+            // Normalize folder for matching (FinancialPlanning → financialplanning)
+            let folderLoose = folder.replacingOccurrences(of: " ", with: "")
             var s = 0
+
+            for phrase in phrases {
+                let compact = phrase.replacingOccurrences(of: " ", with: "")
+                if title.contains(phrase) || title.replacingOccurrences(of: " ", with: "").contains(compact) { s += 40 }
+                if folder.contains(phrase) || folderLoose.contains(compact) { s += 50 }
+                if summary.contains(phrase) { s += 20 }
+                if notes.contains(phrase) { s += 12 }
+            }
+
             for t in terms {
-                if title.contains(t) { s += 12 }
-                if folder.contains(t) { s += 4 }
-                if summary.contains(t) { s += 6 }
-                if notes.contains(t) { s += 3 }
+                if folder.contains(t) || folderLoose.contains(t) { s += 18 }
+                if title.contains(t) { s += 14 }
+                if summary.contains(t) { s += 8 }
+                if notes.contains(t) { s += 4 }
                 if transcript.contains(t) { s += 2 }
             }
-            // Prefer items that have any content
             if !summary.isEmpty { s += 1 }
             if !notes.isEmpty || !transcript.isEmpty { s += 1 }
             return s
         }
 
-        return meetings
+        let ranked = meetings
             .map { ($0, score($0)) }
             .filter { $0.1 > 0 }
             .sorted {
                 if $0.1 != $1.1 { return $0.1 > $1.1 }
                 return $0.0.timestamp > $1.0.timestamp
             }
-            .prefix(topK)
-            .map(\.0)
+
+        // Always surface positive keyword hits first; never drop a folder match for a 0-score giant article
+        return Array(ranked.prefix(topK).map(\.0))
     }
 
     /// Catalog line for library-wide questions (“what do I have?”).

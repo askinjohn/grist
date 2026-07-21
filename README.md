@@ -21,6 +21,7 @@ Capture meetings (mic + system audio), write notes, import **articles** or **You
 | **Folder summary** | Right-click a folder → **Summarize folder…** — choose action items / brief / custom specs; saves a new Note in that folder |
 | **Chat** | Per-item chat uses that item’s **AI summary + notes + transcript** (always re-fetched). Ask everything for whole library |
 | **RAG / search index** | Embeds title, AI summary, notes, and transcript for **Ask everything**. Rebuild in Settings. Needs `ollama pull nomic-embed-text` |
+| **Chat with selection** | Highlight text in Write → **Chat with selection** — answers use only that span |
 | **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
 | **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
