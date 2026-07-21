@@ -129,10 +129,11 @@ Sidebar search (top of the list) matches **title, notes, summary, transcript, fo
 
 ### Export
 
-- Open an item → toolbar **Export** → **Export Markdown…** (or **Copy as Markdown**)  
-- Keyboard: **⌘⇧E** for export dialog  
-- Right-click a sidebar row → Export Markdown…  
-- Right-click a **folder** → Export folder as Markdown… (one `.md` per item + `_index.md`)
+- Open an item → toolbar **Export** → **Export Markdown…**  
+- **Choose sections**: metadata, AI summary, notes, transcript, source links (or presets **Summary only** / **Full item**)  
+- Then **Save…** or **Copy**  
+- Keyboard: **⌘⇧E**  
+- Folder export uses the same section choices for every file (+ `_index.md`)
 
 ---
 

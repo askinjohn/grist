@@ -253,6 +253,11 @@ struct MainView: View {
     @State private var folderSummarizePreset: FolderSummarizePreset = .actionItems
     @State private var folderSummarizeCustomSpecs: String = ""
     @State private var isFolderSummarizing = false
+    /// Export section picker
+    @State private var showingExportOptionsSheet = false
+    @State private var exportTargetMeeting: Meeting? = nil
+    @State private var exportTargetFolder: String? = nil
+    @State private var exportOptions: ExportOptions = .default
 
     // AI Config
     @State private var selectedModel = "gemma2:2b"
@@ -396,7 +401,7 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .exportMeetingRequested)) { note in
             guard let id = note.object as? String,
                   let m = meetings.first(where: { $0.id == id }) ?? db.getMeeting(id: id) else { return }
-            exportMeeting(m)
+            openExportSheet(meeting: m)
         }
         .onReceive(NotificationCenter.default.publisher(for: .newMeetingRequested)) { note in
             let kind: CreateKind
@@ -571,7 +576,7 @@ struct MainView: View {
                                     .draggable(meeting.id)
                                     .contextMenu {
                                         Button {
-                                            exportMeeting(meeting)
+                                            openExportSheet(meeting: meeting)
                                         } label: {
                                             Label("Export Markdown…", systemImage: "square.and.arrow.up")
                                         }
@@ -659,6 +664,191 @@ struct MainView: View {
         }
         .sheet(isPresented: $showingFolderSummarizeSheet) {
             folderSummarizeSheet
+        }
+        .sheet(isPresented: $showingExportOptionsSheet) {
+            exportOptionsSheet
+        }
+    }
+
+    // MARK: - Export options sheet
+
+    private var exportOptionsSheet: some View {
+        let isFolder = exportTargetFolder != nil
+        let folderCount = exportTargetFolder.map { name in meetings.filter { ($0.groupName ?? "") == name }.count } ?? 0
+        let availability = exportTargetMeeting.map { exportOptions.availability(for: $0) }
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Export Markdown")
+                        .font(.title2.weight(.bold))
+                    if let folder = exportTargetFolder {
+                        Text("Folder “\(folder)” · \(folderCount) item\(folderCount == 1 ? "" : "s")")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else if let m = exportTargetMeeting {
+                        Text(m.title.isEmpty ? "Untitled" : m.title)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+                Button {
+                    showingExportOptionsSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Include")
+                    .font(.headline)
+
+                Text("Choose what goes into the file. Empty sections are skipped automatically.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    exportToggle("Metadata (type, date, folder)", isOn: $exportOptions.includeMetadata, enabled: true)
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "AI Summary",
+                        isOn: $exportOptions.includeSummary,
+                        enabled: isFolder || (availability?.hasSummary ?? true),
+                        emptyHint: !(availability?.hasSummary ?? true) && !isFolder
+                    )
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "Notes / article body",
+                        isOn: $exportOptions.includeNotes,
+                        enabled: isFolder || (availability?.hasNotes ?? true),
+                        emptyHint: !(availability?.hasNotes ?? true) && !isFolder
+                    )
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "Transcript / captions",
+                        isOn: $exportOptions.includeTranscript,
+                        enabled: isFolder || (availability?.hasTranscript ?? true),
+                        emptyHint: !(availability?.hasTranscript ?? true) && !isFolder
+                    )
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "Source links",
+                        isOn: $exportOptions.includeSources,
+                        enabled: isFolder || (availability?.hasSources ?? true),
+                        emptyHint: !(availability?.hasSources ?? true) && !isFolder
+                    )
+                }
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                HStack(spacing: 10) {
+                    Button("Summary only") {
+                        exportOptions = .summaryOnly
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Full item") {
+                        exportOptions = .full
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 16)
+
+            Divider()
+            HStack {
+                Button("Cancel") { showingExportOptionsSheet = false }
+                Spacer()
+                if !isFolder {
+                    Button {
+                        performExport(copyOnly: true)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.clipboard")
+                    }
+                    .disabled(!exportOptions.hasContentSelection)
+                }
+                Button {
+                    performExport(copyOnly: false)
+                } label: {
+                    Label(isFolder ? "Export folder…" : "Save…", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!exportOptions.hasContentSelection)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 460, height: 440)
+    }
+
+    private func exportToggle(_ title: String, isOn: Binding<Bool>, enabled: Bool, emptyHint: Bool = false) -> some View {
+        Toggle(isOn: isOn) {
+            HStack {
+                Text(title)
+                    .foregroundStyle(enabled ? .primary : .secondary)
+                if emptyHint {
+                    Text("(empty)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .toggleStyle(.checkbox)
+        .disabled(!enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func openExportSheet(meeting: Meeting) {
+        exportTargetMeeting = meeting
+        exportTargetFolder = nil
+        // Sensible default: summary on if present, else notes
+        var opts = ExportOptions.default
+        let a = opts.availability(for: meeting)
+        if a.hasSummary && !a.hasNotes && !a.hasTranscript {
+            opts = .summaryOnly
+        }
+        exportOptions = opts
+        showingExportOptionsSheet = true
+    }
+
+    private func openExportSheet(folder: String) {
+        exportTargetMeeting = nil
+        exportTargetFolder = folder
+        exportOptions = .default
+        showingExportOptionsSheet = true
+    }
+
+    private func performExport(copyOnly: Bool) {
+        let opts = exportOptions
+        if let folder = exportTargetFolder {
+            showingExportOptionsSheet = false
+            exportFolder(folder, options: opts)
+            return
+        }
+        guard let m = exportTargetMeeting else {
+            showingExportOptionsSheet = false
+            return
+        }
+        let md = NoteExporter.markdown(for: m, options: opts)
+        if copyOnly {
+            copyToPasteboard(md)
+            statusMessage = "Copied Markdown"
+            showingExportOptionsSheet = false
+            return
+        }
+        showingExportOptionsSheet = false
+        if let url = NoteExporter.saveMarkdownPanel(defaultName: NoteExporter.safeFilename(for: m), contents: md) {
+            statusMessage = "Exported \(url.lastPathComponent)"
         }
     }
 
@@ -1196,7 +1386,7 @@ struct MainView: View {
                 Label("Summarize folder…", systemImage: "sparkles")
             }
             Button {
-                exportFolder(name)
+                openExportSheet(folder: name)
             } label: {
                 Label("Export folder as Markdown…", systemImage: "square.and.arrow.up")
             }
@@ -2330,23 +2520,11 @@ struct MainView: View {
             if let m = selectedMeeting {
                 Menu {
                     Button {
-                        exportMeeting(m)
+                        openExportSheet(meeting: m)
                     } label: {
                         Label("Export Markdown…", systemImage: "square.and.arrow.up")
                     }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
-                    Button {
-                        copyFullExportToClipboard(m)
-                    } label: {
-                        Label("Copy as Markdown", systemImage: "doc.on.clipboard")
-                    }
-                    if !m.summary.isEmpty {
-                        Button {
-                            copySummaryToClipboard()
-                        } label: {
-                            Label("Copy Summary Only", systemImage: "doc.on.doc")
-                        }
-                    }
                     if let folder = m.groupName, !folder.isEmpty {
                         Divider()
                         Button {
@@ -2355,7 +2533,7 @@ struct MainView: View {
                             Label("Summarize Folder “\(folder)”…", systemImage: "sparkles")
                         }
                         Button {
-                            exportFolder(folder)
+                            openExportSheet(folder: folder)
                         } label: {
                             Label("Export Folder “\(folder)”…", systemImage: "folder")
                         }
@@ -2363,7 +2541,7 @@ struct MainView: View {
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help("Export this note/meeting as Markdown")
+                .help("Choose sections and export Markdown")
             }
 
             if selectedMeeting?.isNoteType == true {
@@ -2524,28 +2702,16 @@ struct MainView: View {
 
     // MARK: - Export
 
-    func exportMeeting(_ m: Meeting) {
-        let md = NoteExporter.markdown(for: m)
-        if let url = NoteExporter.saveMarkdownPanel(defaultName: NoteExporter.safeFilename(for: m), contents: md) {
-            statusMessage = "Exported \(url.lastPathComponent)"
-        }
-    }
-
-    func exportFolder(_ name: String) {
+    func exportFolder(_ name: String, options: ExportOptions = .default) {
         let items = meetings.filter { ($0.groupName ?? "") == name }
         guard !items.isEmpty else {
             statusMessage = "Folder is empty"
             return
         }
-        if let dir = NoteExporter.saveFolderPanel(meetings: items, suggestedName: name) {
+        if let dir = NoteExporter.saveFolderPanel(meetings: items, suggestedName: name, options: options) {
             statusMessage = "Exported \(items.count) files → \(dir.lastPathComponent)"
             NSWorkspace.shared.open(dir)
         }
-    }
-
-    func copyFullExportToClipboard(_ m: Meeting) {
-        copyToPasteboard(NoteExporter.markdown(for: m))
-        statusMessage = "Copied Markdown"
     }
 
     var groupedMeetings: [MeetingGroup] {
