@@ -134,6 +134,87 @@ class OllamaClient: @unchecked Sendable {
         var summary: String
     }
 
+    struct OrganizeResult: Sendable {
+        var title: String?
+        var folder: String?
+    }
+
+    /// One call: TITLE + FOLDER for auto-organize (no full summary).
+    func organizeMetadata(
+        content: String,
+        kind: String,
+        existingFolders: [String],
+        needsTitle: Bool,
+        needsFolder: Bool,
+        model: String
+    ) async throws -> OrganizeResult {
+        let snippet = String(content.prefix(2500))
+        let folderList = existingFolders.isEmpty
+            ? "(none yet — invent a short 1–3 word folder if useful)"
+            : existingFolders.sorted().joined(separator: ", ")
+
+        var rules: [String] = []
+        if needsTitle {
+            rules.append("TITLE: <max 8 words, no quotes>")
+        } else {
+            rules.append("TITLE: KEEP")
+        }
+        if needsFolder {
+            rules.append("FOLDER: <exact existing folder name if it fits, OR a new short 1–3 word name, OR NONE>")
+        } else {
+            rules.append("FOLDER: KEEP")
+        }
+
+        let prompt = """
+        You organize notes in a personal knowledge app.
+        Item type: \(kind)
+
+        Existing folders: [\(folderList)]
+
+        Reply with EXACTLY two lines and nothing else:
+        \(rules.joined(separator: "\n"))
+
+        Rules:
+        - If TITLE must KEEP, output exactly: TITLE: KEEP
+        - If FOLDER must KEEP, output exactly: FOLDER: KEEP
+        - Prefer an existing folder when it clearly fits the topic
+        - Use NONE only if no folder is appropriate
+        - No markdown, no extra commentary
+
+        Content:
+        \(snippet)
+        """
+
+        let raw = try await generateText(prompt: prompt, model: model, timeout: 60)
+        return Self.parseOrganizeOutput(raw, needsTitle: needsTitle, needsFolder: needsFolder)
+    }
+
+    static func parseOrganizeOutput(_ raw: String, needsTitle: Bool, needsFolder: Bool) -> OrganizeResult {
+        var title: String? = nil
+        var folder: String? = nil
+        for line in raw.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if let r = t.range(of: #"^TITLE\s*:\s*"#, options: [.regularExpression, .caseInsensitive]) {
+                let v = cleanTitle(String(t[r.upperBound...]))
+                if needsTitle, !v.isEmpty, v.uppercased() != "KEEP" {
+                    title = v
+                }
+            } else if let r = t.range(of: #"^FOLDER\s*:\s*"#, options: [.regularExpression, .caseInsensitive]) {
+                var v = String(t[r.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                v = v.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if needsFolder, !v.isEmpty {
+                    let upper = v.uppercased()
+                    if upper != "KEEP" && upper != "NONE" && upper != "N/A" && upper != "UNFILED" {
+                        // Normalize length
+                        if v.count > 40 { v = String(v.prefix(40)) }
+                        folder = v
+                    }
+                }
+            }
+        }
+        return OrganizeResult(title: title, folder: folder)
+    }
+
     /// Short human title only — used when enhance is skipped (e.g. Auto off).
     func suggestTitle(content: String, kind: String = "meeting", model: String) async throws -> String {
         let snippet = String(content.prefix(2500))

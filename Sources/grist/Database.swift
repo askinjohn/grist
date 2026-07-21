@@ -220,7 +220,34 @@ class Database {
         sqlite3_finalize(statement)
     }
     
-    func deleteFolder(_ name: String) {
+    enum FolderDeleteContentsMode {
+        /// Keep notes/meetings; clear their folder → Unfiled
+        case moveToUnfiled
+        /// Soft-delete notes/meetings in the folder (`is_deleted = 1`)
+        case softDeleteContents
+    }
+
+    /// Remove the folder. Contents are either unfiled or soft-deleted.
+    func deleteFolder(_ name: String, contents: FolderDeleteContentsMode) {
+        switch contents {
+        case .moveToUnfiled:
+            let unfile = "UPDATE meetings SET group_name = '' WHERE group_name = ? AND is_deleted = 0;"
+            var unfileStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, unfile, -1, &unfileStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(unfileStmt, 1, (name as NSString).utf8String, -1, nil)
+                sqlite3_step(unfileStmt)
+            }
+            sqlite3_finalize(unfileStmt)
+        case .softDeleteContents:
+            let soft = "UPDATE meetings SET is_deleted = 1 WHERE group_name = ? AND is_deleted = 0;"
+            var softStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, soft, -1, &softStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(softStmt, 1, (name as NSString).utf8String, -1, nil)
+                sqlite3_step(softStmt)
+            }
+            sqlite3_finalize(softStmt)
+        }
+
         let query = "DELETE FROM folders WHERE name = ?"
         var statement: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &statement, nil) == SQLITE_OK {

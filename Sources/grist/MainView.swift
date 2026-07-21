@@ -213,6 +213,16 @@ struct MainView: View {
     @State private var noteFormatCommand: MarkdownFormatCommand? = nil
     @State private var noteShowPreview = false
 
+    // Auto-organize
+    @State private var isOrganizing = false
+    @State private var showingOrganizeReport = false
+    @State private var organizeReportLines: [String] = []
+    @State private var organizeReportTitle = "Auto-organize"
+
+    // Delete folder
+    @State private var folderPendingDelete: String? = nil
+    @State private var showingDeleteFolderConfirm = false
+
     private let db = Database.shared
     private let recorder = AudioRecorder.shared
     private let transcriber = WhisperTranscriber.shared
@@ -312,9 +322,11 @@ struct MainView: View {
             if let id {
                 loadDetails(id: id)
                 if let m = selectedMeeting {
-                    // Notes open on Write; meetings keep last tab or summary
+                    // Notes open on Write; long imports default to Preview (reading mode)
                     if m.isNoteType {
                         selectedTab = "notes"
+                        let longBody = m.manualNotes.count > 400 || m.transcript.count > 400
+                        noteShowPreview = longBody
                     }
                     if (m.groupName?.isEmpty ?? true), !m.transcript.isEmpty {
                         generateGroupSuggestion(for: m)
@@ -338,6 +350,46 @@ struct MainView: View {
             }
             .padding(.horizontal, 12)
             .padding(.top, 12)
+            .padding(.bottom, 6)
+
+            // Single-button auto-organize for unfiled / untitled items
+            Button {
+                runAutoOrganize()
+            } label: {
+                HStack(spacing: 8) {
+                    if isOrganizing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "sparkles.rectangle.stack")
+                    }
+                    Text(isOrganizing ? "Organizing…" : "Auto-organize")
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    let n = itemsNeedingOrganize.count
+                    if n > 0 && !isOrganizing {
+                        Text("\(n)")
+                            .font(.caption.monospacedDigit().weight(.bold))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 2)
+                            .background(Color.purple.opacity(0.2))
+                            .clipShape(Capsule())
+                    }
+                }
+                .foregroundStyle(.purple)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(Color.purple.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.purple.opacity(0.25), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(isOrganizing || itemsNeedingOrganize.isEmpty)
+            .help("Name untitled items and file unfiled ones, then show a summary")
+            .padding(.horizontal, 12)
             .padding(.bottom, 8)
 
             List(selection: $selectedMeeting) {
@@ -420,9 +472,191 @@ struct MainView: View {
             }
             Button("Cancel", role: .cancel) { }
         }
+        .sheet(isPresented: $showingDeleteFolderConfirm) {
+            deleteFolderSheet
+        }
         .sheet(isPresented: $showingImportUrlAlert) {
             importURLSheet
         }
+        .sheet(isPresented: $showingOrganizeReport) {
+            organizeReportSheet
+        }
+    }
+
+    @ViewBuilder
+    private var deleteFolderSheet: some View {
+        let name = folderPendingDelete ?? ""
+        let count = meetings.filter { ($0.groupName ?? "") == name }.count
+
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Delete folder")
+                        .font(.title2.weight(.bold))
+                    Text(name.isEmpty ? "" : "“\(name)”")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingDeleteFolderConfirm = false
+                    folderPendingDelete = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 16) {
+                if count == 0 {
+                    Text("This folder is empty. Deleting it only removes the folder.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("This folder has \(count) item\(count == 1 ? "" : "s"). Choose what to do with them:")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    VStack(spacing: 10) {
+                        Button {
+                            confirmDeleteFolder(contents: .moveToUnfiled)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: "tray.and.arrow.down.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.blue)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Move to Unfiled")
+                                        .font(.headline)
+                                    Text("Keep all notes/meetings; only remove the folder.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer()
+                            }
+                            .padding(14)
+                            .background(Color.blue.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+
+                        Button {
+                            confirmDeleteFolder(contents: .softDeleteContents)
+                        } label: {
+                            HStack(alignment: .top, spacing: 12) {
+                                Image(systemName: "trash.fill")
+                                    .font(.title3)
+                                    .foregroundStyle(.red)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Delete all contents")
+                                        .font(.headline)
+                                        .foregroundStyle(.red)
+                                    Text("Soft-delete every item in the folder (hidden, not erased from disk). Then remove the folder.")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(.leading)
+                                }
+                                Spacer()
+                            }
+                            .padding(14)
+                            .background(Color.red.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(24)
+
+            Spacer(minLength: 8)
+            Divider()
+            HStack {
+                if count == 0 {
+                    Button("Delete folder", role: .destructive) {
+                        confirmDeleteFolder(contents: .moveToUnfiled)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
+                Spacer()
+                Button("Cancel") {
+                    showingDeleteFolderConfirm = false
+                    folderPendingDelete = nil
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 440, height: count == 0 ? 220 : 360)
+    }
+
+    private var organizeReportSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(organizeReportTitle)
+                        .font(.title2.weight(.bold))
+                    Text("Untitled items got names; unfiled items got folders when the AI found a fit.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingOrganizeReport = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            Divider()
+
+            if organizeReportLines.isEmpty {
+                Text("Nothing needed organizing.")
+                    .foregroundStyle(.secondary)
+                    .padding(24)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(Array(organizeReportLines.enumerated()), id: \.offset) { _, line in
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Text(line)
+                                    .font(.callout)
+                                    .textSelection(.enabled)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                    }
+                    .padding(24)
+                }
+            }
+
+            Divider()
+            HStack {
+                Spacer()
+                Button("Done") { showingOrganizeReport = false }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 480, height: 420)
     }
 
     private var sidebarFooter: some View {
@@ -521,6 +755,46 @@ struct MainView: View {
                 focusedFolder = name
                 openCreateSheet(kind: .note)
             }
+            Divider()
+            Button("Delete Folder…", role: .destructive) {
+                folderPendingDelete = name
+                showingDeleteFolderConfirm = true
+            }
+        }
+    }
+
+    private func confirmDeleteFolder(contents: Database.FolderDeleteContentsMode) {
+        guard let name = folderPendingDelete else { return }
+        let count = meetings.filter { ($0.groupName ?? "") == name }.count
+        let selectedWasInFolder = selectedMeeting?.groupName == name
+
+        db.deleteFolder(name, contents: contents)
+
+        if focusedFolder == name {
+            focusedFolder = nil
+            libraryFilter = contents == .softDeleteContents ? .all : .unfiled
+        }
+        loadMeetings()
+
+        // If the open item was soft-deleted, clear selection
+        if selectedWasInFolder, contents == .softDeleteContents {
+            selectedMeeting = meetings.first
+        } else if let id = selectedMeeting?.id {
+            selectedMeeting = meetings.first(where: { $0.id == id }) ?? meetings.first
+        }
+
+        folderPendingDelete = nil
+        showingDeleteFolderConfirm = false
+
+        switch contents {
+        case .moveToUnfiled:
+            statusMessage = count > 0
+                ? "Deleted “\(name)” — \(count) item\(count == 1 ? "" : "s") → Unfiled"
+                : "Deleted folder “\(name)”"
+        case .softDeleteContents:
+            statusMessage = count > 0
+                ? "Deleted “\(name)” and soft-deleted \(count) item\(count == 1 ? "" : "s")"
+                : "Deleted folder “\(name)”"
         }
     }
 
@@ -530,7 +804,7 @@ struct MainView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Import URL")
                         .font(.title2.weight(.bold))
-                    Text("Article or page → note, optionally filed in a folder.")
+                    Text("YouTube → captions + summary. Articles → page text. Pick a folder if you want.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -552,11 +826,22 @@ struct MainView: View {
                     Text("URL")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
-                    TextField("https://…", text: $importUrlString)
+                    TextField("https://youtube.com/watch?v=… or article URL", text: $importUrlString)
                         .textFieldStyle(.plain)
                         .padding(12)
                         .background(Color.primary.opacity(0.05))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    if YouTubeImporter.isYouTubeURL(importUrlString) {
+                        HStack(spacing: 6) {
+                            Image(systemName: YouTubeImporter.resolveYtDlpPath() == nil ? "exclamationmark.triangle.fill" : "play.rectangle.fill")
+                                .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .red)
+                            Text(YouTubeImporter.resolveYtDlpPath() == nil
+                                 ? "YouTube detected — install yt-dlp: brew install yt-dlp"
+                                 : "YouTube detected — will pull captions via yt-dlp")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
@@ -622,13 +907,9 @@ struct MainView: View {
         importUrlString = ""
         importIsCreatingFolder = false
         importNewFolderName = ""
-        if let f = focusedFolder {
-            importFolderSelection = f
-        } else if let g = selectedMeeting?.groupName, !g.isEmpty {
-            importFolderSelection = g
-        } else {
-            importFolderSelection = ""
-        }
+        // Always start Unfiled — don't inherit Cooking/etc. from sidebar focus.
+        // User can pick a folder chip explicitly before Import.
+        importFolderSelection = ""
         showingImportUrlAlert = true
     }
 
@@ -732,131 +1013,192 @@ struct MainView: View {
     @ViewBuilder
     var noteWritingSurface: some View {
         VStack(spacing: 0) {
-            // Format toolbar
-            HStack(spacing: 12) {
+            // Slim format bar
+            HStack(spacing: 10) {
                 MarkdownFormatToolbar(pendingFormat: $noteFormatCommand)
-                Spacer()
+                Spacer(minLength: 8)
                 Picker("", selection: $noteShowPreview) {
-                    Text("Edit").tag(false)
-                    Text("Preview").tag(true)
+                    Image(systemName: "square.and.pencil").tag(false)
+                    Image(systemName: "doc.richtext").tag(true)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 140)
-                .help("Preview renders markdown (bold, lists, etc.)")
+                .frame(width: 88)
+                .help(noteShowPreview ? "Switch to edit" : "Preview markdown")
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.02))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
 
             Divider()
 
             if noteShowPreview {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
-                            .font(.system(size: 28, weight: .bold))
-                        if let body = selectedMeeting?.manualNotes, !body.isEmpty {
-                            MarkdownView(markdown: body)
-                                .frame(minHeight: 400)
-                        } else {
-                            Text("Nothing to preview yet — switch to Edit and write some markdown.")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(48)
-                    .frame(maxWidth: 720)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                noteReadingView
             } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    // Large inline title
-                    TextField("Note title", text: Binding(
-                        get: { selectedMeeting?.title ?? "" },
-                        set: { selectedMeeting?.title = $0; saveMeeting() }
-                    ))
-                    .font(.system(size: 28, weight: .bold, design: .default))
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 48)
-                    .padding(.top, 28)
-                    .padding(.bottom, 8)
-                    .frame(maxWidth: 720)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if let m = selectedMeeting {
-                        HStack(spacing: 10) {
-                            Label(m.formattedCreated, systemImage: "calendar")
-                            if let folder = m.groupName, !folder.isEmpty {
-                                Label(folder, systemImage: "folder.fill")
-                            } else {
-                                Label("Unfiled", systemImage: "tray")
-                            }
-                            let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
-                            if words > 0 {
-                                Label("\(words) words", systemImage: "text.alignleft")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 48)
-                        .padding(.bottom, 12)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-
-                    Text("Select text, then use the toolbar — **bold**, *italic*, lists, and more (markdown).")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .padding(.horizontal, 48)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    Rectangle()
-                        .fill(Color.primary.opacity(0.08))
-                        .frame(height: 1)
-                        .padding(.horizontal, 48)
-                        .padding(.bottom, 8)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    ZStack(alignment: .topLeading) {
-                        if (selectedMeeting?.manualNotes ?? "").isEmpty {
-                            Text("Start writing…\n\nTip: select a word → B for **bold**, or type markdown directly.")
-                                .font(.system(size: 16))
-                                .foregroundStyle(.tertiary)
-                                .padding(.horizontal, 48)
-                                .padding(.top, 12)
-                                .allowsHitTesting(false)
-                        }
-
-                        MarkdownNoteEditor(
-                            text: Binding(
-                                get: { selectedMeeting?.manualNotes ?? "" },
-                                set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
-                            ),
-                            pendingFormat: $noteFormatCommand,
-                            fontSize: 16
-                        )
-                        .padding(.horizontal, 40)
-                        .padding(.bottom, 24)
-                        .frame(maxWidth: 720)
-                        .frame(maxWidth: .infinity, minHeight: 360, alignment: .leading)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                noteEditingView
             }
         }
-        .background(
-            LinearGradient(
-                colors: [
-                    Color(NSColor.controlBackgroundColor).opacity(0.35),
-                    Color(NSColor.windowBackgroundColor)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
+        .background(Color(NSColor.textBackgroundColor))
+    }
+
+    /// Full-width reading layout — title + body span the whole detail pane.
+    @ViewBuilder
+    var noteReadingView: some View {
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(selectedMeeting?.title.isEmpty == false ? (selectedMeeting?.title ?? "") : "Untitled")
+                        .font(.system(size: 28, weight: .bold, design: .default))
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .multilineTextAlignment(.leading)
+
+                    if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
+                        noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+                .frame(width: geo.size.width, alignment: .leading)
+
+                Divider()
+
+                if let body = selectedMeeting?.manualNotes, !body.isEmpty {
+                    let display = stripSourceHeader(from: body)
+                    MarkdownView(markdown: display, bodyFontSize: 16, contentPadding: 24)
+                        .frame(width: geo.size.width, height: max(200, geo.size.height - 160), alignment: .topLeading)
+                } else {
+                    Text("Nothing to preview yet — switch to edit and write.")
+                        .foregroundStyle(.secondary)
+                        .padding(24)
+                        .frame(width: geo.size.width, alignment: .topLeading)
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.textBackgroundColor))
+    }
+
+    @ViewBuilder
+    var noteEditingView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            TextField("Note title", text: Binding(
+                get: { selectedMeeting?.title ?? "" },
+                set: { selectedMeeting?.title = $0; saveMeeting() }
+            ), axis: .vertical)
+            .font(.system(size: 26, weight: .bold, design: .default))
+            .textFieldStyle(.plain)
+            .lineLimit(1...4)
+            .padding(.horizontal, 28)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let m = selectedMeeting, let link = extractSourceURL(from: m.manualNotes) {
+                noteSourceCard(urlString: link, isYouTube: link.contains("youtube") || link.contains("youtu.be"))
+                    .padding(.horizontal, 28)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 1)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 4)
+
+            ZStack(alignment: .topLeading) {
+                if (selectedMeeting?.manualNotes ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Start writing…\n\nSelect text and use the toolbar for **bold**, lists, and more.")
+                        .font(.system(size: 16))
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 28)
+                        .padding(.top, 14)
+                        .allowsHitTesting(false)
+                }
+
+                MarkdownNoteEditor(
+                    text: Binding(
+                        get: { selectedMeeting?.manualNotes ?? "" },
+                        set: { selectedMeeting?.manualNotes = $0; saveMeeting() }
+                    ),
+                    pendingFormat: $noteFormatCommand,
+                    fontSize: 16
+                )
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder
+    func noteSourceCard(urlString: String, isYouTube: Bool) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: isYouTube ? "play.rectangle.fill" : "link.circle.fill")
+                .font(.title2)
+                .foregroundStyle(isYouTube ? .red : .blue)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(isYouTube ? "YouTube source" : "Web source")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Text(urlString)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Button("Open") {
+                if let u = URL(string: urlString) {
+                    NSWorkspace.shared.open(u)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
         )
+    }
+
+    /// Pull first markdown link or raw URL from note header.
+    private func extractSourceURL(from notes: String) -> String? {
+        // [label](url)
+        if let regex = try? NSRegularExpression(pattern: #"\[[^\]]*\]\((https?://[^)\s]+)\)"#),
+           let match = regex.firstMatch(in: notes, range: NSRange(notes.startIndex..., in: notes)),
+           let r = Range(match.range(at: 1), in: notes) {
+            return String(notes[r])
+        }
+        // Source: https://...
+        if let regex = try? NSRegularExpression(pattern: #"https?://[^\s)]+"#),
+           let match = regex.firstMatch(in: notes, range: NSRange(notes.startIndex..., in: notes)),
+           let r = Range(match.range, in: notes) {
+            return String(notes[r])
+        }
+        return nil
+    }
+
+    /// Remove leading source markdown link lines so reading view isn't redundant with the card.
+    private func stripSourceHeader(from notes: String) -> String {
+        var lines = notes.components(separatedBy: .newlines)
+        while let first = lines.first {
+            let t = first.trimmingCharacters(in: .whitespaces)
+            if t.isEmpty { lines.removeFirst(); continue }
+            if t.hasPrefix("[Open on YouTube]") || t.hasPrefix("[Source]") { lines.removeFirst(); continue }
+            if t.lowercased().hasPrefix("source:") { lines.removeFirst(); continue }
+            if t.lowercased().hasPrefix("captions:") { lines.removeFirst(); continue }
+            break
+        }
+        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     @ViewBuilder
@@ -931,6 +1273,10 @@ struct MainView: View {
                 let words = m.manualNotes.split { $0.isWhitespace || $0.isNewline }.filter { !$0.isEmpty }.count
                 if words > 0 {
                     metaChip(icon: "text.alignleft", text: "\(words) words")
+                }
+                if let link = extractSourceURL(from: m.manualNotes),
+                   link.contains("youtube") || link.contains("youtu.be") {
+                    metaChip(icon: "play.rectangle.fill", text: "YouTube")
                 }
                 if m.isPlaceholderTitle && !noteBodyEmpty {
                     Button {
@@ -1379,10 +1725,9 @@ struct MainView: View {
 
     // MARK: - Create Sheet helpers
 
+    /// Default create folder: Unfiled (don't inherit sidebar focus — that mis-filed YT into Cooking).
     private func preferredCreateFolder() -> String {
-        if let f = focusedFolder, !f.isEmpty { return f }
-        if let g = selectedMeeting?.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty { return g }
-        return ""
+        ""
     }
 
     /// Open create sheet; kind is owned entirely by the sheet view.
@@ -1540,19 +1885,23 @@ struct MainView: View {
     
     func importFromUrl() {
         logImport("importFromUrl called with string: '\(importUrlString)'")
-        let url = importUrlString.trimmingCharacters(in: .whitespaces)
-        guard !url.isEmpty else { 
+        let url = importUrlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else {
             logImport("URL was empty, aborting.")
-            return 
+            return
         }
-        
+
         isImportingUrl = true
+        statusMessage = YouTubeImporter.isYouTubeURL(url)
+            ? "Fetching YouTube captions…"
+            : "Fetching page…"
+
         Task {
             logImport("Starting Task to fetch URL: \(url)")
             do {
                 let result = try await URLFetcher.shared.fetchContent(from: url)
-                logImport("Successfully fetched content: \(result.title) (length: \(result.content.count))")
-                
+                logImport("Successfully fetched (\(result.sourceKind)): \(result.title) (length: \(result.content.count))")
+
                 await MainActor.run {
                     var folder: String? = nil
                     if importIsCreatingFolder {
@@ -1567,24 +1916,46 @@ struct MainView: View {
                         if let folder { db.saveFolder(folder) }
                     }
 
-                    var newMeeting = Meeting(
+                    // Notes UI Write tab uses `manualNotes`; Enhance/RAG use `transcript`.
+                    // Keep body clean (paragraphs). Source is shown as a chip / markdown link header.
+                    let body = result.content
+                    let notes: String = {
+                        if result.sourceKind == "youtube" {
+                            return """
+                            [Open on YouTube](\(url))
+
+                            \(body)
+                            """
+                        }
+                        return """
+                        [Source](\(url))
+
+                        \(body)
+                        """
+                    }()
+
+                    let newMeeting = Meeting(
                         id: UUID().uuidString,
                         title: result.title,
                         timestamp: Date().timeIntervalSince1970,
-                        manualNotes: "",
-                        transcript: result.content,
+                        manualNotes: notes,
+                        transcript: body,
                         summary: "",
                         template: "Note",
                         groupName: folder,
                         isDeleted: false
                     )
-                    newMeeting.transcript = result.content
 
                     db.saveMeeting(newMeeting)
                     loadMeetings()
                     if let folder { focusedFolder = folder }
                     selectedMeeting = meetings.first(where: { $0.id == newMeeting.id })
-                    selectedTab = "summary"
+                    selectedTab = "notes"
+                    // Long caption dumps are easier in reading mode first
+                    noteShowPreview = result.sourceKind == "youtube" || body.count > 400
+                    statusMessage = result.sourceKind == "youtube"
+                        ? "YouTube captions imported (\(body.count) chars)"
+                        : "Page imported"
 
                     if autoEnhance {
                         logImport("Triggering runEnhance()")
@@ -1597,10 +1968,11 @@ struct MainView: View {
                 }
             } catch {
                 logImport("Import failed with error: \(error)")
-                await MainActor.run { 
+                await MainActor.run {
                     importErrorMessage = error.localizedDescription
                     showingImportErrorAlert = true
-                    isImportingUrl = false 
+                    statusMessage = "Import failed"
+                    isImportingUrl = false
                 }
             }
         }
@@ -1813,6 +2185,107 @@ struct MainView: View {
                 await MainActor.run {
                     statusMessage = "Error: \(error.localizedDescription)"
                 }
+            }
+        }
+    }
+
+    /// Items missing a real title and/or a folder, with enough content to organize.
+    var itemsNeedingOrganize: [Meeting] {
+        meetings.filter { m in
+            let unfiled = (m.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+            let untitled = m.isPlaceholderTitle
+            guard unfiled || untitled else { return false }
+            let content = organizeContent(for: m)
+            return !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && !content.hasPrefix("[Error")
+        }
+    }
+
+    private func organizeContent(for m: Meeting) -> String {
+        if !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") { return m.transcript }
+        if !m.manualNotes.isEmpty { return m.manualNotes }
+        return m.summary
+    }
+
+    /// Single-button: fix missing titles + folders, then show a report popup.
+    func runAutoOrganize() {
+        let targets = itemsNeedingOrganize
+        guard !targets.isEmpty else {
+            organizeReportTitle = "Auto-organize"
+            organizeReportLines = ["Nothing to do — every item already has a name and folder (or no content yet)."]
+            showingOrganizeReport = true
+            return
+        }
+
+        let model = selectedModel == "custom" ? customModelName : selectedModel
+        guard !model.isEmpty else {
+            statusMessage = "Pick an AI model first"
+            return
+        }
+
+        isOrganizing = true
+        statusMessage = "Organizing \(targets.count)…"
+        let folderSnapshot = folders
+
+        Task {
+            var lines: [String] = []
+            var success = 0
+            var failed = 0
+
+            for m in targets {
+                let needsTitle = m.isPlaceholderTitle
+                let needsFolder = (m.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+                let content = organizeContent(for: m)
+                let oldTitle = m.title
+
+                do {
+                    let result = try await ollama.organizeMetadata(
+                        content: content,
+                        kind: m.kindLabel.lowercased(),
+                        existingFolders: folderSnapshot,
+                        needsTitle: needsTitle,
+                        needsFolder: needsFolder,
+                        model: model
+                    )
+
+                    var updated = m
+                    var parts: [String] = []
+
+                    if needsTitle, let t = result.title, !t.isEmpty {
+                        updated.title = t
+                        parts.append("titled “\(t)”")
+                    }
+                    if needsFolder, let f = result.folder, !f.isEmpty {
+                        updated.groupName = f
+                        await MainActor.run { db.saveFolder(f) }
+                        parts.append("filed in “\(f)”")
+                    }
+
+                    if parts.isEmpty {
+                        lines.append("• \(oldTitle) — no change (AI returned KEEP/NONE)")
+                    } else {
+                        await MainActor.run {
+                            db.saveMeeting(updated)
+                        }
+                        success += 1
+                        let label = needsTitle ? oldTitle : updated.title
+                        lines.append("• \(label) → " + parts.joined(separator: ", "))
+                    }
+                } catch {
+                    failed += 1
+                    lines.append("• \(oldTitle) — failed: \(error.localizedDescription)")
+                }
+            }
+
+            await MainActor.run {
+                loadMeetings()
+                isOrganizing = false
+                statusMessage = "Organized \(success)"
+                organizeReportTitle = failed == 0
+                    ? "Organized \(success) item\(success == 1 ? "" : "s")"
+                    : "Organized \(success), \(failed) failed"
+                organizeReportLines = lines
+                showingOrganizeReport = true
             }
         }
     }
