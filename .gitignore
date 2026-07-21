@@ -1,0 +1,38 @@
+.DS_Store
+/.build
+/Packages
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
+# App bundles (built locally)
+Grist.app/
+*.app/
+
+# Whisper / ML model blobs (downloaded by setup)
+*.bin
+*.mlmodelc
+*.mlmodel
+
+# User data / local DBs
+*.db
+*.db-shm
+*.db-wal
+
+# Audio recordings
+*.wav
+*.m4a
+*.mov
+*.mp3
+*.aac
+
+# MCP: dependencies + compiled standalone binary (built by setup.sh)
+grist-mcp-server/node_modules/
+grist-mcp-server/grist-mcp-server
+grist-mcp-server/package-lock.json
+
+# macOS junk
+.AppleDouble
+.LSOverride

@@ -1,0 +1,286 @@
+#!/bin/bash
+# Grist interactive setup — clone, run this once, then ./build_app.sh
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
+cd "$SCRIPT_DIR"
+
+BUNDLE_ID="com.grist.meetingassistant"
+GRIST_DATA_DIR="$HOME/Library/Application Support/Grist"
+
+echo "╔══════════════════════════════════════════════╗"
+echo "║         Grist Setup Wizard (macOS)           ║"
+echo "║   Local AI meeting assistant — privacy first ║"
+echo "╚══════════════════════════════════════════════╝"
+echo ""
+
+# ── helpers ──────────────────────────────────────────────────────────
+ask_yn() {
+    local prompt="$1"
+    local default="${2:-y}"
+    local reply
+    if [[ "$default" == "y" ]]; then
+        read -r -p "$prompt [Y/n]: " reply || true
+        reply=${reply:-y}
+    else
+        read -r -p "$prompt [y/N]: " reply || true
+        reply=${reply:-n}
+    fi
+    [[ "$reply" =~ ^[Yy]$ ]]
+}
+
+require_cmd() {
+    if ! command -v "$1" &>/dev/null; then
+        echo "❌ Missing required command: $1"
+        echo "   $2"
+        exit 1
+    fi
+}
+
+# ── 0. Preconditions ─────────────────────────────────────────────────
+echo "📦 Checking system prerequisites..."
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "❌ Grist is a native macOS app (requires Apple Silicon / Intel Mac)."
+    exit 1
+fi
+
+if ! command -v brew &>/dev/null; then
+    echo "❌ Homebrew is required. Install from https://brew.sh/ then re-run."
+    exit 1
+fi
+
+if ! xcode-select -p &>/dev/null; then
+    echo "❌ Xcode Command Line Tools missing."
+    echo "   Run: xcode-select --install"
+    exit 1
+fi
+
+require_cmd swift "Install Xcode Command Line Tools: xcode-select --install"
+require_cmd git "Install git via Homebrew: brew install git"
+
+if ! command -v cmake &>/dev/null; then
+    echo "Installing cmake (needed for whisper.cpp)..."
+    brew install cmake
+fi
+
+echo "Installing ffmpeg..."
+brew install ffmpeg
+
+mkdir -p "$GRIST_DATA_DIR"
+
+# ── 1. AI provider ───────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════"
+echo "🤖 Step 1: AI configuration"
+echo "═══════════════════════════════════════════════"
+echo "How should Grist generate summaries and chat?"
+echo "  1) Ollama on this Mac (recommended, fully private)"
+echo "  2) Ollama on another machine (remote URL)"
+echo "  3) OpenAI-compatible API (OpenAI, SpaceXAI, LM Studio, etc.)"
+echo ""
+read -r -p "Choice [1/2/3] (default 1): " ai_choice || true
+ai_choice=${ai_choice:-1}
+
+case "$ai_choice" in
+    2)
+        read -r -p "Remote Ollama URL (e.g. http://192.168.1.100:11434): " custom_ollama_url
+        if [[ -z "${custom_ollama_url// }" ]]; then
+            echo "❌ URL required."
+            exit 1
+        fi
+        defaults write "$BUNDLE_ID" aiProviderType "Ollama"
+        defaults write "$BUNDLE_ID" OllamaURL "$custom_ollama_url"
+        echo "✅ Using remote Ollama at $custom_ollama_url"
+        echo "   Ensure that host has models: gemma2:2b (or your chat model) + nomic-embed-text"
+        ;;
+    3)
+        read -r -p "API base URL [https://api.openai.com/v1]: " api_url || true
+        api_url=${api_url:-https://api.openai.com/v1}
+        read -r -p "API key: " api_key
+        read -r -p "Model name [gpt-4o]: " api_model || true
+        api_model=${api_model:-gpt-4o}
+        if [[ -z "${api_key// }" ]]; then
+            echo "❌ API key required for OpenAI-compatible mode."
+            exit 1
+        fi
+        defaults write "$BUNDLE_ID" aiProviderType "OpenAI Compatible"
+        defaults write "$BUNDLE_ID" openAIBaseURL "$api_url"
+        defaults write "$BUNDLE_ID" openAIAPIKey "$api_key"
+        defaults write "$BUNDLE_ID" openAIModel "$api_model"
+        # Keep a local Ollama URL empty-ish default for any residual paths
+        defaults write "$BUNDLE_ID" OllamaURL "http://127.0.0.1:11434"
+        echo "✅ OpenAI-compatible provider saved (model: $api_model)"
+        echo "   Note: embeddings/RAG work best if the API supports an embedding model."
+        ;;
+    *)
+        echo "Installing Ollama locally..."
+        brew install ollama
+        # Start service if available
+        if brew services list 2>/dev/null | grep -qi ollama; then
+            brew services start ollama 2>/dev/null || brew services start Ollama 2>/dev/null || true
+        fi
+        # Also try launching ollama serve in case services aren't used
+        if ! curl -sf --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
+            echo "Starting ollama serve in background..."
+            nohup ollama serve >/dev/null 2>&1 &
+            sleep 2
+        fi
+
+        echo "Pulling gemma2:2b (summaries + chat)..."
+        ollama pull gemma2:2b
+        echo "Pulling nomic-embed-text (RAG embeddings)..."
+        ollama pull nomic-embed-text
+
+        defaults write "$BUNDLE_ID" aiProviderType "Ollama"
+        defaults write "$BUNDLE_ID" OllamaURL "http://127.0.0.1:11434"
+        echo "✅ Local Ollama ready at http://127.0.0.1:11434"
+        ;;
+esac
+
+# ── 2. Whisper ───────────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════"
+echo "🧠 Step 2: Speech-to-text (Whisper)"
+echo "═══════════════════════════════════════════════"
+
+if ask_yn "Do you already have whisper.cpp built on this machine?" "n"; then
+    read -r -p "Path to whisper-cli binary: " custom_whisper_bin
+    read -r -p "Path to ggml model file (e.g. ggml-base.bin): " custom_whisper_model
+    if [[ ! -x "$custom_whisper_bin" && ! -f "$custom_whisper_bin" ]]; then
+        echo "❌ Binary not found: $custom_whisper_bin"
+        exit 1
+    fi
+    if [[ ! -f "$custom_whisper_model" ]]; then
+        echo "❌ Model not found: $custom_whisper_model"
+        exit 1
+    fi
+    defaults write "$BUNDLE_ID" whisperBinaryPath "$custom_whisper_bin"
+    defaults write "$BUNDLE_ID" whisperModelPath "$custom_whisper_model"
+    echo "✅ Custom Whisper paths saved"
+else
+    echo "Building whisper.cpp with Metal (CoreML OFF — avoids missing .mlmodelc failures)..."
+    cd "$GRIST_DATA_DIR"
+    if [[ ! -d whisper.cpp/.git ]]; then
+        rm -rf whisper.cpp
+        git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git
+    fi
+    cd whisper.cpp
+
+    # Critical: CoreML without encoder models makes whisper-cli exit on every run.
+    cmake -B build -DGGML_METAL=ON -DWHISPER_COREML=OFF
+    cmake --build build --config Release -j "$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+
+    if [[ ! -f models/ggml-base.bin ]]; then
+        echo "Downloading ggml-base model..."
+        bash models/download-ggml-model.sh base
+    fi
+
+    defaults delete "$BUNDLE_ID" whisperBinaryPath 2>/dev/null || true
+    defaults delete "$BUNDLE_ID" whisperModelPath 2>/dev/null || true
+    echo "✅ Whisper ready at $GRIST_DATA_DIR/whisper.cpp"
+    cd "$SCRIPT_DIR"
+fi
+
+# ── 3. MCP server ────────────────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════"
+echo "🔌 Step 3: MCP server (Claude Desktop / agents)"
+echo "═══════════════════════════════════════════════"
+
+MCP_DIR="$SCRIPT_DIR/grist-mcp-server"
+MCP_BIN="$MCP_DIR/grist-mcp-server"
+
+ensure_bun() {
+    if command -v bun &>/dev/null; then
+        return 0
+    fi
+    echo "Installing Bun (used to compile a standalone MCP binary — no Node/NVM needed at runtime)..."
+    curl -fsSL https://bun.sh/install | bash
+    export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+    require_cmd bun "Bun install failed. See https://bun.sh"
+}
+
+build_mcp() {
+    ensure_bun
+    cd "$MCP_DIR"
+    echo "Installing MCP dependencies..."
+    bun install
+    echo "Compiling standalone MCP binary..."
+    bun build ./index.js --compile --outfile grist-mcp-server
+    chmod +x grist-mcp-server
+    cd "$SCRIPT_DIR"
+    echo "✅ MCP binary: $MCP_BIN"
+}
+
+configure_claude_desktop() {
+    local mcp_path="$1"
+    python3 - "$mcp_path" <<'PY'
+import json, os, sys
+mcp_path = sys.argv[1]
+config_path = os.path.expanduser("~/Library/Application Support/Claude/claude_desktop_config.json")
+try:
+    with open(config_path) as f:
+        config = json.load(f)
+except FileNotFoundError:
+    config = {}
+except json.JSONDecodeError:
+    print("Warning: existing claude_desktop_config.json was invalid; recreating.")
+    config = {}
+
+config.setdefault("mcpServers", {})
+config["mcpServers"]["grist"] = {"command": mcp_path, "args": []}
+os.makedirs(os.path.dirname(config_path), exist_ok=True)
+with open(config_path, "w") as f:
+    json.dump(config, f, indent=2)
+print(f"Wrote grist MCP entry → {config_path}")
+PY
+}
+
+if ask_yn "Build the Grist MCP server (lets Claude Desktop read/write notes)?" "y"; then
+    build_mcp
+
+    if ask_yn "Configure Claude Desktop automatically?" "y"; then
+        if [[ -f "$MCP_BIN" ]]; then
+            configure_claude_desktop "$MCP_BIN"
+            echo "✅ Claude Desktop configured. Fully quit & reopen Claude to load the server."
+        else
+            echo "⚠️ MCP binary missing; skipped Claude config."
+        fi
+    else
+        echo "Manual Claude Desktop config snippet:"
+        echo "  \"grist\": { \"command\": \"$MCP_BIN\", \"args\": [] }"
+    fi
+else
+    echo "Skipped MCP build. You can re-run setup later or: cd grist-mcp-server && bun install && bun build ./index.js --compile --outfile grist-mcp-server"
+fi
+
+# ── 4. Optional first build ──────────────────────────────────────────
+echo ""
+echo "═══════════════════════════════════════════════"
+echo "🚀 Step 4: Build the app"
+echo "═══════════════════════════════════════════════"
+
+if ask_yn "Build and launch Grist now?" "y"; then
+    chmod +x "$SCRIPT_DIR/build_app.sh"
+    "$SCRIPT_DIR/build_app.sh"
+else
+    echo "When you're ready:"
+    echo "  ./build_app.sh"
+fi
+
+echo ""
+echo "╔══════════════════════════════════════════════╗"
+echo "║                 Setup complete               ║"
+echo "╚══════════════════════════════════════════════╝"
+echo ""
+echo "First-run permissions (required once):"
+echo "  • Microphone          — allow when prompted"
+echo "  • Screen & System Audio Recording — enable Grist, then quit & relaunch"
+echo "    (needed to capture Zoom/Meet/YouTube audio, not just the mic)"
+echo ""
+echo "App installs to:  ~/Applications/Grist.app"
+echo "Data directory:   $GRIST_DATA_DIR"
+echo "Re-run setup anytime:  ./setup.sh"
+echo ""

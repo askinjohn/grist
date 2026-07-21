@@ -1,0 +1,19 @@
+{
+  "name": "grist-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Grist — list folders and create notes in the local meetings database",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "grist-mcp-server": "index.js"
+  },
+  "scripts": {
+    "build": "bun build ./index.js --compile --outfile grist-mcp-server",
+    "start": "bun run index.js"
+  },
+  "keywords": ["mcp", "grist", "meetings"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}
