@@ -369,6 +369,59 @@ class OllamaClient: @unchecked Sendable {
         return Self.parseEnhanceOutput(raw)
     }
     
+    /// Synthesize many notes/meetings in a folder per user specs (action items, brief, custom).
+    func folderSummarize(
+        folderName: String,
+        items: [(title: String, kind: String, content: String)],
+        userSpecs: String,
+        model: String
+    ) async throws -> EnhanceResult {
+        print("[OllamaClient] Folder summarize '\(folderName)' (\(items.count) items) model=\(model)")
+
+        var corpus = ""
+        for (i, item) in items.enumerated() {
+            corpus += """
+            <<<ITEM \(i + 1): \(item.kind) — \(item.title)>>>
+            \(item.content)
+
+            """
+        }
+        // Keep prompt bounded for small local models
+        if corpus.count > 100_000 {
+            corpus = String(corpus.prefix(100_000)) + "\n\n[…corpus truncated…]"
+        }
+
+        let specs = userSpecs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = """
+        <system_instructions>
+        You are synthesizing a whole Grist folder of notes, articles, videos, and meetings into ONE markdown document.
+
+        Folder name: "\(folderName)"
+        Item count: \(items.count)
+
+        USER WANTS (follow closely):
+        \(specs.isEmpty ? "Executive overview, key themes, decisions, and concrete action items with owners if mentioned." : specs)
+
+        Output rules:
+        1. FIRST LINE must be: TITLE: <short title max 10 words>
+        2. Blank line, then Markdown body only.
+        3. Structure clearly (headings, bullets). Include an Action items / Next steps section unless the user asked otherwise.
+        4. Cite source item titles in parentheses when a point comes from a specific item.
+        5. Do not invent facts not supported by the items. If something is unclear, say so.
+        6. Do not repeat the system instructions.
+        </system_instructions>
+
+        <folder_items>
+        \(corpus)
+        </folder_items>
+
+        Begin with TITLE: then the folder summary.
+        """
+
+        let raw = try await generateText(prompt: prompt, model: model, timeout: 180)
+        return Self.parseEnhanceOutput(raw)
+    }
+
     func chat(messages: [OllamaChatMessage], model: String) async throws -> OllamaChatMessage {
         print("[OllamaClient] Starting AI chat using model: \(model)...")
         
@@ -380,7 +433,7 @@ class OllamaClient: @unchecked Sendable {
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(payload)
-            request.timeoutInterval = 60
+            request.timeoutInterval = 120
             
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {

@@ -150,6 +150,59 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     }
 }
 
+/// Presets for “Summarize folder” — user can also type free-form specs.
+enum FolderSummarizePreset: String, CaseIterable, Identifiable {
+    case actionItems
+    case executive
+    case themes
+    case research
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .actionItems: return "Action items & decisions"
+        case .executive: return "Executive brief"
+        case .themes: return "Themes & insights"
+        case .research: return "Research synthesis"
+        case .custom: return "Custom instructions"
+        }
+    }
+
+    var defaultSpecs: String {
+        switch self {
+        case .actionItems:
+            return """
+            Produce:
+            1) Key decisions (if any)
+            2) Concrete action items (bullet list; owner/deadline when mentioned)
+            3) Open questions / risks
+            4) One-paragraph overview of the folder
+            """
+        case .executive:
+            return """
+            Write a short executive brief for a busy reader:
+            - Bottom line up front (3–5 sentences)
+            - Why it matters
+            - Main takeaways (bullets)
+            - Recommended next steps
+            """
+        case .themes:
+            return """
+            Cluster content into themes across all items. For each theme: summary, supporting points with source titles, contradictions if any.
+            End with overall insights.
+            """
+        case .research:
+            return """
+            Research synthesis: claims vs evidence, key facts, sources cited by item title, gaps, and suggested follow-up reading/questions.
+            """
+        case .custom:
+            return ""
+        }
+    }
+}
+
 // MARK: - Root View (Handles Sheet + Keyboard)
 
 struct RootView: View {
@@ -160,6 +213,7 @@ struct RootView: View {
 
 extension Notification.Name {
     static let meetingDeleted = Notification.Name("meetingDeleted")
+    static let exportMeetingRequested = Notification.Name("exportMeetingRequested")
 }
 
 // MARK: - Main View
@@ -172,6 +226,8 @@ struct MainView: View {
     @State private var folders: [String] = []
     @State private var selectedMeeting: Meeting? = nil
     @State private var searchText = ""
+    /// When set, open the best tab for a search hit (summary / notes / transcript).
+    @State private var pendingSearchReveal = false
     @State private var showingNewFolderAlert = false
     @State private var newFolderName = ""
     @State private var showingImportUrlAlert = false
@@ -191,6 +247,17 @@ struct MainView: View {
     @State private var pendingYouTubeSuggestions: [(meetingId: String, ytURL: String)] = []
     @State private var isImportingSuggestedYouTube = false
     @State private var showingSettingsSheet = false
+    /// Folder-level multi-item summarize
+    @State private var showingFolderSummarizeSheet = false
+    @State private var folderSummarizeName: String = ""
+    @State private var folderSummarizePreset: FolderSummarizePreset = .actionItems
+    @State private var folderSummarizeCustomSpecs: String = ""
+    @State private var isFolderSummarizing = false
+    /// Export section picker
+    @State private var showingExportOptionsSheet = false
+    @State private var exportTargetMeeting: Meeting? = nil
+    @State private var exportTargetFolder: String? = nil
+    @State private var exportOptions: ExportOptions = .default
 
     // AI Config
     @State private var selectedModel = "gemma2:2b"
@@ -331,6 +398,11 @@ struct MainView: View {
                 selectedMeeting = meetings.first
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .exportMeetingRequested)) { note in
+            guard let id = note.object as? String,
+                  let m = meetings.first(where: { $0.id == id }) ?? db.getMeeting(id: id) else { return }
+            openExportSheet(meeting: m)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newMeetingRequested)) { note in
             let kind: CreateKind
             if let raw = note.object as? String, let k = CreateKind(rawValue: raw) {
@@ -345,8 +417,11 @@ struct MainView: View {
             if let id {
                 loadDetails(id: id)
                 if let m = selectedMeeting {
-                    // Notes open on Write; long imports default to Preview (reading mode)
-                    if m.isNoteType {
+                    if pendingSearchReveal || isSearching {
+                        pendingSearchReveal = false
+                        revealSearchMatch(in: m)
+                    } else if m.isNoteType {
+                        // Notes open on Write; long imports default to Preview (reading mode)
                         selectedTab = "notes"
                         let longBody = m.manualNotes.count > 400 || m.transcript.count > 400
                         noteShowPreview = longBody
@@ -356,6 +431,9 @@ struct MainView: View {
                     }
                 }
             }
+        }
+        .onChange(of: searchText) { _, query in
+            handleSearchQueryChange(query)
         }
 
         .frame(minWidth: 960, minHeight: 640)
@@ -459,22 +537,71 @@ struct MainView: View {
                     }
                 }
 
-                // ITEMS (filtered list)
-                ForEach(groupedMeetings) { group in
-                    Section(group.name) {
-                        ForEach(group.meetings) { meeting in
-                            SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
+                // ITEMS (filtered list) — while searching, a flat “Search results” section
+                if isSearching {
+                    Section {
+                        if filteredMeetings.isEmpty {
+                            Text("No matches for “\(searchText)”")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            ForEach(filteredMeetings) { meeting in
+                                SidebarRow(
+                                    meeting: meeting,
+                                    isSelected: selectedMeeting?.id == meeting.id,
+                                    searchQuery: searchText
+                                )
                                 .tag(meeting)
-                                .draggable(meeting.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    openSearchResult(meeting)
+                                }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Search results")
+                            Spacer()
+                            Text("\(filteredMeetings.count)")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.tertiary)
                         }
                     }
-                    .dropDestination(for: String.self) { items, _ in
-                        moveMeetings(items, toFolder: dropFolder(fromSection: group.name))
+                } else {
+                    ForEach(groupedMeetings) { group in
+                        Section(group.name) {
+                            ForEach(group.meetings) { meeting in
+                                SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
+                                    .tag(meeting)
+                                    .draggable(meeting.id)
+                                    .contextMenu {
+                                        Button {
+                                            openExportSheet(meeting: meeting)
+                                        } label: {
+                                            Label("Export Markdown…", systemImage: "square.and.arrow.up")
+                                        }
+                                        Button(role: .destructive) {
+                                            Database.shared.softDeleteMeeting(id: meeting.id)
+                                            NotificationCenter.default.post(name: .meetingDeleted, object: nil)
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
+                        .dropDestination(for: String.self) { items, _ in
+                            moveMeetings(items, toFolder: dropFolder(fromSection: group.name))
+                        }
                     }
                 }
             }
             .listStyle(.sidebar)
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search notes & meetings")
+            .onSubmit(of: .search) {
+                if let first = filteredMeetings.first {
+                    openSearchResult(first)
+                }
+            }
         }
         .navigationTitle("Grist")
         .safeAreaInset(edge: .bottom) {
@@ -534,6 +661,411 @@ struct MainView: View {
         }
         .sheet(isPresented: $showingOrganizeReport) {
             organizeReportSheet
+        }
+        .sheet(isPresented: $showingFolderSummarizeSheet) {
+            folderSummarizeSheet
+        }
+        .sheet(isPresented: $showingExportOptionsSheet) {
+            exportOptionsSheet
+        }
+    }
+
+    // MARK: - Export options sheet
+
+    private var exportOptionsSheet: some View {
+        let isFolder = exportTargetFolder != nil
+        let folderCount = exportTargetFolder.map { name in meetings.filter { ($0.groupName ?? "") == name }.count } ?? 0
+        let availability = exportTargetMeeting.map { exportOptions.availability(for: $0) }
+
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Export Markdown")
+                        .font(.title2.weight(.bold))
+                    if let folder = exportTargetFolder {
+                        Text("Folder “\(folder)” · \(folderCount) item\(folderCount == 1 ? "" : "s")")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else if let m = exportTargetMeeting {
+                        Text(m.title.isEmpty ? "Untitled" : m.title)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+                Button {
+                    showingExportOptionsSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Include")
+                    .font(.headline)
+
+                Text("Choose what goes into the file. Empty sections are skipped automatically.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 0) {
+                    exportToggle("Metadata (type, date, folder)", isOn: $exportOptions.includeMetadata, enabled: true)
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "AI Summary",
+                        isOn: $exportOptions.includeSummary,
+                        enabled: isFolder || (availability?.hasSummary ?? true),
+                        emptyHint: !(availability?.hasSummary ?? true) && !isFolder
+                    )
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "Notes / article body",
+                        isOn: $exportOptions.includeNotes,
+                        enabled: isFolder || (availability?.hasNotes ?? true),
+                        emptyHint: !(availability?.hasNotes ?? true) && !isFolder
+                    )
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "Transcript / captions",
+                        isOn: $exportOptions.includeTranscript,
+                        enabled: isFolder || (availability?.hasTranscript ?? true),
+                        emptyHint: !(availability?.hasTranscript ?? true) && !isFolder
+                    )
+                    Divider().padding(.leading, 16)
+                    exportToggle(
+                        "Source links",
+                        isOn: $exportOptions.includeSources,
+                        enabled: isFolder || (availability?.hasSources ?? true),
+                        emptyHint: !(availability?.hasSources ?? true) && !isFolder
+                    )
+                }
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                HStack(spacing: 10) {
+                    Button("Summary only") {
+                        exportOptions = .summaryOnly
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Full item") {
+                        exportOptions = .full
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer()
+                }
+            }
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 16)
+
+            Divider()
+            HStack {
+                Button("Cancel") { showingExportOptionsSheet = false }
+                Spacer()
+                if !isFolder {
+                    Button {
+                        performExport(copyOnly: true)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.clipboard")
+                    }
+                    .disabled(!exportOptions.hasContentSelection)
+                }
+                Button {
+                    performExport(copyOnly: false)
+                } label: {
+                    Label(isFolder ? "Export folder…" : "Save…", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!exportOptions.hasContentSelection)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 460, height: 440)
+    }
+
+    private func exportToggle(_ title: String, isOn: Binding<Bool>, enabled: Bool, emptyHint: Bool = false) -> some View {
+        Toggle(isOn: isOn) {
+            HStack {
+                Text(title)
+                    .foregroundStyle(enabled ? .primary : .secondary)
+                if emptyHint {
+                    Text("(empty)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .toggleStyle(.checkbox)
+        .disabled(!enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func openExportSheet(meeting: Meeting) {
+        exportTargetMeeting = meeting
+        exportTargetFolder = nil
+        // Sensible default: summary on if present, else notes
+        var opts = ExportOptions.default
+        let a = opts.availability(for: meeting)
+        if a.hasSummary && !a.hasNotes && !a.hasTranscript {
+            opts = .summaryOnly
+        }
+        exportOptions = opts
+        showingExportOptionsSheet = true
+    }
+
+    private func openExportSheet(folder: String) {
+        exportTargetMeeting = nil
+        exportTargetFolder = folder
+        exportOptions = .default
+        showingExportOptionsSheet = true
+    }
+
+    private func performExport(copyOnly: Bool) {
+        let opts = exportOptions
+        if let folder = exportTargetFolder {
+            showingExportOptionsSheet = false
+            exportFolder(folder, options: opts)
+            return
+        }
+        guard let m = exportTargetMeeting else {
+            showingExportOptionsSheet = false
+            return
+        }
+        let md = NoteExporter.markdown(for: m, options: opts)
+        if copyOnly {
+            copyToPasteboard(md)
+            statusMessage = "Copied Markdown"
+            showingExportOptionsSheet = false
+            return
+        }
+        showingExportOptionsSheet = false
+        if let url = NoteExporter.saveMarkdownPanel(defaultName: NoteExporter.safeFilename(for: m), contents: md) {
+            statusMessage = "Exported \(url.lastPathComponent)"
+        }
+    }
+
+    // MARK: - Folder summarize sheet
+
+    private var folderSummarizeSheet: some View {
+        let count = meetings.filter { ($0.groupName ?? "") == folderSummarizeName }.count
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Summarize folder")
+                        .font(.title2.weight(.bold))
+                    Text("“\(folderSummarizeName)” · \(count) item\(count == 1 ? "" : "s")")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    showingFolderSummarizeSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .disabled(isFolderSummarizing)
+            }
+            .padding(24)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("What do you need from this folder?")
+                        .font(.headline)
+
+                    Text("Collect blogs, videos, meetings, and notes into one summary. Pick a style or write your own specs.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(FolderSummarizePreset.allCases) { preset in
+                            Button {
+                                folderSummarizePreset = preset
+                                if preset != .custom {
+                                    folderSummarizeCustomSpecs = preset.defaultSpecs
+                                } else if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                    folderSummarizeCustomSpecs = "Describe what you want (e.g. action items for the product team, risks only, compare viewpoints…)"
+                                }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: folderSummarizePreset == preset ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(folderSummarizePreset == preset ? Color.accentColor : .secondary)
+                                    Text(preset.title)
+                                        .font(.callout.weight(folderSummarizePreset == preset ? .semibold : .regular))
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .padding(12)
+                                .background(folderSummarizePreset == preset ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("INSTRUCTIONS")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $folderSummarizeCustomSpecs)
+                            .font(.body)
+                            .frame(minHeight: 120, maxHeight: 180)
+                            .padding(8)
+                            .background(Color.primary.opacity(0.05))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+
+                    HStack {
+                        Text("Model")
+                        Spacer()
+                        Picker("", selection: $selectedModel) {
+                            ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 160)
+                    }
+                    .padding(12)
+                    .background(Color.primary.opacity(0.04))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
+            }
+
+            Divider()
+            HStack {
+                Button("Cancel") { showingFolderSummarizeSheet = false }
+                    .disabled(isFolderSummarizing)
+                Spacer()
+                Button {
+                    runFolderSummarize()
+                } label: {
+                    if isFolderSummarizing {
+                        Label("Summarizing…", systemImage: "ellipsis")
+                    } else {
+                        Label("Summarize folder", systemImage: "sparkles")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(isFolderSummarizing || count == 0
+                          || folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 520, height: 560)
+        .onAppear {
+            if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                folderSummarizeCustomSpecs = folderSummarizePreset.defaultSpecs
+            }
+        }
+    }
+
+    private func openFolderSummarize(name: String) {
+        folderSummarizeName = name
+        folderSummarizePreset = .actionItems
+        folderSummarizeCustomSpecs = FolderSummarizePreset.actionItems.defaultSpecs
+        showingFolderSummarizeSheet = true
+    }
+
+    private func runFolderSummarize() {
+        let name = folderSummarizeName
+        let items = meetings.filter { ($0.groupName ?? "") == name }
+        guard !items.isEmpty else {
+            statusMessage = "Folder is empty"
+            return
+        }
+        let specs = folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !specs.isEmpty else { return }
+
+        let model = selectedModel == "custom" ? customModelName : selectedModel
+        guard !model.isEmpty else {
+            statusMessage = "Pick a model"
+            return
+        }
+
+        isFolderSummarizing = true
+        statusMessage = "Summarizing folder…"
+
+        // Build content payloads (prefer summary; fall back to notes + transcript)
+        let payloads: [(title: String, kind: String, content: String)] = items.map { m in
+            var parts: [String] = []
+            if !m.summary.isEmpty { parts.append("AI Summary:\n\(m.summary)") }
+            if !m.manualNotes.isEmpty { parts.append("Notes:\n\(m.manualNotes.prefix(20_000))") }
+            if !m.transcript.isEmpty {
+                let t = m.transcript
+                parts.append("Transcript:\n\(t.prefix(20_000))")
+            }
+            let content = parts.joined(separator: "\n\n")
+            return (title: m.title, kind: m.kindLabel, content: content.isEmpty ? "(empty)" : content)
+        }
+
+        Task {
+            do {
+                let result = try await ollama.folderSummarize(
+                    folderName: name,
+                    items: payloads,
+                    userSpecs: specs,
+                    model: model
+                )
+                await MainActor.run {
+                    let title = result.title?.isEmpty == false
+                        ? result.title!
+                        : "Folder summary: \(name)"
+                    let id = UUID().uuidString
+                    let body = """
+                    [Folder summary of “\(name)” — \(items.count) items]
+
+                    ## Specs used
+                    \(specs)
+
+                    ---
+
+                    \(result.summary)
+                    """
+                    let note = Meeting(
+                        id: id,
+                        title: title,
+                        timestamp: Date().timeIntervalSince1970,
+                        manualNotes: body,
+                        transcript: payloads.map { "=== \($0.kind): \($0.title) ===\n\($0.content.prefix(8000))" }.joined(separator: "\n\n"),
+                        summary: result.summary,
+                        template: "Note",
+                        groupName: name,
+                        isDeleted: false
+                    )
+                    db.saveMeeting(note)
+                    db.saveFolder(name)
+                    loadMeetings()
+                    focusedFolder = name
+                    libraryFilter = .all
+                    selectedMeeting = meetings.first(where: { $0.id == id })
+                    selectedTab = "summary"
+                    noteShowPreview = true
+                    isFolderSummarizing = false
+                    showingFolderSummarizeSheet = false
+                    statusMessage = "Folder summary ready"
+                }
+            } catch {
+                await MainActor.run {
+                    isFolderSummarizing = false
+                    statusMessage = "Folder summary failed"
+                    importErrorMessage = error.localizedDescription
+                    importErrorOpenURL = nil
+                    showingImportErrorAlert = true
+                }
+            }
         }
     }
 
@@ -847,6 +1379,16 @@ struct MainView: View {
             Button("New note here") {
                 focusedFolder = name
                 openCreateSheet(kind: .note)
+            }
+            Button {
+                openFolderSummarize(name: name)
+            } label: {
+                Label("Summarize folder…", systemImage: "sparkles")
+            }
+            Button {
+                openExportSheet(folder: name)
+            } label: {
+                Label("Export folder as Markdown…", systemImage: "square.and.arrow.up")
             }
             Divider()
             Button("Delete Folder…", role: .destructive) {
@@ -1975,13 +2517,31 @@ struct MainView: View {
 
         // Export & Record / Note actions
         ToolbarItemGroup(placement: .primaryAction) {
-            if selectedMeeting != nil && selectedTab == "summary" {
-                Button {
-                    copySummaryToClipboard()
+            if let m = selectedMeeting {
+                Menu {
+                    Button {
+                        openExportSheet(meeting: m)
+                    } label: {
+                        Label("Export Markdown…", systemImage: "square.and.arrow.up")
+                    }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    if let folder = m.groupName, !folder.isEmpty {
+                        Divider()
+                        Button {
+                            openFolderSummarize(name: folder)
+                        } label: {
+                            Label("Summarize Folder “\(folder)”…", systemImage: "sparkles")
+                        }
+                        Button {
+                            openExportSheet(folder: folder)
+                        } label: {
+                            Label("Export Folder “\(folder)”…", systemImage: "folder")
+                        }
+                    }
                 } label: {
-                    Label("Copy Summary", systemImage: "doc.on.doc")
+                    Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help("Copy Markdown summary to clipboard")
+                .help("Choose sections and export Markdown")
             }
 
             if selectedMeeting?.isNoteType == true {
@@ -2046,8 +2606,26 @@ struct MainView: View {
 
     // MARK: - Computed Data
 
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var filteredMeetings: [Meeting] {
         var list = meetings
+
+        // While searching, look across the whole library (ignore folder / filter scope)
+        // so results always “jump” to the real item.
+        if isSearching {
+            let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+            return list.filter { Self.meeting($0, matchesSearch: q) }
+                .sorted { a, b in
+                    // Prefer title hits, then recency
+                    let at = a.title.localizedCaseInsensitiveContains(q)
+                    let bt = b.title.localizedCaseInsensitiveContains(q)
+                    if at != bt { return at && !bt }
+                    return a.timestamp > b.timestamp
+                }
+        }
 
         // Folder focus wins over library filter
         if let folder = focusedFolder {
@@ -2064,13 +2642,75 @@ struct MainView: View {
                 list = list.filter { $0.isNoteType }
             }
         }
+        return list
+    }
 
-        guard !searchText.isEmpty else { return list }
-        return list.filter {
-            $0.title.localizedCaseInsensitiveContains(searchText) ||
-            $0.transcript.localizedCaseInsensitiveContains(searchText) ||
-            $0.manualNotes.localizedCaseInsensitiveContains(searchText) ||
-            $0.summary.localizedCaseInsensitiveContains(searchText)
+    static func meeting(_ m: Meeting, matchesSearch q: String) -> Bool {
+        guard !q.isEmpty else { return true }
+        return m.title.localizedCaseInsensitiveContains(q)
+            || m.transcript.localizedCaseInsensitiveContains(q)
+            || m.manualNotes.localizedCaseInsensitiveContains(q)
+            || m.summary.localizedCaseInsensitiveContains(q)
+            || (m.groupName?.localizedCaseInsensitiveContains(q) ?? false)
+    }
+
+    /// Open a search hit in the detail pane and jump to the matching tab.
+    func openSearchResult(_ meeting: Meeting) {
+        pendingSearchReveal = true
+        // Clear folder focus so the row stays visible under “Search results”
+        focusedFolder = nil
+        libraryFilter = .all
+        selectedMeeting = meetings.first(where: { $0.id == meeting.id }) ?? meeting
+    }
+
+    private func handleSearchQueryChange(_ query: String) {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        let hits = filteredMeetings
+        guard !hits.isEmpty else { return }
+        // If nothing selected or selection not in results, jump to the best hit
+        if selectedMeeting == nil || !hits.contains(where: { $0.id == selectedMeeting?.id }) {
+            openSearchResult(hits[0])
+        }
+    }
+
+    /// Pick the tab where the search query appears (summary > notes > transcript).
+    private func revealSearchMatch(in m: Meeting) {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        if m.isNoteType {
+            if m.summary.localizedCaseInsensitiveContains(q) {
+                selectedTab = "summary"
+            } else {
+                selectedTab = "notes"
+                // Preview when the hit is in a long body
+                noteShowPreview = m.manualNotes.count > 400 || m.transcript.localizedCaseInsensitiveContains(q)
+            }
+            return
+        }
+        // Meeting
+        if m.summary.localizedCaseInsensitiveContains(q) {
+            selectedTab = "summary"
+        } else if m.manualNotes.localizedCaseInsensitiveContains(q) {
+            selectedTab = "notes"
+        } else if m.transcript.localizedCaseInsensitiveContains(q) {
+            selectedTab = "transcript"
+        } else {
+            selectedTab = m.summary.isEmpty ? "transcript" : "summary"
+        }
+    }
+
+    // MARK: - Export
+
+    func exportFolder(_ name: String, options: ExportOptions = .default) {
+        let items = meetings.filter { ($0.groupName ?? "") == name }
+        guard !items.isEmpty else {
+            statusMessage = "Folder is empty"
+            return
+        }
+        if let dir = NoteExporter.saveFolderPanel(meetings: items, suggestedName: name, options: options) {
+            statusMessage = "Exported \(items.count) files → \(dir.lastPathComponent)"
+            NSWorkspace.shared.open(dir)
         }
     }
 
@@ -3014,6 +3654,7 @@ struct MainView: View {
 struct SidebarRow: View {
     let meeting: Meeting
     let isSelected: Bool
+    var searchQuery: String = ""
 
     var body: some View {
         HStack(spacing: 8) {
@@ -3026,47 +3667,60 @@ struct SidebarRow: View {
                 Text(meeting.title)
                     .font(.callout.weight(.medium))
                     .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(meeting.kindLabel)
-                        .font(.caption2.weight(.medium))
-                        .foregroundStyle(meeting.isNoteType ? .blue : .secondary)
-                    Text("·")
-                        .font(.caption2)
-                        .foregroundStyle(.quaternary)
-                    Text(relativeTime)
+                if let snippet = matchSnippet {
+                    Text(snippet)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if let dur = meeting.formattedDuration {
+                        .lineLimit(2)
+                } else {
+                    HStack(spacing: 4) {
+                        Text(meeting.kindLabel)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(meeting.isNoteType ? .blue : .secondary)
                         Text("·")
                             .font(.caption2)
                             .foregroundStyle(.quaternary)
-                        Text(dur)
+                        Text(relativeTime)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    }
-                    if let folder = meeting.groupName, !folder.isEmpty {
-                        Text("·")
-                            .font(.caption2)
-                            .foregroundStyle(.quaternary)
-                        Text(folder)
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                            .lineLimit(1)
-                    }
-                    if !meeting.summary.isEmpty {
-                        Circle()
-                            .fill(.green)
-                            .frame(width: 5, height: 5)
-                    } else if !meeting.transcript.isEmpty {
-                        Circle()
-                            .fill(.orange)
-                            .frame(width: 5, height: 5)
+                        if let dur = meeting.formattedDuration {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                            Text(dur)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if let folder = meeting.groupName, !folder.isEmpty {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                            Text(folder)
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        if !meeting.summary.isEmpty {
+                            Circle()
+                                .fill(.green)
+                                .frame(width: 5, height: 5)
+                        } else if !meeting.transcript.isEmpty {
+                            Circle()
+                                .fill(.orange)
+                                .frame(width: 5, height: 5)
+                        }
                     }
                 }
             }
         }
         .padding(.vertical, 2)
         .contextMenu {
+            Button {
+                // Export is handled by parent when available; post so MainView can listen — use Notification
+                NotificationCenter.default.post(name: .exportMeetingRequested, object: meeting.id)
+            } label: {
+                Label("Export Markdown…", systemImage: "square.and.arrow.up")
+            }
             Button(role: .destructive) {
                 Database.shared.softDeleteMeeting(id: meeting.id)
                 NotificationCenter.default.post(name: .meetingDeleted, object: nil)
@@ -3076,6 +3730,38 @@ struct SidebarRow: View {
         }
     }
 
+    /// Short excerpt around the first search hit (title hits skip snippet).
+    private var matchSnippet: String? {
+        let q = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return nil }
+        if meeting.title.localizedCaseInsensitiveContains(q) {
+            if let folder = meeting.groupName, !folder.isEmpty {
+                return "\(meeting.kindLabel) · \(folder)"
+            }
+            return meeting.kindLabel
+        }
+        for field in [meeting.summary, meeting.manualNotes, meeting.transcript] {
+            if let snip = Self.snippet(in: field, around: q) {
+                return snip
+            }
+        }
+        return nil
+    }
+
+    private static func snippet(in text: String, around query: String, radius: Int = 42) -> String? {
+        guard let range = text.range(of: query, options: .caseInsensitive) else { return nil }
+        let start = text.index(range.lowerBound, offsetBy: -radius, limitedBy: text.startIndex) ?? text.startIndex
+        let end = text.index(range.upperBound, offsetBy: radius, limitedBy: text.endIndex) ?? text.endIndex
+        var s = String(text[start..<end])
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\t", with: " ")
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        s = s.trimmingCharacters(in: .whitespaces)
+        let prefix = start == text.startIndex ? "" : "…"
+        let suffix = end == text.endIndex ? "" : "…"
+        return prefix + s + suffix
+    }
+
     var relativeTime: String {
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
@@ -3083,22 +3769,23 @@ struct SidebarRow: View {
     }
 }
 
-// MARK: - Chat View (item / folder / global)
+// MARK: - Chat View (item / global)
 
 enum ChatScope: Equatable {
     case item(Meeting)
     case global
 
+    /// Per-item history so folder mates don’t share one thread with the open note.
     var historyKey: String {
         switch self {
-        case .item(let m): return m.groupName ?? m.id
+        case .item(let m): return "item:\(m.id)"
         case .global: return "__global__"
         }
     }
 
     var emptyTitle: String {
         switch self {
-        case .item: return "Ask questions about this item"
+        case .item: return "Ask about this note or meeting"
         case .global: return "Ask across your whole library"
         }
     }
@@ -3106,13 +3793,19 @@ enum ChatScope: Equatable {
     var emptySubtitle: String {
         switch self {
         case .item(let m):
-            if let g = m.groupName {
-                return "This is in “\(g)” — answers use all items in that folder when possible."
+            let name = m.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if name.isEmpty {
+                return "Answers use this item’s AI summary, written notes, and transcript."
             }
-            return "Answers use this note or meeting’s content."
+            return "Answers use “\(name)” — AI summary, notes, and transcript."
         case .global:
-            return "RAG searches all notes and meetings. Best with nomic-embed-text installed."
+            return "Searches all notes and meetings. Best with nomic-embed-text installed."
         }
+    }
+
+    var focusedMeetingId: String? {
+        if case .item(let m) = self { return m.id }
+        return nil
     }
 }
 
@@ -3124,6 +3817,10 @@ struct ChatView: View {
     @State private var chatHistory: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var isThinking = false
+
+    /// Cap per item when stuffing (characters).
+    private let itemContextLimit = 80_000
+    private let multiItemContextLimit = 12_000
 
     var body: some View {
         VStack(spacing: 0) {
@@ -3166,7 +3863,7 @@ struct ChatView: View {
 
             Divider()
             HStack(spacing: 12) {
-                TextField("Ask anything...", text: $inputText)
+                TextField("Ask about this content…", text: $inputText)
                     .textFieldStyle(.plain)
                     .font(.body)
                     .padding(.horizontal, 16)
@@ -3202,25 +3899,37 @@ struct ChatView: View {
         chatHistory = Database.shared.fetchChatMessages(forGroup: scope.historyKey)
     }
 
+    /// Fresh copy from DB so Write / Enhance updates are always included.
+    private func freshMeeting(id: String, fallback: Meeting) -> Meeting {
+        Database.shared.getMeeting(id: id) ?? fallback
+    }
+
     private func contextMeetings() -> [Meeting] {
         let all = Database.shared.fetchActiveMeetings()
         switch scope {
         case .global:
             return all
         case .item(let meeting):
-            if let g = meeting.groupName, !g.isEmpty {
-                return all.filter { $0.groupName == g }
-            }
-            return [meeting]
+            // Chat on an open item = that item only (folder-wide synthesis is “Summarize folder”)
+            let m = freshMeeting(id: meeting.id, fallback: meeting)
+            return [m]
         }
     }
 
-    private func contextBlob(for m: Meeting) -> String {
+    /// Prefer AI summary + written notes + transcript (all three).
+    private func contextBlob(for m: Meeting, limit: Int) -> String {
         var parts: [String] = []
-        if !m.summary.isEmpty { parts.append("Summary:\n\(m.summary)") }
-        if !m.transcript.isEmpty { parts.append("Transcript:\n\(m.transcript)") }
-        if !m.manualNotes.isEmpty { parts.append("Notes:\n\(m.manualNotes)") }
-        return parts.joined(separator: "\n\n")
+        let summary = m.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let notes = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transcript = m.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !summary.isEmpty { parts.append("### AI Summary\n\(summary)") }
+        if !notes.isEmpty { parts.append("### Notes / article body\n\(notes)") }
+        if !transcript.isEmpty { parts.append("### Transcript / captions\n\(transcript)") }
+        var blob = parts.joined(separator: "\n\n")
+        if blob.count > limit {
+            blob = String(blob.prefix(limit)) + "\n\n[…truncated…]"
+        }
+        return blob
     }
 
     func sendMessage() {
@@ -3234,43 +3943,90 @@ struct ChatView: View {
         chatHistory.append(userMsg)
         Database.shared.saveChatMessage(userMsg)
 
+        // Snapshot history for the request (includes the new user msg)
+        let historySnapshot = chatHistory
+
         Task {
             do {
                 let model = selectedModel == "custom" ? customModelName : selectedModel
                 let meetingsInContext = contextMeetings()
 
-                var systemContext = "You are a helpful knowledge assistant for Grist. Answer using ONLY the provided notes/meetings. If the answer is not present, say so. Cite note titles when useful.\n\n"
+                var documentBlock = ""
+                let isSingleItem = {
+                    if case .item = scope { return true }
+                    return false
+                }()
 
-                let useRAG = meetingsInContext.count > 6 || scope == .global
-                if useRAG {
-                    let meetingIds = meetingsInContext.map { $0.id }
-                    let topChunks = try await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: scope == .global ? 20 : 15)
-                    if topChunks.isEmpty {
-                        // Fall back to stuffing recent items with content
-                        for m in meetingsInContext.prefix(8) {
-                            let blob = contextBlob(for: m)
-                            if blob.isEmpty { continue }
-                            systemContext += "=== \(m.kindLabel): \(m.title) ===\n\(blob.prefix(3000))\n\n"
-                        }
+                if isSingleItem, let m = meetingsInContext.first {
+                    let blob = contextBlob(for: m, limit: itemContextLimit)
+                    if blob.isEmpty {
+                        documentBlock = "(No summary, notes, or transcript saved on this item yet.)"
                     } else {
-                        systemContext += "=== RELEVANT EXCERPTS ===\n"
-                        for chunk in topChunks {
-                            let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
-                            systemContext += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
-                        }
+                        documentBlock = """
+                        === OPEN ITEM: \(m.kindLabel) — \(m.title) ===
+                        \(blob)
+                        """
                     }
                 } else {
-                    for m in meetingsInContext {
-                        let blob = contextBlob(for: m)
-                        if blob.isEmpty { continue }
-                        systemContext += "=== \(m.kindLabel): \(m.title) (Date: \(Date(timeIntervalSince1970: m.timestamp))) ===\n"
-                        systemContext += "\(blob)\n\n"
+                    // Global / multi: pin nothing; use RAG with stuffing fallback
+                    let useRAG = meetingsInContext.count > 4
+                    if useRAG {
+                        let meetingIds = meetingsInContext.map { $0.id }
+                        let topChunks = (try? await RAGEngine.shared.search(query: text, meetingIds: meetingIds, topK: 20)) ?? []
+                        if topChunks.isEmpty {
+                            for m in meetingsInContext.prefix(10) {
+                                let blob = contextBlob(for: m, limit: multiItemContextLimit)
+                                if blob.isEmpty { continue }
+                                documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
+                            }
+                        } else {
+                            documentBlock += "=== RELEVANT EXCERPTS ===\n"
+                            for chunk in topChunks {
+                                let parentTitle = meetingsInContext.first(where: { $0.id == chunk.meetingId })?.title ?? "Unknown"
+                                documentBlock += "[From \(parentTitle)]:\n\(chunk.text)\n\n"
+                            }
+                            // Also include full AI summaries for hit parents (cheap, high signal)
+                            var seen = Set<String>()
+                            for chunk in topChunks {
+                                guard seen.insert(chunk.meetingId).inserted,
+                                      let m = meetingsInContext.first(where: { $0.id == chunk.meetingId }),
+                                      !m.summary.isEmpty else { continue }
+                                documentBlock += "=== AI Summary: \(m.title) ===\n\(m.summary.prefix(4000))\n\n"
+                            }
+                        }
+                    } else {
+                        for m in meetingsInContext {
+                            let blob = contextBlob(for: m, limit: multiItemContextLimit)
+                            if blob.isEmpty { continue }
+                            documentBlock += "=== \(m.kindLabel): \(m.title) ===\n\(blob)\n\n"
+                        }
                     }
                 }
 
-                var apiMessages: [OllamaClient.OllamaChatMessage] = []
-                apiMessages.append(OllamaClient.OllamaChatMessage(role: "system", content: systemContext))
-                for msg in chatHistory {
+                let systemPrompt = """
+                You are Grist’s knowledge assistant. You already have the user’s notes/meetings in the DOCUMENT block below.
+
+                Rules:
+                1. Answer using ONLY that document (and prior chat turns).
+                2. NEVER ask the user to paste, upload, or “provide the blog/article” — it is already in DOCUMENT if available.
+                3. If DOCUMENT is empty, say this item has no content yet.
+                4. Prefer AI Summary when present; use Notes and Transcript for detail.
+                5. Cite the item title when useful. Be concrete.
+                """
+
+                // Small local models often ignore pure system messages — put DOCUMENT in a user turn too.
+                var apiMessages: [OllamaClient.OllamaChatMessage] = [
+                    OllamaClient.OllamaChatMessage(role: "system", content: systemPrompt),
+                    OllamaClient.OllamaChatMessage(
+                        role: "user",
+                        content: "DOCUMENT (source material — use this to answer):\n\n\(documentBlock)"
+                    ),
+                    OllamaClient.OllamaChatMessage(
+                        role: "assistant",
+                        content: "I have the document loaded. I will answer only from it and will not ask you to paste it."
+                    ),
+                ]
+                for msg in historySnapshot {
                     apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
                 }
 
