@@ -4,22 +4,42 @@ class OllamaClient: @unchecked Sendable {
     static let shared = OllamaClient()
     
     private init() {}
-    
-    // MARK: - Preferences
-    private var isOllama: Bool {
-        return (UserDefaults.standard.string(forKey: "aiProviderType") ?? "Ollama") == "Ollama"
+
+    // MARK: - Role resolution (ai-config.json)
+
+    /// Resolve endpoint for a logical role (chat, enhance, embed, …).
+    @MainActor
+    private func endpoint(for role: AIRole, modelOverride: String? = nil) -> ResolvedAIEndpoint {
+        AIConfigManager.shared.resolve(role: role, modelOverride: modelOverride)
+    }
+
+    /// Fallback when not on MainActor — read file synchronously (rare).
+    private func endpointSync(for role: AIRole, modelOverride: String? = nil) -> ResolvedAIEndpoint {
+        if Thread.isMainThread {
+            return MainActor.assumeIsolated {
+                AIConfigManager.shared.resolve(role: role, modelOverride: modelOverride)
+            }
+        }
+        return DispatchQueue.main.sync {
+            AIConfigManager.shared.resolve(role: role, modelOverride: modelOverride)
+        }
+    }
+
+    // Legacy helpers (tests / getModels without role)
+    private var legacyIsOllama: Bool {
+        (UserDefaults.standard.string(forKey: "aiProviderType") ?? "Ollama") == "Ollama"
     }
     private var ollamaBaseURL: String {
-        return UserDefaults.standard.string(forKey: "OllamaURL") ?? "http://127.0.0.1:11434"
+        UserDefaults.standard.string(forKey: "OllamaURL") ?? "http://127.0.0.1:11434"
     }
     private var openAIBaseURL: String {
-        return UserDefaults.standard.string(forKey: "openAIBaseURL") ?? "https://api.openai.com/v1"
+        UserDefaults.standard.string(forKey: "openAIBaseURL") ?? "https://api.openai.com/v1"
     }
     private var openAIAPIKey: String {
-        return UserDefaults.standard.string(forKey: "openAIAPIKey") ?? ""
+        UserDefaults.standard.string(forKey: "openAIAPIKey") ?? ""
     }
     private var openAIModel: String {
-        return UserDefaults.standard.string(forKey: "openAIModel") ?? "gpt-4o"
+        UserDefaults.standard.string(forKey: "openAIModel") ?? "gpt-4o"
     }
     
     // MARK: - Shared Structs
@@ -91,41 +111,32 @@ class OllamaClient: @unchecked Sendable {
     // MARK: - Methods
     
     func getModels() async throws -> [String] {
-        if isOllama {
-            let url = URL(string: "\(ollamaBaseURL)/api/tags")!
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 10
-            
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw URLError(.badServerResponse)
-            }
-            
-            let tagsResponse = try JSONDecoder().decode(OllamaTagsResponse.self, from: data)
-            return tagsResponse.models.map { $0.name }
-        } else {
-            let url = URL(string: "\(openAIBaseURL)/models")!
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 10
-            if !openAIAPIKey.isEmpty {
-                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
-            }
-            
-            do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                    let tags = try JSONDecoder().decode(OpenAIModelsResponse.self, from: data)
-                    var models = tags.data.map { $0.id }
-                    if models.isEmpty { models = [openAIModel] }
-                    return models
+        // Prefer models from local Ollama when available; also surface configured role models.
+        var names = Set<String>()
+        let ep = endpointSync(for: .chat)
+        if ep.isOllama || legacyIsOllama {
+            let base = ep.isOllama ? ep.backend.baseURL : ollamaBaseURL
+            if let url = URL(string: "\(base)/api/tags") {
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 10
+                if let (data, response) = try? await URLSession.shared.data(for: request),
+                   let http = response as? HTTPURLResponse, http.statusCode == 200,
+                   let tags = try? JSONDecoder().decode(OllamaTagsResponse.self, from: data) {
+                    tags.models.forEach { names.insert($0.name) }
                 }
-            } catch {
-                print("[OllamaClient] Could not fetch OpenAI models, falling back to setting default.")
             }
-            return [openAIModel]
         }
+        // Include every role’s configured model name so pickers always show them
+        await MainActor.run {
+            for role in AIRole.allCases {
+                names.insert(AIConfigManager.shared.modelName(for: role))
+            }
+        }
+        if names.isEmpty {
+            return [ep.model, "gemma2:2b", "nomic-embed-text"]
+        }
+        return names.sorted()
     }
     
     /// Result of a single enhance call: summary body + optional title (one model round-trip).
@@ -185,7 +196,7 @@ class OllamaClient: @unchecked Sendable {
         \(snippet)
         """
 
-        let raw = try await generateText(prompt: prompt, model: model, timeout: 60)
+        let raw = try await generateText(prompt: prompt, model: model, role: .organize, timeout: 60)
         return Self.parseOrganizeOutput(raw, needsTitle: needsTitle, needsFolder: needsFolder)
     }
 
@@ -229,7 +240,7 @@ class OllamaClient: @unchecked Sendable {
         Content:
         \(snippet)
         """
-        let raw = try await generateText(prompt: prompt, model: model, timeout: 45)
+        let raw = try await generateText(prompt: prompt, model: model, role: .title, timeout: 45)
         return Self.cleanTitle(raw)
     }
 
@@ -272,10 +283,19 @@ class OllamaClient: @unchecked Sendable {
         return EnhanceResult(title: nil, summary: text)
     }
 
-    private func generateText(prompt: String, model: String, timeout: TimeInterval) async throws -> String {
-        if isOllama {
-            let url = URL(string: "\(ollamaBaseURL)/api/generate")!
-            let payload = OllamaRequest(model: model, prompt: prompt, stream: false)
+    private func generateText(
+        prompt: String,
+        model: String,
+        role: AIRole = .enhance,
+        timeout: TimeInterval
+    ) async throws -> String {
+        let ep = endpointSync(for: role, modelOverride: model)
+        let useModel = ep.model
+        print("[OllamaClient] generate role=\(role.rawValue) backend=\(ep.backendName) model=\(useModel)")
+
+        if ep.isOllama {
+            let url = URL(string: "\(ep.backend.baseURL)/api/generate")!
+            let payload = OllamaRequest(model: useModel, prompt: prompt, stream: false)
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -283,25 +303,25 @@ class OllamaClient: @unchecked Sendable {
             request.timeoutInterval = timeout
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to local Ollama."])
+                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to Ollama at \(ep.backend.baseURL)."])
             }
             return try JSONDecoder().decode(OllamaResponse.self, from: data).response.trimmingCharacters(in: .whitespacesAndNewlines)
         } else {
-            let url = URL(string: "\(openAIBaseURL)/chat/completions")!
+            let url = URL(string: "\(ep.backend.baseURL)/chat/completions")!
             let msg = OllamaChatMessage(role: "user", content: prompt)
-            let actualModel = model.isEmpty ? openAIModel : model
-            let payload = OpenAIChatRequest(model: actualModel, messages: [msg], stream: false)
+            let payload = OpenAIChatRequest(model: useModel, messages: [msg], stream: false)
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if !openAIAPIKey.isEmpty {
-                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+            let key = ep.backend.resolvedAPIKey()
+            if !key.isEmpty {
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             }
             request.httpBody = try JSONEncoder().encode(payload)
             request.timeoutInterval = timeout
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI endpoint."])
+                throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI-compatible endpoint \(ep.backend.baseURL)."])
             }
             return try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -365,7 +385,7 @@ class OllamaClient: @unchecked Sendable {
             """
         }
 
-        let raw = try await generateText(prompt: prompt, model: model, timeout: 90)
+        let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 90)
         return Self.parseEnhanceOutput(raw)
     }
     
@@ -418,91 +438,102 @@ class OllamaClient: @unchecked Sendable {
         Begin with TITLE: then the folder summary.
         """
 
-        let raw = try await generateText(prompt: prompt, model: model, timeout: 180)
+        let raw = try await generateText(prompt: prompt, model: model, role: .folderSummarize, timeout: 180)
         return Self.parseEnhanceOutput(raw)
     }
 
-    func chat(messages: [OllamaChatMessage], model: String) async throws -> OllamaChatMessage {
-        print("[OllamaClient] Starting AI chat using model: \(model)...")
-        
-        if isOllama {
-            let url = URL(string: "\(ollamaBaseURL)/api/chat")!
-            let payload = OllamaChatRequest(model: model, messages: messages, stream: false)
-            
+    /// Chat using the **chat** role backend by default. Pass `role: .askEverything` for library chat.
+    func chat(
+        messages: [OllamaChatMessage],
+        model: String,
+        role: AIRole = .chat
+    ) async throws -> OllamaChatMessage {
+        let ep = endpointSync(for: role, modelOverride: model)
+        let useModel = ep.model
+        print("[OllamaClient] chat role=\(role.rawValue) backend=\(ep.backendName) model=\(useModel)")
+
+        if ep.isOllama {
+            let url = URL(string: "\(ep.backend.baseURL)/api/chat")!
+            let payload = OllamaChatRequest(model: useModel, messages: messages, stream: false)
+
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(payload)
             request.timeoutInterval = 120
-            
+
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to Ollama Chat API."])
+                throw NSError(domain: "OllamaClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to Ollama Chat API at \(ep.backend.baseURL)."])
             }
             let decoded = try JSONDecoder().decode(OllamaChatResponse.self, from: data)
             return decoded.message
-            
+
         } else {
-            let url = URL(string: "\(openAIBaseURL)/chat/completions")!
-            let actualModel = model.isEmpty ? openAIModel : model
-            let payload = OpenAIChatRequest(model: actualModel, messages: messages, stream: false)
-            
+            let url = URL(string: "\(ep.backend.baseURL)/chat/completions")!
+            let payload = OpenAIChatRequest(model: useModel, messages: messages, stream: false)
+
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if !openAIAPIKey.isEmpty {
-                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+            let key = ep.backend.resolvedAPIKey()
+            if !key.isEmpty {
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             }
             request.httpBody = try JSONEncoder().encode(payload)
-            request.timeoutInterval = 60
-            
+            request.timeoutInterval = 120
+
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI Chat API."])
+                throw NSError(domain: "OllamaClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI-compatible Chat API at \(ep.backend.baseURL)."])
             }
             let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
             return decoded.choices.first?.message ?? OllamaChatMessage(role: "assistant", content: "")
         }
     }
-    
+
     func getEmbedding(text: String, model: String = "nomic-embed-text") async throws -> [Double] {
-        if isOllama {
-            let url = URL(string: "\(ollamaBaseURL)/api/embeddings")!
-            let payload = OllamaEmbeddingRequest(model: model, prompt: text)
-            
+        let ep = endpointSync(for: .embed, modelOverride: model == "nomic-embed-text" ? nil : model)
+        var useModel = ep.model
+        print("[OllamaClient] embed backend=\(ep.backendName) model=\(useModel)")
+
+        if ep.isOllama {
+            let url = URL(string: "\(ep.backend.baseURL)/api/embeddings")!
+            let payload = OllamaEmbeddingRequest(model: useModel, prompt: text)
+
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(payload)
             request.timeoutInterval = 30
-            
+
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch embeddings from Ollama."])
+                throw NSError(domain: "OllamaClient", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch embeddings from Ollama. Is nomic-embed-text installed?"])
             }
             let decoded = try JSONDecoder().decode(OllamaEmbeddingResponse.self, from: data)
             return decoded.embedding
-            
+
         } else {
-            let url = URL(string: "\(openAIBaseURL)/embeddings")!
-            // Note: For OpenAI compatible embeddings, the model might need to be explicitly set
-            // usually to text-embedding-ada-002 or text-embedding-3-small, but we use what the user passed
-            // if we are in generic mode, it might fail. We default to 'text-embedding-3-small' if it's the nomic default.
-            let actualModel = model == "nomic-embed-text" ? "text-embedding-3-small" : model
-            let payload = OpenAIEmbeddingRequest(model: actualModel, input: text)
-            
+            let url = URL(string: "\(ep.backend.baseURL)/embeddings")!
+            if useModel == "nomic-embed-text" {
+                useModel = "text-embedding-3-small"
+            }
+            let payload = OpenAIEmbeddingRequest(model: useModel, input: text)
+
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            if !openAIAPIKey.isEmpty {
-                request.setValue("Bearer \(openAIAPIKey)", forHTTPHeaderField: "Authorization")
+            let key = ep.backend.resolvedAPIKey()
+            if !key.isEmpty {
+                request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
             }
             request.httpBody = try JSONEncoder().encode(payload)
             request.timeoutInterval = 30
-            
+
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                throw NSError(domain: "OllamaClient", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch embeddings from OpenAI."])
+                throw NSError(domain: "OllamaClient", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch embeddings from OpenAI-compatible API."])
             }
             let decoded = try JSONDecoder().decode(OpenAIEmbeddingResponse.self, from: data)
             return decoded.data.first?.embedding ?? []

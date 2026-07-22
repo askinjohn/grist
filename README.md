@@ -22,6 +22,7 @@ Capture meetings (mic + system audio), write notes, import **articles** or **You
 | **Chat** | Per-item chat uses that item’s **AI summary + notes + transcript** (always re-fetched). Ask everything for whole library |
 | **RAG / search index** | Embeds title, AI summary, notes, and transcript for **Ask everything**. Rebuild in Settings. Needs `ollama pull nomic-embed-text` |
 | **Chat with selection** | Highlight text in Write → **Chat with selection** — answers use only that span |
+| **AI roles config** | Settings → **AI Models**: per-job backend + model; edit `ai-config.json` in the same pane |
 | **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
 | **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
@@ -158,21 +159,47 @@ Then reopen `~/Applications/Grist.app` and re-enable Grist in System Settings if
 
 ## AI configuration
 
-Setup writes `com.grist.meetingassistant` defaults. In-app: **Settings → General**.
+**Preferred:** **Settings → AI Models**
 
-```bash
-# Ollama
-defaults write com.grist.meetingassistant aiProviderType "Ollama"
-defaults write com.grist.meetingassistant OllamaURL "http://127.0.0.1:11434"
+- Assign a **backend** + **model name** per job (Chat, Ask everything, Enhance, Embeddings, …)
+- Edit the same config as **JSON** in that pane (Save / Reload / Reset / Reveal in Finder)
+- File path:
 
-# OpenAI-compatible
-defaults write com.grist.meetingassistant aiProviderType "OpenAI Compatible"
-defaults write com.grist.meetingassistant openAIBaseURL "https://api.openai.com/v1"
-defaults write com.grist.meetingassistant openAIAPIKey "sk-..."
-defaults write com.grist.meetingassistant openAIModel "gpt-4o"
+```text
+~/Library/Application Support/Grist/ai-config.json
 ```
 
-Recommended local models: `gemma2:2b` (chat/summary), `nomic-embed-text` (RAG).
+Example (chat on OpenAI-compatible cloud, everything else local):
+
+```json
+{
+  "version": 1,
+  "backends": {
+    "local": {
+      "type": "ollama",
+      "baseURL": "http://127.0.0.1:11434"
+    },
+    "openai": {
+      "type": "openai_compatible",
+      "baseURL": "https://api.openai.com/v1",
+      "apiKeyEnv": "OPENAI_API_KEY"
+    }
+  },
+  "roles": {
+    "chat": { "backend": "openai", "model": "gpt-4o-mini" },
+    "askEverything": { "backend": "local", "model": "qwen2.5:7b" },
+    "enhance": { "backend": "local", "model": "gemma2:2b" },
+    "title": { "backend": "local", "model": "gemma2:2b" },
+    "organize": { "backend": "local", "model": "gemma2:2b" },
+    "folderSummarize": { "backend": "local", "model": "gemma2:2b" },
+    "embed": { "backend": "local", "model": "nomic-embed-text" }
+  }
+}
+```
+
+Legacy UserDefaults (`aiProviderType`, `OllamaURL`, …) are still migrated once when the JSON file is first created.
+
+Recommended local models: `gemma2:2b` (enhance/titles), stronger model for Ask everything, `nomic-embed-text` (RAG).
 
 ---
 

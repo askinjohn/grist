@@ -4343,7 +4343,15 @@ struct ChatView: View {
                     )
                 )
 
-                let response = try await OllamaClient.shared.chat(messages: apiMessages, model: model)
+                let chatRole: AIRole = {
+                    if case .global = scope { return .askEverything }
+                    return .chat
+                }()
+                let response = try await OllamaClient.shared.chat(
+                    messages: apiMessages,
+                    model: model,
+                    role: chatRole
+                )
 
                 await MainActor.run {
                     let aiMsg = ChatMessage(id: UUID().uuidString, groupName: group, role: "assistant", content: response.content, timestamp: Date().timeIntervalSince1970)

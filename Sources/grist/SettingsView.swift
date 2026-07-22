@@ -31,16 +31,20 @@ struct SettingsView: View {
             
             VStack(spacing: 0) {
                 // Custom Top Navigation
-                HStack(spacing: 16) {
+                HStack(spacing: 12) {
                     TabButton(title: "General", icon: "gearshape.fill", isSelected: selectedTab == 0) {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             selectedTab = 0
                         }
                     }
-                    
-                    TabButton(title: "AI Templates", icon: "sparkles.rectangle.stack.fill", isSelected: selectedTab == 1) {
+                    TabButton(title: "AI Models", icon: "cpu", isSelected: selectedTab == 1) {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             selectedTab = 1
+                        }
+                    }
+                    TabButton(title: "AI Templates", icon: "sparkles.rectangle.stack.fill", isSelected: selectedTab == 2) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            selectedTab = 2
                         }
                     }
                 }
@@ -53,17 +57,22 @@ struct SettingsView: View {
                 
                 // Content Area
                 ZStack {
-                    if selectedTab == 0 {
+                    switch selectedTab {
+                    case 0:
                         GeneralSettingsView()
-                            .transition(.opacity.combined(with: .move(edge: .leading)))
-                    } else {
+                            .transition(.opacity)
+                    case 1:
+                        AIModelsSettingsView()
+                            .transition(.opacity)
+                    default:
                         TemplatesSettingsView()
-                            .transition(.opacity.combined(with: .move(edge: .trailing)))
+                            .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(minWidth: 640, minHeight: 480)
     }
 }
 
@@ -304,6 +313,305 @@ struct GeneralSettingsView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - AI Models (role config + JSON)
+
+struct AIModelsSettingsView: View {
+    @ObservedObject private var ai = AIConfigManager.shared
+    @State private var showJSON = true
+    @State private var draftRoles: [String: AIRoleConfig] = [:]
+    @State private var draftBackends: [String: AIBackendConfig] = [:]
+    @State private var statusNote = ""
+
+    private var backendNames: [String] {
+        Array(ai.config.backends.keys).sorted()
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("AI models by job")
+                        .font(.title3.weight(.semibold))
+                    Text("Each feature can use a different model and backend (local Ollama or OpenAI-compatible). Edit the table or the raw JSON below. File: Application Support/Grist/ai-config.json")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                // Roles table
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Roles")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    VStack(spacing: 0) {
+                        ForEach(AIRole.allCases) { role in
+                            roleRow(role)
+                            if role != AIRole.allCases.last {
+                                Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+                            }
+                        }
+                    }
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(12)
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
+
+                    HStack {
+                        Button("Apply role table") {
+                            applyRoleTable()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        Button("Reload from disk") {
+                            ai.reloadFromDisk()
+                            loadDrafts()
+                            statusNote = "Reloaded"
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                    }
+                }
+
+                // Backends (compact)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Backends")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    ForEach(backendNames, id: \.self) { name in
+                        backendEditor(name: name)
+                    }
+                }
+
+                // JSON editor
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("Config JSON")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Spacer()
+                        Toggle("Show", isOn: $showJSON)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+
+                    if showJSON {
+                        Text("Edit freely — Save writes ai-config.json. Invalid JSON is not applied.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        TextEditor(text: $ai.jsonText)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(minHeight: 220, maxHeight: 320)
+                            .padding(8)
+                            .background(Color.black.opacity(0.25))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+                            )
+
+                        HStack(spacing: 10) {
+                            Button("Save JSON") {
+                                if ai.saveJSONText() {
+                                    loadDrafts()
+                                    statusNote = "JSON saved"
+                                } else {
+                                    statusNote = "JSON error: \(ai.lastError ?? "?")"
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button("Pretty format") {
+                                if let pretty = AIConfigManager.prettyJSON(ai.config) {
+                                    ai.jsonText = pretty
+                                }
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Reset defaults") {
+                                ai.resetToDefaults()
+                                loadDrafts()
+                                statusNote = "Defaults restored"
+                            }
+                            .buttonStyle(.bordered)
+
+                            Button("Reveal in Finder") {
+                                // Ensure file exists
+                                _ = ai.saveConfig(ai.config)
+                                ai.revealInFinder()
+                            }
+                            .buttonStyle(.bordered)
+
+                            Spacer()
+                        }
+
+                        if let err = ai.lastError, !err.isEmpty {
+                            Text(err)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                        if !statusNote.isEmpty {
+                            Text(statusNote)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(AIConfigManager.configFileURL.path)
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.tertiary)
+                            .textSelection(.enabled)
+                    }
+                }
+            }
+            .padding(28)
+        }
+        .onAppear { loadDrafts() }
+    }
+
+    private func loadDrafts() {
+        draftRoles = ai.config.roles
+        draftBackends = ai.config.backends
+        if ai.jsonText.isEmpty {
+            ai.jsonText = AIConfigManager.prettyJSON(ai.config) ?? ""
+        }
+    }
+
+    private func applyRoleTable() {
+        var c = ai.config
+        for (k, v) in draftRoles {
+            c.roles[k] = v
+        }
+        for (k, v) in draftBackends {
+            c.backends[k] = v
+        }
+        if ai.saveConfig(c) {
+            statusNote = "Roles & backends saved"
+            loadDrafts()
+        } else {
+            statusNote = ai.lastError ?? "Save failed"
+        }
+    }
+
+    @ViewBuilder
+    private func roleRow(_ role: AIRole) -> some View {
+        let binding = Binding(
+            get: {
+                draftRoles[role.rawValue]
+                    ?? ai.config.roles[role.rawValue]
+                    ?? AIRoleConfig(backend: "local", model: "gemma2:2b")
+            },
+            set: { draftRoles[role.rawValue] = $0 }
+        )
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(role.label)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                Text(role.help)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(width: 150, alignment: .leading)
+
+            Picker("", selection: Binding(
+                get: { binding.wrappedValue.backend },
+                set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
+            )) {
+                ForEach(backendNames, id: \.self) { name in
+                    Text(name).tag(name)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 110)
+
+            TextField("model name", text: Binding(
+                get: { binding.wrappedValue.model },
+                set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
+            ))
+            .textFieldStyle(.roundedBorder)
+            .frame(maxWidth: 200)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func backendEditor(name: String) -> some View {
+        let b = draftBackends[name] ?? ai.config.backends[name] ?? AIBackendConfig(type: .ollama, baseURL: "", apiKey: nil, apiKeyEnv: nil)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(name)
+                .font(.headline)
+            HStack {
+                Text("Type")
+                Spacer()
+                Picker("", selection: Binding(
+                    get: { draftBackends[name]?.type ?? b.type },
+                    set: { newType in
+                        var x = draftBackends[name] ?? b
+                        x.type = newType
+                        draftBackends[name] = x
+                    }
+                )) {
+                    ForEach(AIBackendConfig.AIBackendType.allCases, id: \.self) { t in
+                        Text(t.label).tag(t)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+            HStack {
+                Text("Base URL")
+                Spacer()
+                TextField("URL", text: Binding(
+                    get: { draftBackends[name]?.baseURL ?? b.baseURL },
+                    set: { v in
+                        var x = draftBackends[name] ?? b
+                        x.baseURL = v
+                        draftBackends[name] = x
+                    }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 280)
+            }
+            if (draftBackends[name]?.type ?? b.type) == .openaiCompatible {
+                HStack {
+                    Text("API key")
+                    Spacer()
+                    SecureField("optional if using env", text: Binding(
+                        get: { draftBackends[name]?.apiKey ?? b.apiKey ?? "" },
+                        set: { v in
+                            var x = draftBackends[name] ?? b
+                            x.apiKey = v.isEmpty ? nil : v
+                            draftBackends[name] = x
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 280)
+                }
+                HStack {
+                    Text("API key env var")
+                    Spacer()
+                    TextField("OPENAI_API_KEY", text: Binding(
+                        get: { draftBackends[name]?.apiKeyEnv ?? b.apiKeyEnv ?? "" },
+                        set: { v in
+                            var x = draftBackends[name] ?? b
+                            x.apiKeyEnv = v.isEmpty ? nil : v
+                            draftBackends[name] = x
+                        }
+                    ))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 280)
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
     }
 }
 
