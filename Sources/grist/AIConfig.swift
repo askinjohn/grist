@@ -36,6 +36,7 @@ struct AIConfigFile: Codable, Equatable {
                 AIRole.title.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
                 AIRole.organize.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
                 AIRole.folderSummarize.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
+                AIRole.taskExtract.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
                 AIRole.embed.rawValue: AIRoleConfig(backend: "local", model: "nomic-embed-text"),
             ]
         )
@@ -85,6 +86,7 @@ enum AIRole: String, CaseIterable, Identifiable {
     case title
     case organize
     case folderSummarize
+    case taskExtract
     case embed
 
     var id: String { rawValue }
@@ -97,6 +99,7 @@ enum AIRole: String, CaseIterable, Identifiable {
         case .title: return "Auto-title"
         case .organize: return "Auto-organize"
         case .folderSummarize: return "Folder summarize"
+        case .taskExtract: return "Extract tasks"
         case .embed: return "Embeddings (RAG)"
         }
     }
@@ -109,6 +112,7 @@ enum AIRole: String, CaseIterable, Identifiable {
         case .title: return "Title generation"
         case .organize: return "Auto-organize titles & folders"
         case .folderSummarize: return "Folder summarize sheet"
+        case .taskExtract: return "Pull action items into Tasks after enhance"
         case .embed: return "Search index vectors (nomic-embed-text locally)"
         }
     }

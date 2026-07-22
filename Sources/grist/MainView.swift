@@ -125,6 +125,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case unfiled
     case meetings
     case notes
+    case tasks
     case askEverything
 
     var id: String { rawValue }
@@ -135,6 +136,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .unfiled: return "Unfiled"
         case .meetings: return "Meetings"
         case .notes: return "Notes"
+        case .tasks: return "Tasks"
         case .askEverything: return "Ask everything"
         }
     }
@@ -145,6 +147,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .unfiled: return "tray"
         case .meetings: return "waveform"
         case .notes: return "note.text"
+        case .tasks: return "checklist"
         case .askEverything: return "sparkles.rectangle.stack"
         }
     }
@@ -224,8 +227,15 @@ struct MainView: View {
     // Data
     @State private var meetings: [Meeting] = []
     @State private var folders: [String] = []
+    @State private var tasks: [GristTask] = []
     @State private var selectedMeeting: Meeting? = nil
+    @State private var selectedTask: GristTask? = nil
     @State private var searchText = ""
+    @State private var showingNewTaskSheet = false
+    @State private var newTaskTitle = ""
+    @State private var newTaskNotes = ""
+    @State private var isExtractingTasks = false
+    @AppStorage("autoExtractTasks") private var autoExtractTasks = true
     /// When set, open the best tab for a search hit (summary / notes / transcript).
     @State private var pendingSearchReveal = false
     @State private var showingNewFolderAlert = false
@@ -330,7 +340,9 @@ struct MainView: View {
             sidebarContent
                 .navigationSplitViewColumnWidth(min: 260, ideal: 288, max: 360)
         } detail: {
-            if libraryFilter == .askEverything && focusedFolder == nil {
+            if libraryFilter == .tasks && focusedFolder == nil {
+                tasksDetailView
+            } else if libraryFilter == .askEverything && focusedFolder == nil {
                 globalChatDetail
             } else if let _ = selectedMeeting {
                 detailContent
@@ -541,8 +553,54 @@ struct MainView: View {
                     }
                 }
 
-                // ITEMS (filtered list) — while searching, a flat “Search results” section
-                if isSearching {
+                // ITEMS — Tasks list, search results, or meetings/notes
+                if libraryFilter == .tasks && focusedFolder == nil && !isSearching {
+                    Section {
+                        if filteredTasks.isEmpty {
+                            Text("No tasks yet — extract from a note or create one")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            ForEach(filteredTasks) { task in
+                                TaskSidebarRow(task: task, isSelected: selectedTask?.id == task.id)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedTask = task
+                                        selectedMeeting = nil
+                                    }
+                                    .contextMenu {
+                                        Button {
+                                            toggleTaskDone(task)
+                                        } label: {
+                                            Label(task.isDone ? "Mark open" : "Mark done", systemImage: task.isDone ? "circle" : "checkmark.circle")
+                                        }
+                                        Button(role: .destructive) {
+                                            db.deleteTask(id: task.id)
+                                            loadTasks()
+                                            if selectedTask?.id == task.id { selectedTask = nil }
+                                        } label: {
+                                            Label("Delete", systemImage: "trash")
+                                        }
+                                    }
+                            }
+                        }
+                    } header: {
+                        HStack {
+                            Text("Tasks")
+                            Spacer()
+                            Button {
+                                newTaskTitle = ""
+                                newTaskNotes = ""
+                                showingNewTaskSheet = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.plain)
+                            .help("New task")
+                        }
+                    }
+                } else if isSearching {
                     Section {
                         if filteredMeetings.isEmpty {
                             Text("No matches for “\(searchText)”")
@@ -671,6 +729,175 @@ struct MainView: View {
         }
         .sheet(isPresented: $showingExportOptionsSheet) {
             exportOptionsSheet
+        }
+        .sheet(isPresented: $showingNewTaskSheet) {
+            newTaskSheet
+        }
+    }
+
+    // MARK: - Tasks UI
+
+    private var newTaskSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("New task")
+                    .font(.title2.weight(.bold))
+                Spacer()
+                Button {
+                    showingNewTaskSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(24)
+
+            VStack(alignment: .leading, spacing: 14) {
+                TextField("What needs doing?", text: $newTaskTitle)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Notes (optional)", text: $newTaskNotes, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(3...6)
+            }
+            .padding(.horizontal, 24)
+
+            Spacer(minLength: 16)
+            Divider()
+            HStack {
+                Button("Cancel") { showingNewTaskSheet = false }
+                Spacer()
+                Button("Create task") { createManualTask() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding(20)
+        }
+        .frame(width: 420, height: 280)
+    }
+
+    @ViewBuilder
+    private var tasksDetailView: some View {
+        if let task = selectedTask {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 12) {
+                    Button {
+                        toggleTaskDone(task)
+                    } label: {
+                        Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
+                            .font(.title)
+                            .foregroundStyle(task.isDone ? .green : .secondary)
+                    }
+                    .buttonStyle(.plain)
+
+                    TextField("Task", text: Binding(
+                        get: { selectedTask?.title ?? "" },
+                        set: { v in
+                            selectedTask?.title = v
+                            if var t = selectedTask {
+                                t.title = v
+                                db.saveTask(t)
+                                loadTasks()
+                                selectedTask = t
+                            }
+                        }
+                    ))
+                    .font(.title2.weight(.semibold))
+                    .textFieldStyle(.plain)
+
+                    Spacer()
+                    Button {
+                        if let t = selectedTask {
+                            db.deleteTask(id: t.id)
+                            loadTasks()
+                            selectedTask = nil
+                        }
+                    } label: {
+                        Label("Delete", systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(20)
+
+                Divider()
+
+                Form {
+                    Section("Notes") {
+                        TextEditor(text: Binding(
+                            get: { selectedTask?.notes ?? "" },
+                            set: { v in
+                                guard var t = selectedTask else { return }
+                                t.notes = v
+                                selectedTask = t
+                                db.saveTask(t)
+                                loadTasks()
+                                selectedTask = tasks.first(where: { $0.id == t.id })
+                            }
+                        ))
+                        .font(.body)
+                        .frame(minHeight: 120)
+                    }
+                    if let src = task.sourceTitle, !src.isEmpty {
+                        Section("Source") {
+                            Text(src)
+                            if let mid = task.sourceMeetingId,
+                               let m = meetings.first(where: { $0.id == mid }) {
+                                Button("Open source note") {
+                                    libraryFilter = .all
+                                    selectedMeeting = m
+                                    selectedTask = nil
+                                }
+                            }
+                        }
+                    }
+                    Section("Status") {
+                        Text(task.isDone ? "Done" : "Open")
+                        if let c = task.completedAt {
+                            Text("Completed \(Date(timeIntervalSince1970: c).formatted())")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .formStyle(.grouped)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(spacing: 16) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 44, weight: .ultraLight))
+                    .foregroundStyle(.purple.opacity(0.7))
+                Text("Tasks")
+                    .font(.title2.weight(.semibold))
+                Text("Action items from meetings and notes, or create your own.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+                HStack(spacing: 12) {
+                    Button {
+                        newTaskTitle = ""
+                        newTaskNotes = ""
+                        showingNewTaskSheet = true
+                    } label: {
+                        Label("New task", systemImage: "plus")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.purple)
+
+                    if selectedMeeting != nil {
+                        Button {
+                            extractTasksFromCurrent()
+                        } label: {
+                            Label("Extract from open note", systemImage: "wand.and.stars")
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1295,15 +1522,18 @@ struct MainView: View {
         return Button {
             focusedFolder = nil
             libraryFilter = filter
-            if filter == .askEverything {
+            if filter == .askEverything || filter == .tasks {
                 selectedMeeting = nil
+            }
+            if filter == .tasks {
+                loadTasks()
             }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: filter.icon)
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 16)
-                    .foregroundStyle(selected ? (filter == .askEverything ? .purple : Color.accentColor) : .secondary)
+                    .foregroundStyle(selected ? (filter == .askEverything || filter == .tasks ? .purple : Color.accentColor) : .secondary)
                 Text(filter.label)
                     .font(.callout.weight(selected ? .semibold : .regular))
                 Spacer()
@@ -1316,7 +1546,7 @@ struct MainView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .listRowBackground(selected ? (filter == .askEverything ? Color.purple.opacity(0.12) : Color.accentColor.opacity(0.12)) : Color.clear)
+        .listRowBackground(selected ? ((filter == .askEverything || filter == .tasks) ? Color.purple.opacity(0.12) : Color.accentColor.opacity(0.12)) : Color.clear)
     }
 
     @ViewBuilder
@@ -1624,7 +1854,18 @@ struct MainView: View {
         case .unfiled: return meetings.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
         case .meetings: return meetings.filter { !$0.isNoteType }.count
         case .notes: return meetings.filter { $0.isNoteType }.count
+        case .tasks: return tasks.filter { $0.isOpen }.count
         case .askEverything: return meetings.count
+        }
+    }
+
+    private var filteredTasks: [GristTask] {
+        let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return tasks }
+        return tasks.filter {
+            $0.title.localizedCaseInsensitiveContains(q)
+                || $0.notes.localizedCaseInsensitiveContains(q)
+                || ($0.sourceTitle?.localizedCaseInsensitiveContains(q) ?? false)
         }
     }
 
@@ -2061,6 +2302,14 @@ struct MainView: View {
             .disabled(noteBodyEmpty)
 
             Button {
+                extractTasksFromCurrent()
+            } label: {
+                Label(isExtractingTasks ? "Tasks…" : "Tasks", systemImage: "checklist")
+            }
+            .help("Extract action items into Tasks")
+            .disabled(isExtractingTasks || noteBodyEmpty)
+
+            Button {
                 runEnhance()
             } label: {
                 Label(statusMessage == "Enhancing…" ? "Working…" : "Enhance", systemImage: "wand.and.stars")
@@ -2359,6 +2608,15 @@ struct MainView: View {
                 .toggleStyle(.checkbox)
                 .help("Automatically enhance after recording stops")
             
+            Button {
+                extractTasksFromCurrent()
+            } label: {
+                Label(isExtractingTasks ? "Tasks…" : "Tasks", systemImage: "checklist")
+            }
+            .help("Extract action items into Tasks")
+            .disabled(isExtractingTasks || !meetingHasEnhanceableContent)
+            .controlSize(.regular)
+
             Button {
                 runEnhance()
             } label: {
@@ -2707,7 +2965,7 @@ struct MainView: View {
             list = list.filter { ($0.groupName ?? "") == folder }
         } else {
             switch libraryFilter {
-            case .all, .askEverything:
+            case .all, .askEverything, .tasks:
                 break
             case .unfiled:
                 list = list.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
@@ -2796,12 +3054,8 @@ struct MainView: View {
         }
 
         switch libraryFilter {
-        case .unfiled, .meetings, .notes, .askEverything:
+        case .unfiled, .meetings, .notes, .askEverything, .tasks:
             // Don't re-split into every folder; show timeline (and folder name on each row)
-            // askEverything uses the detail pane for chat; list can still show All-style items
-            if libraryFilter == .askEverything {
-                return timeGrouped(filteredMeetings, headerPrefix: nil)
-            }
             return timeGrouped(filteredMeetings, headerPrefix: nil)
         case .all:
             var customGroups: [String: [Meeting]] = [:]
@@ -3354,7 +3608,106 @@ struct MainView: View {
     func loadMeetings() {
         meetings = db.fetchActiveMeetings()
         folders = db.fetchFolders()
+        loadTasks()
         if selectedMeeting == nil { selectedMeeting = meetings.first }
+    }
+
+    func loadTasks() {
+        tasks = db.fetchTasks(includeDone: true)
+        if let id = selectedTask?.id {
+            selectedTask = tasks.first(where: { $0.id == id })
+        }
+    }
+
+    func toggleTaskDone(_ task: GristTask) {
+        var t = task
+        if t.isDone {
+            t.status = "open"
+            t.completedAt = nil
+        } else {
+            t.status = "done"
+            t.completedAt = Date().timeIntervalSince1970
+        }
+        db.saveTask(t)
+        loadTasks()
+        if selectedTask?.id == t.id { selectedTask = t }
+    }
+
+    func createManualTask() {
+        let title = newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return }
+        let task = GristTask.manual(
+            title: title,
+            notes: newTaskNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        db.saveTask(task)
+        newTaskTitle = ""
+        newTaskNotes = ""
+        showingNewTaskSheet = false
+        loadTasks()
+        libraryFilter = .tasks
+        focusedFolder = nil
+        selectedMeeting = nil
+        selectedTask = task
+        statusMessage = "Task created"
+    }
+
+    /// AI extract action items from the open note/meeting into Tasks.
+    func extractTasksFromCurrent(force: Bool = false) {
+        guard let m = selectedMeeting else { return }
+        extractTasks(from: m, force: force)
+    }
+
+    func extractTasks(from meeting: Meeting, force: Bool = false) {
+        let content = [meeting.summary, meeting.manualNotes, meeting.transcript]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard !content.isEmpty else {
+            statusMessage = "Nothing to extract tasks from"
+            return
+        }
+        if isExtractingTasks { return }
+        isExtractingTasks = true
+        statusMessage = "Extracting tasks…"
+        let model = selectedModel == "custom" ? customModelName : selectedModel
+
+        Task {
+            do {
+                let extracted = try await ollama.extractTasks(
+                    title: meeting.title,
+                    summary: meeting.summary,
+                    notes: meeting.manualNotes,
+                    transcript: meeting.transcript,
+                    model: model
+                )
+                await MainActor.run {
+                    var added = 0
+                    for item in extracted {
+                        let t = item.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !t.isEmpty else { continue }
+                        if !force, db.hasOpenTask(title: t, sourceMeetingId: meeting.id) {
+                            continue
+                        }
+                        let task = GristTask.fromExtract(title: t, notes: item.notes, source: meeting)
+                        db.saveTask(task)
+                        added += 1
+                    }
+                    loadTasks()
+                    isExtractingTasks = false
+                    if added == 0 {
+                        statusMessage = extracted.isEmpty ? "No tasks found" : "No new tasks (duplicates skipped)"
+                    } else {
+                        statusMessage = "Added \(added) task\(added == 1 ? "" : "s")"
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    isExtractingTasks = false
+                    statusMessage = "Task extract failed: \(error.localizedDescription)"
+                }
+            }
+        }
     }
     
     func loadTemplates() {
@@ -3579,6 +3932,9 @@ struct MainView: View {
                     saveMeeting()
                     if let m = selectedMeeting {
                         RAGEngine.shared.indexMeetingNow(m)
+                        if autoExtractTasks {
+                            extractTasks(from: m)
+                        }
                     }
                     statusMessage = "Done"
                     selectedTab = "summary"
@@ -3737,6 +4093,37 @@ struct MainView: View {
 
     func formattedDuration(_ s: Int) -> String {
         String(format: "%02d:%02d", s / 60, s % 60)
+    }
+}
+
+// MARK: - Task sidebar row
+
+struct TaskSidebarRow: View {
+    let task: GristTask
+    let isSelected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(task.isDone ? .green : .secondary)
+                .frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(task.title)
+                    .font(.callout.weight(.medium))
+                    .strikethrough(task.isDone)
+                    .lineLimit(2)
+                if let src = task.sourceTitle, !src.isEmpty {
+                    Text(src)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 2)
+        .listRowBackground(isSelected ? Color.purple.opacity(0.12) : Color.clear)
     }
 }
 

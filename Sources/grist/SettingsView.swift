@@ -106,6 +106,7 @@ struct TabButton: View {
 
 struct GeneralSettingsView: View {
     @AppStorage("autoEnhance") private var autoEnhance = true
+    @AppStorage("autoExtractTasks") private var autoExtractTasks = true
     @AppStorage("aiProviderType") private var aiProviderType: String = "Ollama"
     @AppStorage("OllamaURL") private var ollamaURL: String = "http://127.0.0.1:11434"
     
@@ -139,6 +140,25 @@ struct GeneralSettingsView: View {
                         }
                         Spacer()
                         Toggle("", isOn: $autoEnhance)
+                            .toggleStyle(.switch)
+                    }
+                    .padding(16)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(12)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Auto-extract tasks")
+                                .font(.system(size: 16, weight: .medium, design: .rounded))
+                            Text("After Enhance, pull action items into the Tasks list")
+                                .font(.system(size: 13))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $autoExtractTasks)
                             .toggleStyle(.switch)
                     }
                     .padding(16)

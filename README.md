@@ -23,6 +23,7 @@ Capture meetings (mic + system audio), write notes, import **articles** or **You
 | **RAG / search index** | Embeds title, AI summary, notes, and transcript for **Ask everything**. Rebuild in Settings. Needs `ollama pull nomic-embed-text` |
 | **Chat with selection** | Highlight text in Write → **Chat with selection** — answers use only that span |
 | **AI roles config** | Settings → **AI Models**: per-job backend + model; edit `ai-config.json` in the same pane |
+| **Tasks** | Action items extracted after Enhance (or **Tasks** button); Library → **Tasks**; manual create |
 | **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
 | **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |

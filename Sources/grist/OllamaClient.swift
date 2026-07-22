@@ -442,6 +442,81 @@ class OllamaClient: @unchecked Sendable {
         return Self.parseEnhanceOutput(raw)
     }
 
+    /// Extract concrete action items from a note/meeting for the Tasks list.
+    /// Returns empty array if none. Each item: (title, optional notes).
+    func extractTasks(
+        title: String,
+        summary: String,
+        notes: String,
+        transcript: String,
+        model: String
+    ) async throws -> [(title: String, notes: String)] {
+        let body = """
+        Title: \(title)
+
+        AI Summary:
+        \(summary.prefix(6000))
+
+        Notes:
+        \(notes.prefix(4000))
+
+        Transcript:
+        \(transcript.prefix(4000))
+        """
+
+        let prompt = """
+        You extract actionable TASKS from a personal meeting/note for a todo list.
+
+        Rules:
+        1. Only real follow-ups someone can do (call, send, write, schedule, decide, buy, fix).
+        2. Skip vague themes, background facts, and cooking recipes unless they are real to-dos.
+        3. Max 12 tasks. Prefer quality over quantity.
+        4. If there are NO clear action items, reply with exactly: NONE
+        5. Otherwise output one task per line in this format only:
+        TASK: <short action title>
+        NOTE: <optional one-line context or owner/deadline if stated>
+        (omit NOTE line if nothing useful)
+
+        Content:
+        \(body)
+        """
+
+        let raw = try await generateText(prompt: prompt, model: model, role: .taskExtract, timeout: 60)
+        return Self.parseTaskExtractOutput(raw)
+    }
+
+    static func parseTaskExtractOutput(_ raw: String) -> [(title: String, notes: String)] {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.uppercased() == "NONE" || trimmed.isEmpty { return [] }
+
+        var results: [(String, String)] = []
+        var currentTitle: String?
+        var currentNotes = ""
+
+        func flush() {
+            guard let t = currentTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return }
+            results.append((t, currentNotes.trimmingCharacters(in: .whitespacesAndNewlines)))
+            currentTitle = nil
+            currentNotes = ""
+        }
+
+        for line in trimmed.components(separatedBy: .newlines) {
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.uppercased().hasPrefix("TASK:") {
+                flush()
+                currentTitle = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            } else if t.uppercased().hasPrefix("NOTE:") {
+                currentNotes = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            } else if t.hasPrefix("- ") || t.hasPrefix("* ") {
+                // Bullet fallback
+                flush()
+                currentTitle = String(t.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        flush()
+        return results
+    }
+
     /// Chat using the **chat** role backend by default. Pass `role: .askEverything` for library chat.
     func chat(
         messages: [OllamaChatMessage],
