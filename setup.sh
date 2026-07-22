@@ -214,20 +214,38 @@ case "$ai_choice" in
         fi
 
         echo ""
-        echo "Pulling models (this may take a while)..."
-        echo "  • qwen2.5:7b     — Chat + Ask everything (stronger grounding)"
-        echo "  • gemma2:2b      — Enhance / titles / organize (fast)"
-        echo "  • nomic-embed-text — RAG embeddings"
+        echo "Models (you can use one model for everything, or a stronger chat model):"
+        echo "  Required:"
+        echo "    • gemma2:2b         — Enhance / titles / chat (small, fast)"
+        echo "    • nomic-embed-text  — RAG embeddings for Ask everything"
+        echo "  Optional:"
+        echo "    • qwen2.5:7b        — better Chat + Ask everything (~5GB; recommended if you have RAM)"
         echo ""
-        ollama pull qwen2.5:7b
+
+        # Base model everyone gets
+        echo "Pulling gemma2:2b..."
         ollama pull gemma2:2b
+        echo "Pulling nomic-embed-text..."
         ollama pull nomic-embed-text
+
+        CHAT_MODEL="gemma2:2b"
+        if ask_yn "Also pull qwen2.5:7b for stronger Chat / Ask everything? (optional, larger download)" "n"; then
+            echo "Pulling qwen2.5:7b..."
+            ollama pull qwen2.5:7b
+            CHAT_MODEL="qwen2.5:7b"
+            echo "✅ Chat + Ask everything will use qwen2.5:7b; Enhance stays on gemma2:2b"
+        else
+            echo "✅ Using gemma2:2b for Chat, Ask everything, and Enhance (single model)"
+            echo "   You can add qwen later: ollama pull qwen2.5:7b"
+            echo "   Then set it in Settings → AI Models (or ai-config.json)"
+        fi
 
         defaults write "$BUNDLE_ID" aiProviderType "Ollama"
         defaults write "$BUNDLE_ID" OllamaURL "http://127.0.0.1:11434"
-        # Also seed toolbar default used by some screens
-        defaults write "$BUNDLE_ID" selectedModel "qwen2.5:7b"
-        write_ai_config "http://127.0.0.1:11434" "https://api.openai.com/v1" "" "qwen2.5:7b" "gemma2:2b" "nomic-embed-text" "local"
+        defaults write "$BUNDLE_ID" selectedModel "$CHAT_MODEL"
+        # chat_model, enhance_model — same when user skipped qwen
+        write_ai_config "http://127.0.0.1:11434" "https://api.openai.com/v1" "" \
+            "$CHAT_MODEL" "gemma2:2b" "nomic-embed-text" "local"
         echo "✅ Local Ollama ready at http://127.0.0.1:11434"
         ;;
 esac

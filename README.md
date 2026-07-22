@@ -170,37 +170,33 @@ Then reopen `~/Applications/Grist.app` and re-enable Grist in System Settings if
 ~/Library/Application Support/Grist/ai-config.json
 ```
 
-Example (chat on OpenAI-compatible cloud, everything else local):
+**Minimal local setup** (one chat model for everything):
 
 ```json
 {
   "version": 1,
   "backends": {
-    "local": {
-      "type": "ollama",
-      "baseURL": "http://127.0.0.1:11434"
-    },
-    "openai": {
-      "type": "openai_compatible",
-      "baseURL": "https://api.openai.com/v1",
-      "apiKeyEnv": "OPENAI_API_KEY"
-    }
+    "local": { "type": "ollama", "baseURL": "http://127.0.0.1:11434" }
   },
   "roles": {
-    "chat": { "backend": "openai", "model": "gpt-4o-mini" },
-    "askEverything": { "backend": "local", "model": "qwen2.5:7b" },
+    "chat": { "backend": "local", "model": "gemma2:2b" },
+    "askEverything": { "backend": "local", "model": "gemma2:2b" },
     "enhance": { "backend": "local", "model": "gemma2:2b" },
-    "title": { "backend": "local", "model": "gemma2:2b" },
-    "organize": { "backend": "local", "model": "gemma2:2b" },
-    "folderSummarize": { "backend": "local", "model": "gemma2:2b" },
     "embed": { "backend": "local", "model": "nomic-embed-text" }
   }
 }
 ```
 
-Legacy UserDefaults (`aiProviderType`, `OllamaURL`, …) are still migrated once when the JSON file is first created.
+`./setup.sh` always pulls `gemma2:2b` + `nomic-embed-text`. **qwen2.5:7b is optional** (better Chat / Ask everything if you want it).
 
-Recommended local models: `gemma2:2b` (enhance/titles), stronger model for Ask everything, `nomic-embed-text` (RAG).
+Optional stronger chat (example):
+
+```json
+"chat": { "backend": "local", "model": "qwen2.5:7b" },
+"askEverything": { "backend": "local", "model": "qwen2.5:7b" }
+```
+
+Legacy UserDefaults are migrated once when the JSON file is first created.
 
 ---
 

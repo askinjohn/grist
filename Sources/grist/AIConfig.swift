@@ -30,6 +30,7 @@ struct AIConfigFile: Codable, Equatable {
                 ),
             ],
             roles: [
+                // Defaults: one small local model for chat + enhance (setup may upgrade chat to qwen2.5:7b).
                 AIRole.chat.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
                 AIRole.askEverything.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
                 AIRole.enhance.rawValue: AIRoleConfig(backend: "local", model: "gemma2:2b"),
