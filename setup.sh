@@ -38,7 +38,7 @@ require_cmd() {
 }
 
 # Write ~/Library/Application Support/Grist/ai-config.json (roles + backends).
-# Args: backend_local_url, openai_url, openai_key (may be empty), chat_model, enhance_model, embed_model, default_backend (local|openai)
+# Args: local_url, openai_url, openai_key, chat_model, enhance_model, embed_model, default_backend (local|openai)
 write_ai_config() {
     local local_url="${1:-http://127.0.0.1:11434}"
     local openai_url="${2:-https://api.openai.com/v1}"
@@ -51,72 +51,60 @@ write_ai_config() {
     mkdir -p "$GRIST_DATA_DIR"
     local config_path="$GRIST_DATA_DIR/ai-config.json"
 
-    # Escape strings for JSON
-    json_escape() {
-        python3 -c 'import json,sys; print(json.dumps(sys.stdin.read().rstrip("\n")))' <<<"$1"
-    }
-    local j_local j_openai j_key j_chat j_enh j_emb
-    j_local=$(json_escape "$local_url")
-    j_openai=$(json_escape "$openai_url")
-    j_chat=$(json_escape "$chat_model")
-    j_enh=$(json_escape "$enhance_model")
-    j_emb=$(json_escape "$embed_model")
+    GRIST_DATA_DIR="$GRIST_DATA_DIR" \
+    LOCAL_URL="$local_url" OPENAI_URL="$openai_url" OPENAI_KEY="$openai_key" \
+    CHAT_MODEL="$chat_model" ENHANCE_MODEL="$enhance_model" EMBED_MODEL="$embed_model" \
+    DEFAULT_BACKEND="$default_backend" \
+    python3 <<'PY'
+import json, os
+from pathlib import Path
 
-    local openai_key_json="null"
-    local openai_env='"OPENAI_API_KEY"'
-    if [[ -n "${openai_key// }" ]]; then
-        openai_key_json=$(json_escape "$openai_key")
-        openai_env="null"
-    fi
+local_url = os.environ["LOCAL_URL"]
+openai_url = os.environ["OPENAI_URL"]
+openai_key = os.environ.get("OPENAI_KEY") or ""
+chat_model = os.environ["CHAT_MODEL"]
+enhance_model = os.environ["ENHANCE_MODEL"]
+embed_model = os.environ["EMBED_MODEL"]
+default_backend = os.environ["DEFAULT_BACKEND"]
+path = Path(os.environ["GRIST_DATA_DIR"]) / "ai-config.json"
 
-    # Roles that use the stronger chat model vs small enhance model
-    local chat_backend="$default_backend"
-    local light_backend="$default_backend"
-    # Embeddings always prefer local ollama when available
-    local embed_backend="local"
-    if [[ "$default_backend" == "openai" ]]; then
-        # OpenAI-only setup: embed can use openai with a small embedding model name
-        embed_backend="openai"
-        if [[ "$embed_model" == "nomic-embed-text" ]]; then
-            embed_model="text-embedding-3-small"
-            j_emb=$(json_escape "$embed_model")
-        fi
-        light_backend="openai"
-        chat_backend="openai"
-    fi
+chat_backend = light_backend = default_backend
+embed_backend = "local"
+if default_backend == "openai":
+    embed_backend = "openai"
+    light_backend = chat_backend = "openai"
+    if embed_model == "nomic-embed-text":
+        embed_model = "text-embedding-3-small"
 
-    cat > "$config_path" <<EOF
-{
-  "version": 1,
-  "backends": {
-    "local": {
-      "type": "ollama",
-      "baseURL": $j_local
+cfg = {
+    "version": 1,
+    "backends": {
+        "local": {"type": "ollama", "baseURL": local_url},
+        "openai": {
+            "type": "openai_compatible",
+            "baseURL": openai_url,
+            "apiKey": openai_key if openai_key.strip() else None,
+            "apiKeyEnv": None if openai_key.strip() else "OPENAI_API_KEY",
+        },
     },
-    "openai": {
-      "type": "openai_compatible",
-      "baseURL": $j_openai,
-      "apiKey": $openai_key_json,
-      "apiKeyEnv": $openai_env
-    }
-  },
-  "roles": {
-    "chat": { "backend": "$chat_backend", "model": $j_chat },
-    "askEverything": { "backend": "$chat_backend", "model": $j_chat },
-    "enhance": { "backend": "$light_backend", "model": $j_enh },
-    "title": { "backend": "$light_backend", "model": $j_enh },
-    "organize": { "backend": "$light_backend", "model": $j_enh },
-    "folderSummarize": { "backend": "$light_backend", "model": $j_enh },
-    "taskExtract": { "backend": "$light_backend", "model": $j_enh },
-    "embed": { "backend": "$embed_backend", "model": $j_emb }
-  }
+    "roles": {
+        "chat": {"backend": chat_backend, "model": chat_model},
+        "askEverything": {"backend": chat_backend, "model": chat_model},
+        "enhance": {"backend": light_backend, "model": enhance_model},
+        "title": {"backend": light_backend, "model": enhance_model},
+        "organize": {"backend": light_backend, "model": enhance_model},
+        "folderSummarize": {"backend": light_backend, "model": enhance_model},
+        "taskExtract": {"backend": light_backend, "model": enhance_model},
+        "embed": {"backend": embed_backend, "model": embed_model},
+    },
 }
-EOF
-    echo "✅ Wrote AI role config: $config_path"
-    echo "   Chat / Ask everything → $chat_model ($chat_backend)"
-    echo "   Enhance / title / tasks → $enhance_model ($light_backend)"
-    echo "   Embeddings → $embed_model ($embed_backend)"
-    echo "   Edit later: Settings → AI Models (or edit the JSON file)"
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+print(f"✅ Wrote AI role config: {path}")
+print(f"   Chat / Ask everything → {chat_model} ({chat_backend})")
+print(f"   Enhance / title / tasks → {enhance_model} ({light_backend})")
+print(f"   Embeddings → {embed_model} ({embed_backend})")
+print("   Edit later: Settings → AI Models (or edit the JSON file)")
+PY
 }
 
 # ── 0. Preconditions ─────────────────────────────────────────────────
