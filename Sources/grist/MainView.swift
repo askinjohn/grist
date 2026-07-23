@@ -269,9 +269,13 @@ struct MainView: View {
     @State private var exportTargetFolder: String? = nil
     @State private var exportOptions: ExportOptions = .default
 
-    // AI Config
-    @State private var selectedModel = "gemma2:2b"
+    // AI Config — selectedModel stays in sync with ai-config.json for the active role.
+    @State private var selectedModel = AIConfigManager.shared.modelName(for: .enhance)
     @State private var customModelName = ""
+    /// Which ai-config role the model dropdown currently edits (chat / askEverything / enhance).
+    @State private var modelPickerRole: AIRole = .enhance
+    /// True while we push config → dropdown so we don't write that change back to disk.
+    @State private var isApplyingModelFromConfig = false
     @State private var selectedTemplate = "Standard Summary"
     @State private var customTemplates: [AITemplate] = []
     @AppStorage("autoEnhance") private var autoEnhance = true
@@ -290,6 +294,8 @@ struct MainView: View {
     @State private var libraryFilter: LibraryFilter = .all
     /// When set, sidebar shows only this folder (overrides library filter).
     @State private var focusedFolder: String? = nil
+    /// Accordion: which folders are expanded to list their files.
+    @State private var expandedFolders: Set<String> = []
 
     // Create sheet form — present via item so kind is never stale
     @State private var createSheetRequest: CreateSheetRequest? = nil
@@ -300,7 +306,7 @@ struct MainView: View {
     @State private var isCreatingNewFolder = false
     @State private var newFolderInlineName = ""
     @State private var newTemplate = "Standard Summary"
-    @State private var newModel = "gemma2:2b"
+    @State private var newModel = AIConfigManager.shared.modelName(for: .enhance)
     @State private var autoStartRecording = true
 
     // Import sheet folder (mirrors create chips)
@@ -384,27 +390,54 @@ struct MainView: View {
                     .padding()
                 }
         }
-        .onAppear { 
+        .onAppear {
+            GristLog.log("[Grist] app MainView.onAppear logFile=\(GristLog.path)")
             loadMeetings()
             loadTemplates()
+            // Config → dropdown immediately (don't wait for Ollama)
+            ensureConfigModelsInPicker()
+            syncModelPickerFromConfig(for: currentModelPickerRole())
             Task {
                 do {
                     let models = try await ollama.getModels()
                     await MainActor.run {
-                        if models.isEmpty {
-                            presetModels = ["No models found"]
-                        } else {
-                            presetModels = models
-                            if newModel == "gemma2:2b" || !models.contains(newModel) {
-                                newModel = models[0]
-                            }
-                        }
+                        applyOllamaModelsToPicker(models)
+                        syncModelPickerFromConfig(for: currentModelPickerRole())
                     }
                 } catch {
                     await MainActor.run {
-                        presetModels = ["Ollama not running"]
+                        // Keep any config model names already in the list so selection still shows.
+                        if presetModels.isEmpty {
+                            presetModels = ["Ollama not running"]
+                            ensureConfigModelsInPicker()
+                        }
+                        syncModelPickerFromConfig(for: currentModelPickerRole())
                     }
                 }
+            }
+        }
+        .onChange(of: libraryFilter) { _, _ in
+            syncModelPickerFromConfig(for: currentModelPickerRole())
+        }
+        .onChange(of: selectedTab) { _, _ in
+            syncModelPickerFromConfig(for: currentModelPickerRole())
+        }
+        .onChange(of: selectedModel) { _, newVal in
+            guard !isApplyingModelFromConfig else { return }
+            persistModelPickerToConfig(model: newVal)
+        }
+        .onChange(of: customModelName) { _, newVal in
+            guard !isApplyingModelFromConfig else { return }
+            if selectedModel == "custom", !newVal.isEmpty {
+                persistModelPickerToConfig(model: newVal)
+            }
+        }
+        .onChange(of: showingSettingsSheet) { _, open in
+            // After Settings → AI Models edits, reload dropdown from file
+            if !open {
+                AIConfigManager.shared.reloadFromDisk()
+                ensureConfigModelsInPicker()
+                syncModelPickerFromConfig(for: currentModelPickerRole())
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .meetingDeleted)) { _ in
@@ -522,38 +555,37 @@ struct MainView: View {
                     Text("Library")
                 }
 
-                // FOLDERS (+ in header)
-                Section {
-                    if folders.isEmpty {
-                        Text("No folders yet")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        ForEach(folders.sorted(), id: \.self) { name in
-                            folderNavRow(name)
-                                .dropDestination(for: String.self) { items, _ in
-                                    moveMeetings(items, toFolder: name)
-                                }
+                // FOLDERS — accordion: expand to list files inside
+                if !isSearching && libraryFilter != .tasks && libraryFilter != .askEverything && libraryFilter != .unfiled {
+                    Section {
+                        if folders.isEmpty {
+                            Text("No folders yet")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        } else {
+                            ForEach(folders.sorted(), id: \.self) { name in
+                                folderAccordion(name)
+                            }
                         }
-                    }
-                } header: {
-                    HStack {
-                        Text("Folders")
-                        Spacer()
-                        Button {
-                            newFolderName = ""
-                            showingNewFolderAlert = true
-                        } label: {
-                            Image(systemName: "plus")
-                                .font(.caption.weight(.bold))
-                                .foregroundStyle(.secondary)
+                    } header: {
+                        HStack {
+                            Text("Folders")
+                            Spacer()
+                            Button {
+                                newFolderName = ""
+                                showingNewFolderAlert = true
+                            } label: {
+                                Image(systemName: "plus")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help("New folder")
                         }
-                        .buttonStyle(.plain)
-                        .help("New folder")
                     }
                 }
 
-                // ITEMS — Tasks list, search results, or meetings/notes
+                // ITEMS — Tasks list, search results, or unfiled (Today / Yesterday / …)
                 if libraryFilter == .tasks && focusedFolder == nil && !isSearching {
                     Section {
                         if filteredTasks.isEmpty {
@@ -629,30 +661,58 @@ struct MainView: View {
                                 .foregroundStyle(.tertiary)
                         }
                     }
-                } else {
-                    ForEach(groupedMeetings) { group in
-                        Section(group.name) {
-                            ForEach(group.meetings) { meeting in
-                                SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
-                                    .tag(meeting)
-                                    .draggable(meeting.id)
-                                    .contextMenu {
-                                        Button {
-                                            openExportSheet(meeting: meeting)
-                                        } label: {
-                                            Label("Export Markdown…", systemImage: "square.and.arrow.up")
-                                        }
-                                        Button(role: .destructive) {
-                                            Database.shared.softDeleteMeeting(id: meeting.id)
-                                            NotificationCenter.default.post(name: .meetingDeleted, object: nil)
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                    }
+                } else if libraryFilter != .askEverything && libraryFilter != .tasks {
+                    // Outside folders: only unfiled items, grouped by Today / Yesterday / …
+                    // (Unless a folder is “focused” via context menu — then show only that folder’s items.)
+                    if let folder = focusedFolder {
+                        Section {
+                            let items = meetingsInFolder(folder)
+                            if items.isEmpty {
+                                Text("Empty folder")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            } else {
+                                ForEach(items) { meeting in
+                                    meetingSidebarRow(meeting, inFolder: folder)
+                                }
+                            }
+                        } header: {
+                            HStack {
+                                Image(systemName: "folder.fill")
+                                    .foregroundStyle(Color.accentColor)
+                                Text(folder)
+                                Spacer()
+                                Button("Show all") {
+                                    focusedFolder = nil
+                                }
+                                .font(.caption)
+                                .buttonStyle(.plain)
                             }
                         }
-                        .dropDestination(for: String.self) { items, _ in
-                            moveMeetings(items, toFolder: dropFolder(fromSection: group.name))
+                    } else {
+                        let unfiledGroups = timeGrouped(unfiledMeetingsForSidebar, headerPrefix: nil)
+                        if unfiledGroups.isEmpty {
+                            Section {
+                                Text(libraryFilter == .unfiled
+                                     ? "No unfiled items"
+                                     : "No unfiled items — open a folder above")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            } header: {
+                                Text(libraryFilter == .unfiled ? "Unfiled" : "Unfiled")
+                            }
+                        } else {
+                            ForEach(unfiledGroups) { group in
+                                Section(group.name) {
+                                    ForEach(group.meetings) { meeting in
+                                        meetingSidebarRow(meeting, inFolder: nil)
+                                    }
+                                }
+                                .dropDestination(for: String.self) { items, _ in
+                                    // Drop onto Today/Yesterday → unfiled
+                                    moveMeetings(items, toFolder: nil)
+                                }
+                            }
                         }
                     }
                 }
@@ -1528,6 +1588,11 @@ struct MainView: View {
             if filter == .tasks {
                 loadTasks()
             }
+            if filter == .askEverything {
+                syncModelPickerFromConfig(for: .askEverything)
+            } else if filter != .tasks {
+                syncModelPickerFromConfig(for: currentModelPickerRole())
+            }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: filter.icon)
@@ -1565,7 +1630,8 @@ struct MainView: View {
                     ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
                 }
                 .labelsHidden()
-                .frame(width: 140)
+                .frame(width: 160)
+                .help("Synced with Settings → AI Models → Ask everything")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -1580,33 +1646,194 @@ struct MainView: View {
             )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            syncModelPickerFromConfig(for: .askEverything)
+        }
     }
 
-    private func folderNavRow(_ name: String) -> some View {
-        let selected = focusedFolder == name
-        let count = meetings.filter { ($0.groupName ?? "") == name }.count
-        return Button {
-            focusedFolder = name
+    // MARK: - Model picker ↔ ai-config.json
+
+    /// Role the current UI context should edit (Ask everything / Chat tab / Enhance).
+    private func currentModelPickerRole() -> AIRole {
+        if libraryFilter == .askEverything, focusedFolder == nil {
+            return .askEverything
+        }
+        if selectedTab == "chat" {
+            return .chat
+        }
+        return .enhance
+    }
+
+    /// Make sure every role model from ai-config.json appears as a picker option.
+    private func ensureConfigModelsInPicker() {
+        for role in AIRole.allCases {
+            let name = AIConfigManager.shared.modelName(for: role)
+            guard !name.isEmpty else { continue }
+            if !presetModels.contains(name) {
+                // Prefer front of list so the selection is visible before Ollama responds.
+                presetModels.insert(name, at: 0)
+            }
+        }
+    }
+
+    /// Replace picker options with Ollama's list without dropping the current selection mid-update.
+    private func applyOllamaModelsToPicker(_ models: [String]) {
+        if models.isEmpty {
+            if presetModels.isEmpty || presetModels == ["Ollama not running"] {
+                presetModels = ["No models found"]
+            }
+            ensureConfigModelsInPicker()
+            return
+        }
+
+        var next = models
+        // Always keep configured role models available (even if not currently pulled).
+        for role in AIRole.allCases {
+            let name = AIConfigManager.shared.modelName(for: role)
+            if !name.isEmpty, !next.contains(name) {
+                next.insert(name, at: 0)
+            }
+        }
+        // Keep whatever is currently selected so the Picker doesn't snap to models[0].
+        let keep = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !keep.isEmpty,
+           keep != "custom",
+           keep != "No models found",
+           keep != "Ollama not running",
+           !next.contains(keep) {
+            next.insert(keep, at: 0)
+        }
+        presetModels = next
+
+        // Create-sheet default: only fall back if its model is missing from Ollama.
+        if !models.contains(newModel) {
+            newModel = AIConfigManager.shared.modelName(for: .enhance)
+            if !models.contains(newModel), let first = models.first {
+                newModel = first
+            }
+        }
+    }
+
+    /// Dropdown shows the model stored for this role in ai-config.json.
+    private func syncModelPickerFromConfig(for role: AIRole) {
+        modelPickerRole = role
+        let name = AIConfigManager.shared.modelName(for: role)
+        guard !name.isEmpty else { return }
+        if !presetModels.contains(name) {
+            presetModels.insert(name, at: 0)
+        }
+        guard selectedModel != name else { return }
+        isApplyingModelFromConfig = true
+        selectedModel = name
+        // onChange runs in the same turn; clear after the state write settles.
+        DispatchQueue.main.async {
+            isApplyingModelFromConfig = false
+        }
+    }
+
+    /// Dropdown change writes back to the active role (keeps backend, updates model name).
+    private func persistModelPickerToConfig(model: String) {
+        guard !isApplyingModelFromConfig else { return }
+        let m = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !m.isEmpty, m != "custom", m != "No models found", m != "Ollama not running" else { return }
+        let role = modelPickerRole
+        let backend = AIConfigManager.shared.config.roles[role.rawValue]?.backend ?? "local"
+        let current = AIConfigManager.shared.modelName(for: role)
+        guard current != m else { return }
+        AIConfigManager.shared.setRole(role, backend: backend, model: m)
+        print("[AIConfig] model picker → \(role.rawValue) = \(m)")
+    }
+
+    /// Meetings that belong in a folder, respecting Meetings/Notes library filter.
+    private func meetingsInFolder(_ name: String) -> [Meeting] {
+        meetings
+            .filter { ($0.groupName ?? "") == name }
+            .filter { m in
+                switch libraryFilter {
+                case .meetings: return !m.isNoteType
+                case .notes: return m.isNoteType
+                default: return true
+                }
+            }
+            .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    /// Items with no folder — shown under Today / Yesterday outside the accordion.
+    private var unfiledMeetingsForSidebar: [Meeting] {
+        meetings
+            .filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }
+            .filter { m in
+                switch libraryFilter {
+                case .meetings: return !m.isNoteType
+                case .notes: return m.isNoteType
+                case .unfiled, .all: return true
+                case .askEverything, .tasks: return false
+                }
+            }
+    }
+
+    private func isFolderExpanded(_ name: String) -> Binding<Bool> {
+        Binding(
+            get: { expandedFolders.contains(name) },
+            set: { open in
+                if open {
+                    expandedFolders.insert(name)
+                    // Expanding a folder clears “focus only this folder” mode
+                    if focusedFolder != nil { focusedFolder = nil }
+                } else {
+                    expandedFolders.remove(name)
+                }
+            }
+        )
+    }
+
+    /// Accordion folder: chevron + click expands to list files inside.
+    @ViewBuilder
+    private func folderAccordion(_ name: String) -> some View {
+        let items = meetingsInFolder(name)
+        let expanded = isFolderExpanded(name)
+        let isFocused = focusedFolder == name
+
+        DisclosureGroup(isExpanded: expanded) {
+            if items.isEmpty {
+                Text("Empty")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 8)
+            } else {
+                ForEach(items) { meeting in
+                    meetingSidebarRow(meeting, inFolder: name)
+                        .padding(.leading, 4)
+                }
+            }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "folder.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                Image(systemName: expandedFolders.contains(name) ? "folder.fill" : "folder")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(isFocused || expandedFolders.contains(name) ? Color.accentColor : .secondary)
                     .frame(width: 16)
                 Text(name)
-                    .font(.callout.weight(selected ? .semibold : .regular))
+                    .font(.callout.weight(isFocused || expandedFolders.contains(name) ? .semibold : .regular))
                     .lineLimit(1)
                 Spacer()
-                Text("\(count)")
+                Text("\(items.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .listRowBackground(selected ? Color.accentColor.opacity(0.12) : Color.clear)
+        .listRowBackground(isFocused ? Color.accentColor.opacity(0.12) : Color.clear)
+        .dropDestination(for: String.self) { dropped, _ in
+            moveMeetings(dropped, toFolder: name)
+        }
         .contextMenu {
-            Button("Show only this folder") { focusedFolder = name }
+            Button(expanded.wrappedValue ? "Collapse" : "Expand") {
+                withAnimation { expanded.wrappedValue.toggle() }
+            }
+            Button("Show only this folder") {
+                focusedFolder = name
+                expandedFolders.insert(name)
+            }
             Button("New meeting here") {
                 focusedFolder = name
                 openCreateSheet(kind: .meeting)
@@ -1631,6 +1858,40 @@ struct MainView: View {
                 showingDeleteFolderConfirm = true
             }
         }
+    }
+
+    @ViewBuilder
+    private func meetingSidebarRow(_ meeting: Meeting, inFolder: String?) -> some View {
+        SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
+            .tag(meeting)
+            .draggable(meeting.id)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                selectedMeeting = meeting
+                selectedTask = nil
+                // Keep folder expanded when selecting inside it
+                if let inFolder {
+                    expandedFolders.insert(inFolder)
+                }
+            }
+            .contextMenu {
+                if inFolder != nil {
+                    Button("Remove from folder") {
+                        moveMeetings([meeting.id], toFolder: nil)
+                    }
+                }
+                Button {
+                    openExportSheet(meeting: meeting)
+                } label: {
+                    Label("Export Markdown…", systemImage: "square.and.arrow.up")
+                }
+                Button(role: .destructive) {
+                    Database.shared.softDeleteMeeting(id: meeting.id)
+                    NotificationCenter.default.post(name: .meetingDeleted, object: nil)
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            }
     }
 
     private func confirmDeleteFolder(contents: Database.FolderDeleteContentsMode) {
@@ -2572,6 +2833,7 @@ struct MainView: View {
             }
             .labelsHidden()
             .frame(width: 120)
+            .help("Synced with Settings → AI Models (\(currentModelPickerRole().label))")
 
             if selectedModel == "custom" {
                 TextField("model:tag", text: $customModelName)
@@ -3047,36 +3309,20 @@ struct MainView: View {
         }
     }
 
+    /// Unfiled (or filter-scoped) items for the sidebar timeline. Folder contents live in the accordion.
     var groupedMeetings: [MeetingGroup] {
-        // Single folder focus → one flat section by time still helps
         if focusedFolder != nil {
             return timeGrouped(filteredMeetings, headerPrefix: nil)
         }
-
+        // Prefer unfiled-only timeline; accordion owns folder files.
         switch libraryFilter {
-        case .unfiled, .meetings, .notes, .askEverything, .tasks:
-            // Don't re-split into every folder; show timeline (and folder name on each row)
-            return timeGrouped(filteredMeetings, headerPrefix: nil)
-        case .all:
-            var customGroups: [String: [Meeting]] = [:]
-            var timeBased: [Meeting] = []
-
-            for m in filteredMeetings {
-                if let g = m.groupName, !g.trimmingCharacters(in: .whitespaces).isEmpty {
-                    customGroups[g, default: []].append(m)
-                } else {
-                    timeBased.append(m)
-                }
-            }
-
-            var result: [MeetingGroup] = []
-            // Only show folder sections that have items (nav already lists all folders)
-            for name in customGroups.keys.sorted() {
-                let list = customGroups[name] ?? []
-                result.append(MeetingGroup(name: name, meetings: list.sorted { $0.timestamp > $1.timestamp }))
-            }
-            result.append(contentsOf: timeGrouped(timeBased, headerPrefix: nil))
-            return result
+        case .all, .unfiled:
+            return timeGrouped(unfiledMeetingsForSidebar, headerPrefix: nil)
+        case .meetings, .notes:
+            // Meetings/Notes filter: unfiled of that kind only (filed items under accordion)
+            return timeGrouped(unfiledMeetingsForSidebar, headerPrefix: nil)
+        case .askEverything, .tasks:
+            return []
         }
     }
 
@@ -3442,27 +3688,41 @@ struct MainView: View {
     /// Run enhance for a specific note (used by multi-URL import).
     func enhanceMeetingById(_ id: String) async {
         guard var m = await MainActor.run(body: { db.getMeeting(id: id) ?? meetings.first(where: { $0.id == id }) }) else {
+            GristLog.log("[Enhance] byId abort: meeting \(id) not found")
             return
         }
 
+        let usedTranscriptField = !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error")
         let transcriptSource: String = {
-            if !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") { return m.transcript }
+            if usedTranscriptField { return m.transcript }
             return m.manualNotes
         }()
         let notesSource: String = {
-            if m.transcript.isEmpty || m.transcript.hasPrefix("[Error") { return "" }
+            if !usedTranscriptField { return "" }
             return m.manualNotes
         }()
-        guard !transcriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        guard !transcriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            GristLog.log("[Enhance] byId abort: empty source id=\(id)")
+            return
+        }
 
         let model = await MainActor.run { selectedModel == "custom" ? customModelName : selectedModel }
-        guard !model.isEmpty else { return }
+        guard !model.isEmpty else {
+            GristLog.log("[Enhance] byId abort: empty model id=\(id)")
+            return
+        }
 
         let templateName = (m.template == "Note" || m.template.isEmpty) ? "Standard Summary" : m.template
         let customPrompt = await MainActor.run {
             customTemplates.first(where: { $0.name == m.template || $0.name == templateName })?.prompt
         }
         let applyTitle = m.isPlaceholderTitle
+        let existingSummaryLen = m.summary.trimmingCharacters(in: .whitespacesAndNewlines).count
+
+        GristLog.log("[Enhance] byId start id=\(id) title=\(m.title.prefix(60))")
+        GristLog.log("[Enhance] byId model=\(model) template=\(templateName) re-enhance=\(existingSummaryLen > 0) existingSummaryChars=\(existingSummaryLen)")
+        GristLog.log("[Enhance] byId feeds ORIGINAL content only (never existing summary)")
+        GristLog.log("[Enhance] byId primaryField=\(usedTranscriptField ? "transcript" : "manualNotes") primaryChars=\(transcriptSource.count) notesChars=\(notesSource.count)")
 
         await MainActor.run {
             if selectedMeeting?.id == id {
@@ -3470,6 +3730,7 @@ struct MainView: View {
             }
         }
 
+        let t0 = Date()
         do {
             let result = try await ollama.enhance(
                 transcript: transcriptSource,
@@ -3478,6 +3739,7 @@ struct MainView: View {
                 customPrompt: customPrompt,
                 model: model
             )
+            let elapsed = Date().timeIntervalSince(t0)
             await MainActor.run {
                 m.summary = result.summary
                 if applyTitle, let title = result.title, !title.isEmpty, m.isPlaceholderTitle {
@@ -3492,8 +3754,11 @@ struct MainView: View {
                     selectedMeeting = m
                     statusMessage = "Done"
                 }
+                GristLog.log("[Enhance] byId done id=\(id) \(String(format: "%.1f", elapsed))s newSummaryChars=\(result.summary.count) title=\(result.title ?? "(none)")")
             }
         } catch {
+            let elapsed = Date().timeIntervalSince(t0)
+            GristLog.log("[Enhance] byId FAILED id=\(id) after \(String(format: "%.1f", elapsed))s: \(error.localizedDescription)")
             await MainActor.run {
                 if selectedMeeting?.id == id {
                     statusMessage = "Error: \(error.localizedDescription)"
@@ -3878,44 +4143,77 @@ struct MainView: View {
     // MARK: - AI
 
     func runEnhance() {
-        guard let m = selectedMeeting else { return }
+        guard let m = selectedMeeting else {
+            GristLog.log("[Enhance] abort: no selected meeting")
+            return
+        }
 
-        // Prefer transcript; for notes fall back to written body.
+        // Prefer original transcript / captions; for notes fall back to written body.
+        // Existing AI summary is NEVER fed back in (re-Enhance rewrites from source content).
+        let usedTranscriptField = !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error")
         let transcriptSource: String = {
-            if !m.transcript.isEmpty && !m.transcript.hasPrefix("[Error") {
-                return m.transcript
-            }
+            if usedTranscriptField { return m.transcript }
             return m.manualNotes
         }()
         let notesSource: String = {
             // If we're enhancing from note body, don't double-send as both fields
-            if m.transcript.isEmpty || m.transcript.hasPrefix("[Error") {
-                return ""
-            }
+            if !usedTranscriptField { return "" }
             return m.manualNotes
         }()
 
+        let existingSummaryLen = m.summary.trimmingCharacters(in: .whitespacesAndNewlines).count
+        let modelName = selectedModel == "custom" ? customModelName : selectedModel
+        GristLog.log("[Enhance] ========== RUN ==========")
+        GristLog.log("[Enhance] start id=\(m.id) title=\(m.title.prefix(80))")
+        GristLog.log("[Enhance] model=\(modelName) rolePicker=\(modelPickerRole.rawValue) configEnhance=\(AIConfigManager.shared.modelName(for: .enhance))")
+        GristLog.log("[Enhance] feeds ORIGINAL content only — never existing AI summary")
+        GristLog.log("[Enhance] primaryField=\(usedTranscriptField ? "transcript" : "manualNotes-as-primary")")
+        GristLog.log("[Enhance] raw sizes: transcript=\(m.transcript.count) notes=\(m.manualNotes.count) summary=\(existingSummaryLen) (summary NOT sent)")
+        GristLog.log("[Enhance] willSend: primaryChars=\(transcriptSource.count) notesChars=\(notesSource.count) re-enhance=\(existingSummaryLen > 0)")
+        if transcriptSource.count > 50_000 {
+            GristLog.log("[Enhance] WARNING long source (\(transcriptSource.count) chars) — OllamaClient will truncate/de-dupe for context")
+        }
+        if !transcriptSource.isEmpty {
+            let preview = transcriptSource
+                .replacingOccurrences(of: "\n", with: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            GristLog.log("[Enhance] primaryPreview: \(preview.prefix(200))…")
+        }
+        if existingSummaryLen > 0 {
+            let sp = m.summary.replacingOccurrences(of: "\n", with: " ")
+            GristLog.log("[Enhance] OLD summary (will be replaced, not fed): \(sp.prefix(120))…")
+        }
+
         guard !transcriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             statusMessage = m.isNoteType ? "Write something first" : "No transcript yet"
+            GristLog.log("[Enhance] abort: empty primary source")
             return
         }
         if m.transcript.hasPrefix("[Error") && m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             statusMessage = "Transcription failed — fix capture/Whisper, then re-record"
+            GristLog.log("[Enhance] abort: transcript error and empty notes")
             return
         }
 
         let model = selectedModel == "custom" ? customModelName : selectedModel
-        guard !model.isEmpty else { statusMessage = "Enter model name"; return }
+        guard !model.isEmpty else {
+            statusMessage = "Enter model name"
+            GristLog.log("[Enhance] abort: empty model name")
+            return
+        }
 
         statusMessage = "Enhancing…"
         // Notes: use a readable summary style even if template is the type marker "Note"
         let templateName = (m.template == "Note" || m.template.isEmpty) ? "Standard Summary" : m.template
         let customPrompt = customTemplates.first(where: { $0.name == m.template || $0.name == templateName })?.prompt
         let applyTitle = m.isPlaceholderTitle
+        let meetingId = m.id
+        GristLog.log("[Enhance] calling Ollama template=\(templateName) customPrompt=\(customPrompt != nil) applyTitle=\(applyTitle)")
 
         Task {
+            let t0 = Date()
             do {
-                // Single model call: TITLE: … + markdown summary
+                // Single model call: TITLE: … + markdown summary from original content
                 let result = try await ollama.enhance(
                     transcript: transcriptSource,
                     notes: notesSource,
@@ -3923,23 +4221,44 @@ struct MainView: View {
                     customPrompt: customPrompt,
                     model: model
                 )
+                let elapsed = Date().timeIntervalSince(t0)
                 await MainActor.run {
-                    selectedMeeting?.summary = result.summary
-                    if applyTitle, let title = result.title, !title.isEmpty,
-                       selectedMeeting?.isPlaceholderTitle == true {
-                        selectedMeeting?.title = title
-                    }
-                    saveMeeting()
-                    if let m = selectedMeeting {
-                        RAGEngine.shared.indexMeetingNow(m)
-                        if autoExtractTasks {
-                            extractTasks(from: m)
+                    // Reassign whole struct so SwiftUI + DB both see the new summary
+                    guard var updated = selectedMeeting, updated.id == meetingId else {
+                        // Selection changed mid-flight — still persist by id
+                        if var m2 = db.getMeeting(id: meetingId) {
+                            m2.summary = result.summary
+                            if applyTitle, let title = result.title, !title.isEmpty, m2.isPlaceholderTitle {
+                                m2.title = title
+                            }
+                            db.saveMeeting(m2)
+                            RAGEngine.shared.indexMeetingNow(m2)
+                            GristLog.log("[Enhance] done (selection changed) id=\(meetingId) \(String(format: "%.1f", elapsed))s summaryChars=\(result.summary.count)")
                         }
+                        statusMessage = "Done"
+                        return
+                    }
+                    let oldSummaryChars = updated.summary.count
+                    updated.summary = result.summary
+                    if applyTitle, let title = result.title, !title.isEmpty, updated.isPlaceholderTitle {
+                        updated.title = title
+                    }
+                    selectedMeeting = updated
+                    saveMeeting()
+                    RAGEngine.shared.indexMeetingNow(updated)
+                    if autoExtractTasks {
+                        extractTasks(from: updated)
                     }
                     statusMessage = "Done"
                     selectedTab = "summary"
+                    GristLog.log("[Enhance] done id=\(meetingId) \(String(format: "%.1f", elapsed))s model=\(model)")
+                    GristLog.log("[Enhance] summaryChars \(oldSummaryChars) → \(result.summary.count) title=\(result.title ?? "(none)")")
+                    let sumPreview = result.summary.replacingOccurrences(of: "\n", with: " ")
+                    GristLog.log("[Enhance] summaryPreview: \(sumPreview.prefix(160))…")
                 }
             } catch {
+                let elapsed = Date().timeIntervalSince(t0)
+                GristLog.log("[Enhance] FAILED after \(String(format: "%.1f", elapsed))s model=\(model): \(error.localizedDescription)")
                 await MainActor.run {
                     statusMessage = "Error: \(error.localizedDescription)"
                 }
@@ -4299,16 +4618,33 @@ struct ChatView: View {
     @State private var chatHistory: [ChatMessage] = []
     @State private var inputText: String = ""
     @State private var isThinking = false
+    /// Multi-thread history (ChatGPT / WhatsApp style).
+    @State private var conversations: [ChatConversation] = []
+    @State private var activeConversationId: String = ""
+    @State private var threadSearch: String = ""
+    @State private var showingThreadPicker = false
 
     /// Cap per item when stuffing (characters).
     private let itemContextLimit = 80_000
     private let multiItemContextLimit = 14_000
     private let keywordHitLimit = 24_000
 
+    private var activeConversation: ChatConversation? {
+        conversations.first(where: { $0.id == activeConversationId })
+            ?? Database.shared.fetchConversation(id: activeConversationId)
+    }
+
+    private var filteredConversations: [ChatConversation] {
+        let q = threadSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        if q.isEmpty { return conversations }
+        // Prefer DB search (title + message body) when user types
+        return Database.shared.fetchConversations(scopeKey: scope.historyKey, search: q, limit: 80)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar: clear chat / leave selection mode
-            HStack(spacing: 10) {
+            // Toolbar: thread history + new / delete
+            HStack(spacing: 8) {
                 if case .selection(_, let title, _) = scope {
                     Label("Selection chat", systemImage: "text.quote")
                         .font(.caption.weight(.semibold))
@@ -4317,24 +4653,62 @@ struct ChatView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    Spacer()
                     if let onExitSelection {
                         Button("Exit selection") { onExitSelection() }
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                     }
-                } else {
-                    Spacer()
+                    Spacer(minLength: 8)
                 }
+
+                // Searchable history dropdown
                 Button {
-                    clearChat()
+                    threadSearch = ""
+                    reloadConversationList()
+                    showingThreadPicker = true
                 } label: {
-                    Label("Clear chat", systemImage: "trash")
+                    HStack(spacing: 6) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(activeConversation?.title ?? "New chat")
+                            .lineLimit(1)
+                            .frame(maxWidth: 220, alignment: .leading)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.primary.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help("Past chats — search and reopen any thread")
+                .popover(isPresented: $showingThreadPicker, arrowEdge: .bottom) {
+                    threadPickerPopover
+                }
+
+                Spacer(minLength: 8)
+
+                Button {
+                    startNewChat()
+                } label: {
+                    Label("New chat", systemImage: "square.and.pencil")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .disabled(chatHistory.isEmpty || isThinking)
-                .help("Start a fresh thread for this chat scope")
+                .disabled(isThinking)
+                .help("Start a new thread (keeps past chats in history)")
+
+                Button {
+                    deleteCurrentChat()
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isThinking || activeConversationId.isEmpty)
+                .help("Delete this thread from history")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
@@ -4369,6 +4743,9 @@ struct ChatView: View {
                                 .foregroundStyle(.tertiary)
                                 .multilineTextAlignment(.center)
                                 .frame(maxWidth: 360)
+                            Text("Past chats stay in History. Use New chat for a fresh thread.")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
                         }
                         .padding(.top, 60)
                     } else {
@@ -4421,17 +4798,160 @@ struct ChatView: View {
             .background(.regularMaterial)
             .shadow(color: .black.opacity(0.05), radius: 10, y: -5)
         }
-        .onAppear { loadHistory() }
-        .onChange(of: scope.historyKey) { _, _ in loadHistory() }
+        .onAppear { bootstrapThreads() }
+        .onChange(of: scope.historyKey) { _, _ in bootstrapThreads() }
     }
 
-    func loadHistory() {
-        chatHistory = Database.shared.fetchChatMessages(forGroup: scope.historyKey)
+    // MARK: - Thread picker (searchable history)
+
+    @ViewBuilder
+    private var threadPickerPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Search chats…", text: $threadSearch)
+                    .textFieldStyle(.plain)
+                    .onChange(of: threadSearch) { _, _ in
+                        // Live filter via filteredConversations
+                    }
+            }
+            .padding(10)
+            Divider()
+            if filteredConversations.isEmpty {
+                Text(threadSearch.isEmpty ? "No chats yet" : "No matches")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(20)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(filteredConversations) { conv in
+                            Button {
+                                selectConversation(conv.id)
+                                showingThreadPicker = false
+                            } label: {
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: conv.id == activeConversationId ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right")
+                                        .foregroundStyle(conv.id == activeConversationId ? Color.accentColor : .secondary)
+                                        .frame(width: 18)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(conv.title)
+                                            .font(.body.weight(conv.id == activeConversationId ? .semibold : .regular))
+                                            .foregroundStyle(.primary)
+                                            .lineLimit(2)
+                                            .multilineTextAlignment(.leading)
+                                        Text(relativeDate(conv.updatedAt))
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .contentShape(Rectangle())
+                                .background(conv.id == activeConversationId ? Color.accentColor.opacity(0.1) : Color.clear)
+                            }
+                            .buttonStyle(.plain)
+                            Divider().padding(.leading, 40)
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button {
+                startNewChat()
+                showingThreadPicker = false
+            } label: {
+                Label("New chat", systemImage: "square.and.pencil")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(width: 320, height: 360)
     }
 
+    private func relativeDate(_ ts: Double) -> String {
+        let d = Date(timeIntervalSince1970: ts)
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .abbreviated
+        return f.localizedString(for: d, relativeTo: Date())
+    }
+
+    // MARK: - Thread lifecycle
+
+    func bootstrapThreads() {
+        reloadConversationList()
+        if let first = conversations.first {
+            activeConversationId = first.id
+        } else {
+            let c = Database.shared.createConversation(scopeKey: scope.historyKey)
+            activeConversationId = c.id
+            reloadConversationList()
+        }
+        loadActiveMessages()
+    }
+
+    func reloadConversationList() {
+        conversations = Database.shared.fetchConversations(scopeKey: scope.historyKey, search: nil, limit: 100)
+    }
+
+    func loadActiveMessages() {
+        guard !activeConversationId.isEmpty else {
+            chatHistory = []
+            return
+        }
+        chatHistory = Database.shared.fetchChatMessages(conversationId: activeConversationId)
+    }
+
+    func selectConversation(_ id: String) {
+        activeConversationId = id
+        loadActiveMessages()
+        reloadConversationList()
+    }
+
+    /// New empty thread — does **not** delete past chats.
+    func startNewChat() {
+        // Reuse existing empty "New chat" if present at top
+        if let empty = conversations.first(where: {
+            $0.title == "New chat"
+                && Database.shared.fetchChatMessages(conversationId: $0.id).isEmpty
+        }) {
+            selectConversation(empty.id)
+            return
+        }
+        let c = Database.shared.createConversation(scopeKey: scope.historyKey)
+        reloadConversationList()
+        selectConversation(c.id)
+    }
+
+    /// Delete only the open thread.
+    func deleteCurrentChat() {
+        let id = activeConversationId
+        guard !id.isEmpty else { return }
+        Database.shared.deleteConversation(id: id)
+        reloadConversationList()
+        if let next = conversations.first {
+            selectConversation(next.id)
+        } else {
+            let c = Database.shared.createConversation(scopeKey: scope.historyKey)
+            reloadConversationList()
+            selectConversation(c.id)
+        }
+    }
+
+    /// Legacy name used elsewhere — now means “new chat” semantics.
     func clearChat() {
-        Database.shared.deleteChatMessages(forGroup: scope.historyKey)
-        chatHistory = []
+        startNewChat()
+    }
+
+    private func titleFromFirstMessage(_ text: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+        guard !t.isEmpty else { return "New chat" }
+        return t.count > 48 ? String(t.prefix(48)) + "…" : t
     }
 
     /// Fresh copy from DB so Write / Enhance updates are always included.
@@ -4545,26 +5065,51 @@ struct ChatView: View {
         inputText = ""
         isThinking = true
 
+        // Ensure we have a conversation thread
+        if activeConversationId.isEmpty {
+            let c = Database.shared.createConversation(scopeKey: scope.historyKey)
+            activeConversationId = c.id
+            reloadConversationList()
+        }
+        let convId = activeConversationId
         let group = scope.historyKey
-        let userMsg = ChatMessage(id: UUID().uuidString, groupName: group, role: "user", content: text, timestamp: Date().timeIntervalSince1970)
+        let isFirstMessage = chatHistory.isEmpty
+
+        let userMsg = ChatMessage(
+            id: UUID().uuidString,
+            groupName: group,
+            role: "user",
+            content: text,
+            timestamp: Date().timeIntervalSince1970,
+            conversationId: convId
+        )
         chatHistory.append(userMsg)
         Database.shared.saveChatMessage(userMsg)
+
+        // Auto-title thread from first user message (like ChatGPT)
+        if isFirstMessage {
+            let title = titleFromFirstMessage(text)
+            Database.shared.renameConversation(id: convId, title: title)
+            reloadConversationList()
+        }
 
         // Short history for weak models (listing questions shouldn't inherit hallucinations)
         let historySnapshot = Array(chatHistory.suffix(6))
 
         Task {
             do {
-                // Prefer role model from ai-config.json (chat vs askEverything); toolbar model is for Enhance.
+                // Role from scope; model from dropdown (kept in sync with ai-config.json).
                 let chatRole: AIRole = {
                     if case .global = scope { return .askEverything }
                     return .chat
                 }()
                 let model = await MainActor.run {
-                    let configured = AIConfigManager.shared.modelName(for: chatRole)
                     if selectedModel == "custom", !customModelName.isEmpty { return customModelName }
-                    // Use configured role model; fall back to toolbar only if config empty
-                    return configured.isEmpty ? selectedModel : configured
+                    let fromPicker = selectedModel.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !fromPicker.isEmpty, fromPicker != "No models found", fromPicker != "Ollama not running" {
+                        return fromPicker
+                    }
+                    return AIConfigManager.shared.modelName(for: chatRole)
                 }
                 let meetingsInContext = contextMeetings()
 
@@ -4737,15 +5282,32 @@ struct ChatView: View {
                 )
 
                 await MainActor.run {
-                    let aiMsg = ChatMessage(id: UUID().uuidString, groupName: group, role: "assistant", content: response.content, timestamp: Date().timeIntervalSince1970)
+                    let aiMsg = ChatMessage(
+                        id: UUID().uuidString,
+                        groupName: group,
+                        role: "assistant",
+                        content: response.content,
+                        timestamp: Date().timeIntervalSince1970,
+                        conversationId: convId
+                    )
                     chatHistory.append(aiMsg)
                     Database.shared.saveChatMessage(aiMsg)
+                    reloadConversationList()
                     isThinking = false
                 }
             } catch {
                 await MainActor.run {
-                    let errorMsg = ChatMessage(id: UUID().uuidString, groupName: group, role: "assistant", content: "Error: \(error.localizedDescription)", timestamp: Date().timeIntervalSince1970)
+                    let errorMsg = ChatMessage(
+                        id: UUID().uuidString,
+                        groupName: group,
+                        role: "assistant",
+                        content: "Error: \(error.localizedDescription)",
+                        timestamp: Date().timeIntervalSince1970,
+                        conversationId: convId
+                    )
                     chatHistory.append(errorMsg)
+                    // Still persist error so the thread shows what happened
+                    Database.shared.saveChatMessage(errorMsg)
                     isThinking = false
                 }
             }

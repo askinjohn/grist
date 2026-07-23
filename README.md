@@ -13,19 +13,20 @@ Capture meetings (mic + system audio), write notes, import **articles** or **You
 | **Meetings** | Mic + system audio via ScreenCaptureKit; Whisper transcription; AI summary |
 | **Notes** | First-class writing UI, markdown toolbar (bold/lists/etc.), Edit/Preview |
 | **Article / URL** | Import web pages or **YouTube** (captions via `yt-dlp`) → Note + optional Enhance |
-| **Folders** | File items; **delete folder** with *Move to Unfiled* or *soft-delete contents* |
+| **Folders** | **Accordion** sidebar: expand a folder to list files inside; only **unfiled** items sit outside (Today / Yesterday / …) |
 | **Auto-organize** | One button: name untitled items + file unfiled ones; shows a summary popup |
-| **Library** | All / Unfiled / Meetings / Notes filters |
+| **Library** | All / Unfiled / Meetings / Notes / Tasks / Ask everything |
 | **Search** | Sidebar search across the whole library; jumps to the item + best tab; shows match snippets |
-| **Export** | Markdown for one note/meeting (toolbar **Export**); folder export as many `.md` files + `_index.md` |
-| **Folder summary** | Right-click a folder → **Summarize folder…** — choose action items / brief / custom specs; saves a new Note in that folder |
-| **Chat** | Per-item chat uses that item’s **AI summary + notes + transcript** (always re-fetched). Ask everything for whole library |
-| **RAG / search index** | Embeds title, AI summary, notes, and transcript for **Ask everything**. Rebuild in Settings. Needs `ollama pull nomic-embed-text` |
+| **Export** | Markdown for one note/meeting (toolbar **Export**); choose sections; folder export as many `.md` files + `_index.md` |
+| **Folder summary** | Right-click a folder → **Summarize folder…** — action items / brief / custom; saves a Note in that folder |
+| **Chat history** | **Multiple threads** per place (like ChatGPT): New chat, searchable history dropdown, Delete thread. Ask everything and each note keep separate histories |
+| **Chat** | Per-item chat uses that item’s AI summary, notes, and transcript. **Ask everything** for the whole library (RAG) |
+| **RAG / search index** | Embeds title, AI summary, notes, and transcript. Rebuild in Settings. Needs `ollama pull nomic-embed-text` |
 | **Chat with selection** | Highlight text in Write → **Chat with selection** — answers use only that span |
-| **AI roles config** | Settings → **AI Models**: per-job backend + model; edit `ai-config.json` in the same pane |
+| **AI roles config** | Settings → **AI Models**: per-job backend + model; JSON editor; toolbar model dropdown **stays in sync** with config |
+| **Enhance** | Re-runs from **original** transcript/notes (never feeds the old summary); long sources are de-duped + truncated; file logs for debugging |
 | **Tasks** | Action items extracted after Enhance (or **Tasks** button); Library → **Tasks**; manual create |
 | **AI** | Ollama (local/remote) or OpenAI-compatible; templates; title in enhance |
-| **Chat** | Per-item / folder RAG **and Ask everything** across all notes |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
 | **Setup** | `./setup.sh` + `./build_app.sh` → `~/Applications/Grist.app` |
 | **Icon** | Bundled macOS app icon |
@@ -91,13 +92,17 @@ Purple **Auto-organize** under the create buttons:
 - AI suggests **title** and/or **folder** (prefers existing folders)  
 - Shows a **popup report** of what changed  
 
-### Folders
+### Folders (accordion)
 
-- Click a folder to focus it  
+- Folders are **collapsed by default**  
+- Click the **chevron** or folder row to **expand** and see files inside  
+- Items **with a folder** only appear under that folder — not in the main timeline  
+- Items **without a folder** appear under **Today / Yesterday / Last 7 Days / Older**  
 - **+** in the Folders header to create  
-- Right-click → **Delete Folder…**  
+- Drag a note onto a folder to file it  
+- Right-click a folder → **Delete Folder…**, Summarize, Export, “Show only this folder”  
   - **Move to Unfiled** — keep items, remove folder  
-  - **Delete all contents** — soft-delete items (`is_deleted = 1`), then remove folder  
+  - **Delete all contents** — soft-delete items, then remove folder  
 
 ### YouTube & articles
 
@@ -113,16 +118,29 @@ Purple **Auto-organize** under the create buttons:
 
 Requires captions on the video (manual or auto). If none: install/check `yt-dlp`, or record system audio while playing the video.
 
-### Chat
+### Chat & history
 
-- On a **meeting/note**: Chat uses **this item only** — AI summary, written notes, and transcript (re-loaded from the database on each message)  
-- Sidebar **Ask everything**: chat over **all** notes and meetings (RAG when the library is large)
+- On a **meeting/note**: Chat uses **this item only** — AI summary, written notes, and transcript  
+- Sidebar **Ask everything**: chat over **all** notes and meetings (RAG when the library is large)  
+- **Multiple threads** (per item and for Ask everything), similar to ChatGPT:  
+  - **History** control — searchable list of past chats (title + message text)  
+  - **New chat** — starts a fresh thread **without deleting** older ones  
+  - **Delete** — removes only the open thread  
+  - First message becomes the thread title automatically  
+- History is stored in SQLite (`chat_conversations` + `chat_messages`)
+
+### Enhance
+
+- **Enhance** always summarizes from **original** transcript / notes — not from a previous AI summary  
+- Re-Enhance after changing the model (toolbar dropdown syncs with Settings → AI Models)  
+- Long YouTube / meeting sources: captions are **de-duplicated** (notes vs transcript) and **truncated** (head + middle + end) so local models stay in context  
+- Debug log: `~/Library/Application Support/Grist/grist.log`
 
 ### Folder summary
 
 Collect blogs, videos, meetings, and notes in a folder, then:
 
-1. Right-click the folder → **Summarize folder…** (or Export menu when viewing an item in that folder)  
+1. Right-click the folder → **Summarize folder…**  
 2. Choose what you need: **Action items**, **Executive brief**, **Themes**, **Research**, or **Custom**  
 3. Edit the instructions if you want  
 4. Grist creates a new **Note** in that folder with the combined summary
@@ -138,6 +156,11 @@ Sidebar search (top of the list) matches **title, notes, summary, transcript, fo
 - Then **Save…** or **Copy**  
 - Keyboard: **⌘⇧E**  
 - Folder export uses the same section choices for every file (+ `_index.md`)
+
+### Tasks
+
+- After Enhance (if enabled), action items can be extracted into **Tasks**  
+- Library → **Tasks** for the list; create manually or extract from the open note  
 
 ---
 
@@ -162,8 +185,9 @@ Then reopen `~/Applications/Grist.app` and re-enable Grist in System Settings if
 
 **Preferred:** **Settings → AI Models**
 
-- Assign a **backend** + **model name** per job (Chat, Ask everything, Enhance, Embeddings, …)
-- Edit the same config as **JSON** in that pane (Save / Reload / Reset / Reveal in Finder)
+- Assign a **backend** + **model name** per job (Chat, Ask everything, Enhance, Embeddings, …)  
+- Edit the same config as **JSON** in that pane (Save / Reload / Reset / Reveal in Finder)  
+- The **model dropdown** in the main UI follows the active role (Chat / Ask everything / Enhance) and **writes back** to config when you change it  
 - File path:
 
 ```text
@@ -187,16 +211,27 @@ Then reopen `~/Applications/Grist.app` and re-enable Grist in System Settings if
 }
 ```
 
-`./setup.sh` always pulls `gemma2:2b` + `nomic-embed-text`. **qwen2.5:7b is optional** (better Chat / Ask everything if you want it).
+`./setup.sh` always pulls `gemma2:2b` + `nomic-embed-text`. **qwen2.5:7b is optional** (better Chat / Ask everything / Enhance if you want it).
 
-Optional stronger chat (example):
+Optional stronger models (example):
 
 ```json
 "chat": { "backend": "local", "model": "qwen2.5:7b" },
-"askEverything": { "backend": "local", "model": "qwen2.5:7b" }
+"askEverything": { "backend": "local", "model": "qwen2.5:7b" },
+"enhance": { "backend": "local", "model": "qwen2.5:7b" }
 ```
 
 Legacy UserDefaults are migrated once when the JSON file is first created.
+
+---
+
+## Data & logs
+
+| Path | What |
+|------|------|
+| `~/Library/Application Support/Grist/meetings.db` | Notes, meetings, tasks, chat threads, RAG chunks |
+| `~/Library/Application Support/Grist/ai-config.json` | Per-role AI backends and models |
+| `~/Library/Application Support/Grist/grist.log` | App diagnostics (Enhance, Ollama, chat) |
 
 ---
 
@@ -232,6 +267,7 @@ Data: `~/Library/Application Support/Grist/meetings.db`
 grist/
 ├── Sources/grist/          # SwiftUI app
 ├── Resources/AppIcon.icns  # App icon
+├── docs/plans/             # Future work (e.g. Obsidian / Notion)
 ├── grist-mcp-server/       # MCP source (binary from setup)
 ├── setup.sh
 ├── build_app.sh
@@ -247,7 +283,8 @@ grist/
 | `URLFetcher` | Web HTML or YouTube |
 | `OllamaClient` | Ollama / OpenAI-compatible |
 | `RAGEngine` | Chunk + embed + search |
-| `Database` | SQLite |
+| `Database` | SQLite (items, tasks, chat threads) |
+| `GristLog` | File logger under Application Support |
 
 ---
 
@@ -260,6 +297,8 @@ swift build -c debug
 
 Signing prefers **Apple Development** (stable TCC). Override with `CODESIGN_IDENTITY=...`.
 
+**Planned (not built yet):** optional Obsidian vault export and Notion push — see `docs/plans/integrations-obsidian-notion.md`.
+
 ---
 
 ## Troubleshooting
@@ -271,9 +310,12 @@ Signing prefers **Apple Development** (stable TCC). Override with `CODESIGN_IDEN
 | X / LinkedIn import fails | Expected — those pages need login; paste text into a Note |
 | Wrong folder on import | Import defaults to Unfiled — pick a chip explicitly |
 | Whisper process failed | Re-run setup Whisper step (`-DWHISPER_COREML=OFF`) |
-| Weak RAG / chat | `ollama pull nomic-embed-text`, then **Settings → Rebuild search index**. Imports/saves re-index automatically. |
+| Weak RAG / chat | `ollama pull nomic-embed-text`, then **Settings → Rebuild search index** |
 | Ask everything empty | Index shows 0 chunks — rebuild; check Ollama is running |
-| Search finds nothing | Query is case-insensitive over title/body/summary; clear filters are ignored while searching |
+| Enhance invents wrong topic | Long source? Check `grist.log` — should de-dupe + truncate. Re-Enhance with a stronger model (e.g. qwen) |
+| Model dropdown ≠ Settings | Close Settings (reloads config); dropdown writes to the active role (Chat / Ask everything / Enhance) |
+| Lost old chat | Use **History** (not Delete). **New chat** keeps past threads |
+| Search finds nothing | Query is case-insensitive over title/body/summary; filters are ignored while searching |
 | Generic Dock icon | `killall Dock` after rebuild; open `~/Applications/Grist.app` only |
 | MCP not loading | Restart Claude; check binary path in config |
 

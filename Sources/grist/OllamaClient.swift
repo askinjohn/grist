@@ -279,7 +279,7 @@ class OllamaClient: @unchecked Sendable {
     ) async throws -> String {
         let ep = endpointSync(for: role, modelOverride: model)
         let useModel = ep.model
-        print("[OllamaClient] generate role=\(role.rawValue) backend=\(ep.backendName) model=\(useModel)")
+        GristLog.log("[OllamaClient] generate role=\(role.rawValue) backend=\(ep.backendName) model=\(useModel) promptChars=\(prompt.count) timeout=\(Int(timeout))s")
 
         if ep.isOllama {
             let url = URL(string: "\(ep.backend.baseURL)/api/generate")!
@@ -289,11 +289,21 @@ class OllamaClient: @unchecked Sendable {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try JSONEncoder().encode(payload)
             request.timeoutInterval = timeout
+            let t0 = Date()
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            let elapsed = Date().timeIntervalSince(t0)
+            guard let httpResponse = response as? HTTPURLResponse else {
+                GristLog.log("[OllamaClient] generate FAILED no HTTP response after \(String(format: "%.1f", elapsed))s")
                 throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to Ollama at \(ep.backend.baseURL)."])
             }
-            return try JSONDecoder().decode(OllamaResponse.self, from: data).response.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard httpResponse.statusCode == 200 else {
+                let body = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
+                GristLog.log("[OllamaClient] generate FAILED HTTP \(httpResponse.statusCode) after \(String(format: "%.1f", elapsed))s model=\(useModel) body=\(body)")
+                throw NSError(domain: "OllamaClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Ollama HTTP \(httpResponse.statusCode) for model \(useModel). \(body)"])
+            }
+            let text = try JSONDecoder().decode(OllamaResponse.self, from: data).response.trimmingCharacters(in: .whitespacesAndNewlines)
+            GristLog.log("[OllamaClient] generate OK \(String(format: "%.1f", elapsed))s model=\(useModel) responseChars=\(text.count)")
+            return text
         } else {
             let url = URL(string: "\(ep.backend.baseURL)/chat/completions")!
             let msg = OllamaChatMessage(role: "user", content: prompt)
@@ -307,18 +317,112 @@ class OllamaClient: @unchecked Sendable {
             }
             request.httpBody = try JSONEncoder().encode(payload)
             request.timeoutInterval = timeout
+            let t0 = Date()
             let (data, response) = try await URLSession.shared.data(for: request)
+            let elapsed = Date().timeIntervalSince(t0)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                GristLog.log("[OllamaClient] generate OpenAI FAILED HTTP \(code) after \(String(format: "%.1f", elapsed))s")
                 throw NSError(domain: "OllamaClient", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to connect to OpenAI-compatible endpoint \(ep.backend.baseURL)."])
             }
-            return try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content
+            let text = try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message.content
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            GristLog.log("[OllamaClient] generate OpenAI OK \(String(format: "%.1f", elapsed))s responseChars=\(text.count)")
+            return text
         }
     }
 
+    /// Soft cap so local models (8k–32k context) stay usable. Long YouTube mega-episodes
+    /// are ~200k+ chars; without this the model truncates randomly and often invents a topic.
+    private static let enhanceMaxTranscriptChars = 28_000
+    private static let enhanceMaxNotesChars = 4_000
+
+    /// Keep head + middle + tail so long podcasts still get structure + ending.
+    static func truncateForEnhance(_ text: String, maxChars: Int, label: String) -> String {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > maxChars, maxChars > 800 else { return t }
+        let headLen = maxChars * 55 / 100
+        let midLen = maxChars * 20 / 100
+        let tailLen = maxChars - headLen - midLen - 80
+        let midStart = max(0, (t.count - midLen) / 2)
+        let head = String(t.prefix(headLen))
+        let midIdx = t.index(t.startIndex, offsetBy: midStart)
+        let midEnd = t.index(midIdx, offsetBy: min(midLen, t.distance(from: midIdx, to: t.endIndex)))
+        let mid = String(t[midIdx..<midEnd])
+        let tail = String(t.suffix(max(0, tailLen)))
+        GristLog.log("[OllamaClient] truncate \(label): \(t.count) → \(maxChars) chars (head+mid+tail)")
+        return """
+        \(head)
+
+        [… \(label) middle excerpt …]
+
+        \(mid)
+
+        [… \(label) ending …]
+
+        \(tail)
+        """
+    }
+
+    /// Drop note body that merely duplicates the transcript (YouTube import copies captions into both).
+    static func notesForEnhance(notes: String, transcript: String) -> String {
+        let n = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tr = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return "" }
+        if tr.isEmpty {
+            return truncateForEnhance(n, maxChars: enhanceMaxNotesChars, label: "notes")
+        }
+
+        // YouTube/web import: notes = source link(s) + same caption body as transcript.
+        let sampleLen = min(240, tr.count)
+        let sample = String(tr.prefix(sampleLen))
+        let notesDuplicateTranscript = sampleLen >= 40 && n.contains(sample)
+
+        if notesDuplicateTranscript {
+            let lines = n.components(separatedBy: .newlines)
+            var header: [String] = []
+            for line in lines.prefix(16) {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.isEmpty {
+                    if !header.isEmpty { header.append("") }
+                    continue
+                }
+                let lower = t.lowercased()
+                let isMeta = t.hasPrefix("[Open on YouTube]")
+                    || t.hasPrefix("[Source]")
+                    || lower.hasPrefix("## added from")
+                    || lower.hasPrefix("source:")
+                    || lower.hasPrefix("captions:")
+                    || t.hasPrefix("http://")
+                    || t.hasPrefix("https://")
+                if isMeta {
+                    header.append(line)
+                    continue
+                }
+                // First real body line → stop (body is already in transcript)
+                break
+            }
+            let h = header.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            GristLog.log("[OllamaClient] notes de-duped vs transcript: \(n.count) chars → header \(h.count) chars")
+            return h
+        }
+
+        // Distinct notes (user writing) — keep but cap
+        return truncateForEnhance(n, maxChars: enhanceMaxNotesChars, label: "notes")
+    }
+
     /// One model call: produce a short TITLE line plus the markdown summary.
+    /// Inputs are original transcript/captions + notes — never the previous AI summary.
     func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> EnhanceResult {
-        print("[OllamaClient] Starting AI enhancement using model: \(model)...")
+        GristLog.log("[OllamaClient] enhance start model=\(model) rawTranscriptChars=\(transcript.count) rawNotesChars=\(notes.count) template=\(template)")
+
+        let cleanedNotes = Self.notesForEnhance(notes: notes, transcript: transcript)
+        let body = Self.truncateForEnhance(
+            transcript,
+            maxChars: Self.enhanceMaxTranscriptChars,
+            label: "transcript"
+        )
+        GristLog.log("[OllamaClient] enhance after prep transcriptChars=\(body.count) notesChars=\(cleanedNotes.count)")
 
         // Template → section checklist (keeps small models structured)
         let sectionGuide: String = {
@@ -336,19 +440,36 @@ class OllamaClient: @unchecked Sendable {
             }
         }()
 
+        let lengthNote: String = {
+            if transcript.count > Self.enhanceMaxTranscriptChars {
+                return "Source length: \(transcript.count) characters (long). You are given head+middle+end excerpts only — summarize those, do not invent sections that are not present."
+            }
+            return "Source length: \(transcript.count) characters."
+        }()
+
+        let grounding = """
+        Grounding rules (strict):
+        - Summarize ONLY the provided transcript/notes. Do not invent a different topic, book, or talk.
+        - Do not invent the medium (e.g. do not call it a "Twitter thread" unless that text says so). If Notes mention YouTube, treat it as a video/podcast transcript.
+        - No chatty preamble ("Thank you for sharing…"). Output only TITLE line + Markdown body.
+        - \(lengthNote)
+        """
+
         let prompt: String
         if let custom = customPrompt, !custom.isEmpty {
             prompt = """
             \(custom)
 
+            \(grounding)
+
             First line: TITLE: <max 8 words, no quotes>
             Then a blank line, then Markdown body only.
 
             Transcript:
-            \(transcript)
+            \(body)
 
             Notes:
-            \(notes.isEmpty ? "(none)" : notes)
+            \(cleanedNotes.isEmpty ? "(none)" : cleanedNotes)
             """
         } else {
             prompt = """
@@ -360,16 +481,23 @@ class OllamaClient: @unchecked Sendable {
             Style hint: \(template)
             Fix obvious transcript typos. Do not invent facts. Output only TITLE line + Markdown body.
 
+            \(grounding)
+
             Transcript:
-            \(transcript)
+            \(body)
 
             Notes:
-            \(notes.isEmpty ? "(none)" : notes)
+            \(cleanedNotes.isEmpty ? "(none)" : cleanedNotes)
             """
         }
 
-        let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 90)
-        return Self.parseEnhanceOutput(raw)
+        GristLog.log("[OllamaClient] enhance promptChars=\(prompt.count) (source=transcript+notes, NOT prior summary)")
+        let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 180)
+        let parsed = Self.parseEnhanceOutput(raw)
+        GristLog.log("[OllamaClient] enhance parsed title=\(parsed.title ?? "(none)") summaryChars=\(parsed.summary.count)")
+        let sumPrev = parsed.summary.replacingOccurrences(of: "\n", with: " ")
+        GristLog.log("[OllamaClient] enhance summaryPreview: \(sumPrev.prefix(200))…")
+        return parsed
     }
     
     /// Synthesize many notes/meetings in a folder per user specs (action items, brief, custom).
@@ -379,7 +507,7 @@ class OllamaClient: @unchecked Sendable {
         userSpecs: String,
         model: String
     ) async throws -> EnhanceResult {
-        print("[OllamaClient] Folder summarize '\(folderName)' (\(items.count) items) model=\(model)")
+        GristLog.log("[OllamaClient] Folder summarize '\(folderName)' (\(items.count) items) model=\(model)")
 
         var corpus = ""
         for (i, item) in items.enumerated() {
@@ -495,7 +623,7 @@ class OllamaClient: @unchecked Sendable {
     ) async throws -> OllamaChatMessage {
         let ep = endpointSync(for: role, modelOverride: model)
         let useModel = ep.model
-        print("[OllamaClient] chat role=\(role.rawValue) backend=\(ep.backendName) model=\(useModel)")
+        GristLog.log("[OllamaClient] chat role=\(role.rawValue) backend=\(ep.backendName) model=\(useModel)")
 
         if ep.isOllama {
             let url = URL(string: "\(ep.backend.baseURL)/api/chat")!
@@ -540,7 +668,7 @@ class OllamaClient: @unchecked Sendable {
     func getEmbedding(text: String, model: String = "nomic-embed-text") async throws -> [Double] {
         let ep = endpointSync(for: .embed, modelOverride: model == "nomic-embed-text" ? nil : model)
         var useModel = ep.model
-        print("[OllamaClient] embed backend=\(ep.backendName) model=\(useModel)")
+        GristLog.log("[OllamaClient] embed backend=\(ep.backendName) model=\(useModel)")
 
         if ep.isOllama {
             let url = URL(string: "\(ep.backend.baseURL)/api/embeddings")!
