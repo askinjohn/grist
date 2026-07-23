@@ -21,7 +21,21 @@ enum MarkdownFormatCommand: Equatable {
 struct MarkdownNoteEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var pendingFormat: MarkdownFormatCommand?
+    /// Live selected text (empty when caret only) — used for “Chat with selection”.
+    @Binding var selectedText: String
     var fontSize: CGFloat = 16
+
+    init(
+        text: Binding<String>,
+        pendingFormat: Binding<MarkdownFormatCommand?>,
+        selectedText: Binding<String> = .constant(""),
+        fontSize: CGFloat = 16
+    ) {
+        self._text = text
+        self._pendingFormat = pendingFormat
+        self._selectedText = selectedText
+        self.fontSize = fontSize
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(self)
@@ -100,16 +114,35 @@ struct MarkdownNoteEditor: NSViewRepresentable {
         func textDidEndEditing(_ notification: Notification) {
             isEditing = false
             sync()
+            publishSelection()
         }
 
         func textDidChange(_ notification: Notification) {
             sync()
         }
 
+        func textViewDidChangeSelection(_ notification: Notification) {
+            publishSelection()
+        }
+
         private func sync() {
             guard let tv = textView else { return }
             if parent.text != tv.string {
                 parent.text = tv.string
+            }
+        }
+
+        private func publishSelection() {
+            guard let tv = textView else { return }
+            let range = tv.selectedRange()
+            let next: String
+            if range.length > 0, range.location != NSNotFound {
+                next = (tv.string as NSString).substring(with: range)
+            } else {
+                next = ""
+            }
+            if parent.selectedText != next {
+                parent.selectedText = next
             }
         }
 

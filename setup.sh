@@ -37,6 +37,76 @@ require_cmd() {
     fi
 }
 
+# Write ~/Library/Application Support/Grist/ai-config.json (roles + backends).
+# Args: local_url, openai_url, openai_key, chat_model, enhance_model, embed_model, default_backend (local|openai)
+write_ai_config() {
+    local local_url="${1:-http://127.0.0.1:11434}"
+    local openai_url="${2:-https://api.openai.com/v1}"
+    local openai_key="${3:-}"
+    local chat_model="${4:-qwen2.5:7b}"
+    local enhance_model="${5:-gemma2:2b}"
+    local embed_model="${6:-nomic-embed-text}"
+    local default_backend="${7:-local}"
+
+    mkdir -p "$GRIST_DATA_DIR"
+    local config_path="$GRIST_DATA_DIR/ai-config.json"
+
+    GRIST_DATA_DIR="$GRIST_DATA_DIR" \
+    LOCAL_URL="$local_url" OPENAI_URL="$openai_url" OPENAI_KEY="$openai_key" \
+    CHAT_MODEL="$chat_model" ENHANCE_MODEL="$enhance_model" EMBED_MODEL="$embed_model" \
+    DEFAULT_BACKEND="$default_backend" \
+    python3 <<'PY'
+import json, os
+from pathlib import Path
+
+local_url = os.environ["LOCAL_URL"]
+openai_url = os.environ["OPENAI_URL"]
+openai_key = os.environ.get("OPENAI_KEY") or ""
+chat_model = os.environ["CHAT_MODEL"]
+enhance_model = os.environ["ENHANCE_MODEL"]
+embed_model = os.environ["EMBED_MODEL"]
+default_backend = os.environ["DEFAULT_BACKEND"]
+path = Path(os.environ["GRIST_DATA_DIR"]) / "ai-config.json"
+
+chat_backend = light_backend = default_backend
+embed_backend = "local"
+if default_backend == "openai":
+    embed_backend = "openai"
+    light_backend = chat_backend = "openai"
+    if embed_model == "nomic-embed-text":
+        embed_model = "text-embedding-3-small"
+
+cfg = {
+    "version": 1,
+    "backends": {
+        "local": {"type": "ollama", "baseURL": local_url},
+        "openai": {
+            "type": "openai_compatible",
+            "baseURL": openai_url,
+            "apiKey": openai_key if openai_key.strip() else None,
+            "apiKeyEnv": None if openai_key.strip() else "OPENAI_API_KEY",
+        },
+    },
+    "roles": {
+        "chat": {"backend": chat_backend, "model": chat_model},
+        "askEverything": {"backend": chat_backend, "model": chat_model},
+        "enhance": {"backend": light_backend, "model": enhance_model},
+        "title": {"backend": light_backend, "model": enhance_model},
+        "organize": {"backend": light_backend, "model": enhance_model},
+        "folderSummarize": {"backend": light_backend, "model": enhance_model},
+        "taskExtract": {"backend": light_backend, "model": enhance_model},
+        "embed": {"backend": embed_backend, "model": embed_model},
+    },
+}
+path.write_text(json.dumps(cfg, indent=2) + "\n")
+print(f"✅ Wrote AI role config: {path}")
+print(f"   Chat / Ask everything → {chat_model} ({chat_backend})")
+print(f"   Enhance / title / tasks → {enhance_model} ({light_backend})")
+print(f"   Embeddings → {embed_model} ({embed_backend})")
+print("   Edit later: Settings → AI Models (or edit the JSON file)")
+PY
+}
+
 # ── 0. Preconditions ─────────────────────────────────────────────────
 echo "📦 Checking system prerequisites..."
 
@@ -98,17 +168,24 @@ case "$ai_choice" in
             echo "❌ URL required."
             exit 1
         fi
+        read -r -p "Chat model on that host [qwen2.5:7b]: " remote_chat || true
+        remote_chat=${remote_chat:-qwen2.5:7b}
+        read -r -p "Enhance/title model [gemma2:2b]: " remote_enhance || true
+        remote_enhance=${remote_enhance:-gemma2:2b}
         defaults write "$BUNDLE_ID" aiProviderType "Ollama"
         defaults write "$BUNDLE_ID" OllamaURL "$custom_ollama_url"
+        write_ai_config "$custom_ollama_url" "https://api.openai.com/v1" "" "$remote_chat" "$remote_enhance" "nomic-embed-text" "local"
         echo "✅ Using remote Ollama at $custom_ollama_url"
-        echo "   Ensure that host has models: gemma2:2b (or your chat model) + nomic-embed-text"
+        echo "   Ensure that host has: $remote_chat, $remote_enhance, nomic-embed-text"
         ;;
     3)
         read -r -p "API base URL [https://api.openai.com/v1]: " api_url || true
         api_url=${api_url:-https://api.openai.com/v1}
         read -r -p "API key: " api_key
-        read -r -p "Model name [gpt-4o]: " api_model || true
-        api_model=${api_model:-gpt-4o}
+        read -r -p "Chat model name [gpt-4o-mini]: " api_model || true
+        api_model=${api_model:-gpt-4o-mini}
+        read -r -p "Enhance model (can be same) [gpt-4o-mini]: " api_enhance || true
+        api_enhance=${api_enhance:-$api_model}
         if [[ -z "${api_key// }" ]]; then
             echo "❌ API key required for OpenAI-compatible mode."
             exit 1
@@ -117,10 +194,10 @@ case "$ai_choice" in
         defaults write "$BUNDLE_ID" openAIBaseURL "$api_url"
         defaults write "$BUNDLE_ID" openAIAPIKey "$api_key"
         defaults write "$BUNDLE_ID" openAIModel "$api_model"
-        # Keep a local Ollama URL empty-ish default for any residual paths
         defaults write "$BUNDLE_ID" OllamaURL "http://127.0.0.1:11434"
-        echo "✅ OpenAI-compatible provider saved (model: $api_model)"
-        echo "   Note: embeddings/RAG work best if the API supports an embedding model."
+        write_ai_config "http://127.0.0.1:11434" "$api_url" "$api_key" "$api_model" "$api_enhance" "text-embedding-3-small" "openai"
+        echo "✅ OpenAI-compatible provider saved (chat: $api_model)"
+        echo "   Tip: you can still point embed/enhance at local Ollama later in Settings → AI Models."
         ;;
     *)
         echo "Installing Ollama locally..."
@@ -136,13 +213,39 @@ case "$ai_choice" in
             sleep 2
         fi
 
-        echo "Pulling gemma2:2b (summaries + chat)..."
+        echo ""
+        echo "Models (you can use one model for everything, or a stronger chat model):"
+        echo "  Required:"
+        echo "    • gemma2:2b         — Enhance / titles / chat (small, fast)"
+        echo "    • nomic-embed-text  — RAG embeddings for Ask everything"
+        echo "  Optional:"
+        echo "    • qwen2.5:7b        — better Chat + Ask everything (~5GB; recommended if you have RAM)"
+        echo ""
+
+        # Base model everyone gets
+        echo "Pulling gemma2:2b..."
         ollama pull gemma2:2b
-        echo "Pulling nomic-embed-text (RAG embeddings)..."
+        echo "Pulling nomic-embed-text..."
         ollama pull nomic-embed-text
+
+        CHAT_MODEL="gemma2:2b"
+        if ask_yn "Also pull qwen2.5:7b for stronger Chat / Ask everything? (optional, larger download)" "n"; then
+            echo "Pulling qwen2.5:7b..."
+            ollama pull qwen2.5:7b
+            CHAT_MODEL="qwen2.5:7b"
+            echo "✅ Chat + Ask everything will use qwen2.5:7b; Enhance stays on gemma2:2b"
+        else
+            echo "✅ Using gemma2:2b for Chat, Ask everything, and Enhance (single model)"
+            echo "   You can add qwen later: ollama pull qwen2.5:7b"
+            echo "   Then set it in Settings → AI Models (or ai-config.json)"
+        fi
 
         defaults write "$BUNDLE_ID" aiProviderType "Ollama"
         defaults write "$BUNDLE_ID" OllamaURL "http://127.0.0.1:11434"
+        defaults write "$BUNDLE_ID" selectedModel "$CHAT_MODEL"
+        # chat_model, enhance_model — same when user skipped qwen
+        write_ai_config "http://127.0.0.1:11434" "https://api.openai.com/v1" "" \
+            "$CHAT_MODEL" "gemma2:2b" "nomic-embed-text" "local"
         echo "✅ Local Ollama ready at http://127.0.0.1:11434"
         ;;
 esac
@@ -291,5 +394,7 @@ echo "    (needed to capture Zoom/Meet/YouTube audio, not just the mic)"
 echo ""
 echo "App installs to:  ~/Applications/Grist.app"
 echo "Data directory:   $GRIST_DATA_DIR"
+echo "AI config:        $GRIST_DATA_DIR/ai-config.json"
+echo "  (Settings → AI Models — change chat vs enhance models anytime)"
 echo "Re-run setup anytime:  ./setup.sh"
 echo ""
