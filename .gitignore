@@ -7,9 +7,11 @@ DerivedData/
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
 
-# App bundles (built locally)
+# App bundles & disk images (built locally)
 Grist.app/
 *.app/
+Grist.dmg
+*.dmg
 
 # Whisper / ML model blobs (downloaded by setup)
 *.bin
