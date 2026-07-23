@@ -27,12 +27,20 @@ git clone https://github.com/askinjohn/grist.git
 cd grist
 chmod +x setup.sh build_app.sh
 ./setup.sh          # AI, Whisper, yt-dlp, optional MCP
-./build_app.sh      # → ~/Applications/Grist.app
+./build_app.sh      # → Grist.app, Grist.dmg, ~/Applications/Grist.app
 ```
 
 **Needs:** macOS 15+, Homebrew, Xcode CLT. Optional: Claude Desktop (MCP), Apple ID for stable mic/screen permissions, `yt-dlp` for YouTube.
 
-Rebuild: `./build_app.sh`
+| Output | Path |
+|--------|------|
+| App bundle | `./Grist.app` |
+| **Disk image** | `./Grist.dmg` — open, drag **Grist** → **Applications** |
+| Dev install | `~/Applications/Grist.app` (launched after build) |
+
+Rebuild: `./build_app.sh`  
+
+Skip pieces if needed: `SKIP_DMG=1`, `SKIP_INSTALL=1`, `SKIP_LAUNCH=1`.
 
 ---
 
