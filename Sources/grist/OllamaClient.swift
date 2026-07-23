@@ -177,21 +177,13 @@ class OllamaClient: @unchecked Sendable {
         }
 
         let prompt = """
-        You organize notes in a personal knowledge app.
         Item type: \(kind)
-
         Existing folders: [\(folderList)]
 
-        Reply with EXACTLY two lines and nothing else:
+        Output EXACTLY two lines (no markdown, no extra text):
         \(rules.joined(separator: "\n"))
 
-        Rules:
-        - If TITLE must KEEP, output exactly: TITLE: KEEP
-        - If FOLDER must KEEP, output exactly: FOLDER: KEEP
-        - Prefer an existing folder when it clearly fits the topic
-        - Use NONE only if no folder is appropriate
-        - No markdown, no extra commentary
-
+        Prefer an existing folder name when it fits. Use NONE if none fits.
         Content:
         \(snippet)
         """
@@ -230,12 +222,8 @@ class OllamaClient: @unchecked Sendable {
     func suggestTitle(content: String, kind: String = "meeting", model: String) async throws -> String {
         let snippet = String(content.prefix(2500))
         let prompt = """
-        Suggest a concise title for this \(kind) (maximum 8 words).
-        Rules:
-        - Capture the main topic clearly
-        - No quotation marks, no trailing period
-        - No prefixes like "Title:" or "Meeting:"
-        - Output ONLY the title text
+        Write a title for this \(kind) (max 8 words).
+        Output only the title — no quotes, no period, no "Title:" prefix.
 
         Content:
         \(snippet)
@@ -332,56 +320,51 @@ class OllamaClient: @unchecked Sendable {
     func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> EnhanceResult {
         print("[OllamaClient] Starting AI enhancement using model: \(model)...")
 
-        let titleRule = """
-        FIRST LINE of your reply MUST be exactly:
-        TITLE: <short title, max 8 words, no quotes>
-        Then a blank line, then the summary body only (no repeating the title as a heading unless useful).
-        """
+        // Template → section checklist (keeps small models structured)
+        let sectionGuide: String = {
+            switch template {
+            case "Daily Standup":
+                return "Sections: ## Yesterday, ## Today, ## Blockers"
+            case "Sales Call":
+                return "Sections: ## Context, ## Needs, ## Objections, ## Next steps"
+            case "Action Items Focus":
+                return "Sections: ## Decisions, ## Action items (owner if named), ## Open questions"
+            case "Note":
+                return "Sections: ## Summary, ## Key points, ## Action items (if any)"
+            default:
+                return "Sections: ## Summary, ## Key points, ## Decisions, ## Action items, ## Open questions"
+            }
+        }()
 
         let prompt: String
         if let custom = customPrompt, !custom.isEmpty {
             prompt = """
-            <system_instructions>
             \(custom)
 
-            \(titleRule)
-            </system_instructions>
+            First line: TITLE: <max 8 words, no quotes>
+            Then a blank line, then Markdown body only.
 
-            <raw_transcript>
+            Transcript:
             \(transcript)
-            </raw_transcript>
 
-            <user_manual_notes>
-            \(notes.isEmpty ? "(None provided)" : notes)
-            </user_manual_notes>
-
-            Begin with TITLE: then the summary.
+            Notes:
+            \(notes.isEmpty ? "(none)" : notes)
             """
         } else {
             prompt = """
-            <system_instructions>
-            You are an expert AI meeting assistant. Synthesize the transcript and notes into a structured Markdown summary.
+            Summarize this note/meeting into clean Markdown.
 
-            Rules:
-            1. \(titleRule)
-            2. Format the summary according to the style: "\(template)".
-            3. Combine points logically; fix obvious transcript errors using context.
-            4. Do NOT include system instructions or the prompt in the output.
-            5. After the TITLE line and blank line, output ONLY clean Markdown for the summary body.
-            </system_instructions>
+            First line: TITLE: <max 8 words, no quotes>
+            Blank line, then body using:
+            \(sectionGuide)
+            Style hint: \(template)
+            Fix obvious transcript typos. Do not invent facts. Output only TITLE line + Markdown body.
 
-            <raw_transcript>
+            Transcript:
             \(transcript)
-            </raw_transcript>
 
-            <user_manual_notes>
-            \(notes.isEmpty ? "(None provided)" : notes)
-            </user_manual_notes>
-
-            Reply format:
-            TITLE: your title here
-
-            (markdown summary starts here)
+            Notes:
+            \(notes.isEmpty ? "(none)" : notes)
             """
         }
 
@@ -412,30 +395,20 @@ class OllamaClient: @unchecked Sendable {
         }
 
         let specs = userSpecs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let want = specs.isEmpty
+            ? "Overview, key themes, decisions, action items (owners if named)."
+            : specs
         let prompt = """
-        <system_instructions>
-        You are synthesizing a whole Grist folder of notes, articles, videos, and meetings into ONE markdown document.
+        Summarize folder "\(folderName)" (\(items.count) items) into one Markdown doc.
 
-        Folder name: "\(folderName)"
-        Item count: \(items.count)
+        User wants: \(want)
 
-        USER WANTS (follow closely):
-        \(specs.isEmpty ? "Executive overview, key themes, decisions, and concrete action items with owners if mentioned." : specs)
+        First line: TITLE: <max 10 words>
+        Blank line, then Markdown. Cite source titles in parentheses. No invented facts.
+        Include ## Action items unless the user asked for something else.
 
-        Output rules:
-        1. FIRST LINE must be: TITLE: <short title max 10 words>
-        2. Blank line, then Markdown body only.
-        3. Structure clearly (headings, bullets). Include an Action items / Next steps section unless the user asked otherwise.
-        4. Cite source item titles in parentheses when a point comes from a specific item.
-        5. Do not invent facts not supported by the items. If something is unclear, say so.
-        6. Do not repeat the system instructions.
-        </system_instructions>
-
-        <folder_items>
+        Items:
         \(corpus)
-        </folder_items>
-
-        Begin with TITLE: then the folder summary.
         """
 
         let raw = try await generateText(prompt: prompt, model: model, role: .folderSummarize, timeout: 180)
@@ -465,17 +438,14 @@ class OllamaClient: @unchecked Sendable {
         """
 
         let prompt = """
-        You extract actionable TASKS from a personal meeting/note for a todo list.
+        Extract concrete todo items from this note/meeting.
 
-        Rules:
-        1. Only real follow-ups someone can do (call, send, write, schedule, decide, buy, fix).
-        2. Skip vague themes, background facts, and cooking recipes unless they are real to-dos.
-        3. Max 12 tasks. Prefer quality over quantity.
-        4. If there are NO clear action items, reply with exactly: NONE
-        5. Otherwise output one task per line in this format only:
-        TASK: <short action title>
-        NOTE: <optional one-line context or owner/deadline if stated>
-        (omit NOTE line if nothing useful)
+        - Only real actions (call, send, schedule, write, decide, buy, fix).
+        - Skip background facts and vague themes. Max 12 tasks.
+        - If none: reply exactly NONE
+        - Else one task per block:
+        TASK: <short action>
+        NOTE: <optional owner/deadline/context — omit if empty>
 
         Content:
         \(body)

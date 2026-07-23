@@ -4493,14 +4493,9 @@ struct ChatView: View {
         return keys.contains { l.contains($0) }
     }
 
-    /// Locked list of real titles — small models must copy these exactly.
+    /// Locked list of real titles — copy exactly; do not invent.
     private func authoritativeTitleList(_ meetings: [Meeting], header: String) -> String {
-        var lines = [
-            "=== \(header) ===",
-            "FORBIDDEN: inventing note titles, folders, or topics not listed here.",
-            "REQUIRED: when listing notes, copy titles CHARACTER-FOR-CHARACTER from this list.",
-            "",
-        ]
+        var lines = ["=== \(header) ===", "Copy TITLE= strings exactly. Do not invent titles.", ""]
         let sorted = meetings.sorted { $0.timestamp > $1.timestamp }
         if sorted.isEmpty {
             lines.append("(no matching notes)")
@@ -4510,7 +4505,7 @@ struct ChatView: View {
                 lines.append("\(i + 1). TITLE=\"\(m.title)\" | type=\(m.kindLabel)\(folder)")
             }
         }
-        lines.append("=== END TITLE LIST ===")
+        lines.append("=== END ===")
         return lines.joined(separator: "\n")
     }
 
@@ -4560,7 +4555,17 @@ struct ChatView: View {
 
         Task {
             do {
-                let model = selectedModel == "custom" ? customModelName : selectedModel
+                // Prefer role model from ai-config.json (chat vs askEverything); toolbar model is for Enhance.
+                let chatRole: AIRole = {
+                    if case .global = scope { return .askEverything }
+                    return .chat
+                }()
+                let model = await MainActor.run {
+                    let configured = AIConfigManager.shared.modelName(for: chatRole)
+                    if selectedModel == "custom", !customModelName.isEmpty { return customModelName }
+                    // Use configured role model; fall back to toolbar only if config empty
+                    return configured.isEmpty ? selectedModel : configured
+                }
                 let meetingsInContext = contextMeetings()
 
                 var documentBlock = ""
@@ -4678,20 +4683,17 @@ struct ChatView: View {
                 }
 
                 let actionFocused = isActionOrAdviceQuery(text)
-                let systemPrompt = """
-                You are Grist’s library assistant. You answer ONLY from DOCUMENT.
-
-                HARD RULES (never break):
-                1. NEVER invent note titles, folder names, or topics. If a title is not in AUTHORITATIVE TITLE LIST, do not write it.
-                2. When listing notes, copy each TITLE= value exactly (same spelling, punctuation, capitalization).
-                3. Content must come from that note’s AI Summary / Notes / Transcript in DOCUMENT.
-                4. If the user asks for titles in a folder, list ONLY the AUTHORITATIVE list for that folder — nothing else.
-                5. Never invent generic titles (e.g. "Estate Planning Basics") unless that exact TITLE= appears.
-                6. Prefer AI Summary. Be concrete. Cite titles in quotes.
-                7. Do not ask the user to paste content.
-                8. Do NOT mention notes that are not in the AUTHORITATIVE BEST MATCHES / FOLDER list for this question (e.g. do not drag in Cooking recipes when the topic is finance).
-                9. ACTION / ADVICE questions: output a numbered action list grounded ONLY in DOCUMENT. Quote or paraphrase principles from the summaries (e.g. debt snowball, stewardship, biblical principles IF present). FORBIDDEN: generic retail-finance boilerplate such as "consult a financial advisor", "diversify your portfolio", "build an emergency fund" UNLESS those exact ideas appear in DOCUMENT. Do not add disclaimers about being an AI instead of answering from the notes.
+                var systemPrompt = """
+                Answer only from DOCUMENT. Prefer AI Summary over notes/transcript.
+                Copy TITLE= strings exactly — never invent titles, folders, or notes.
+                Only discuss notes that appear in DOCUMENT for this question.
                 """
+                if actionFocused {
+                    systemPrompt += """
+
+                    For this question: numbered actions only. Each action must cite a real note title and an idea from DOCUMENT. No generic advice that is not in DOCUMENT.
+                    """
+                }
 
                 let listingish =
                     text.lowercased().contains("title")
@@ -4707,33 +4709,27 @@ struct ChatView: View {
                         apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
                     }
                 }
+                // Single DOCUMENT block (title inventory already inside for global/folder paths)
+                let docPayload = documentBlock.contains("TITLE=")
+                    ? documentBlock
+                    : "\(titleInventory)\n\n\(documentBlock)"
                 let actionExtra = actionFocused
-                    ? "\nFormat: numbered actions. Each bullet must tie to a quoted note title and idea from DOCUMENT. No generic advice."
+                    ? "\nReply with numbered actions tied to real titles from DOCUMENT."
                     : ""
                 apiMessages.append(
                     OllamaClient.OllamaChatMessage(
                         role: "user",
                         content: """
                         DOCUMENT:
+                        \(docPayload)
 
-                        \(documentBlock)
+                        QUESTION: \(text)
 
-                        ---
-                        Reminder of authoritative titles:
-                        \(titleInventory)
-
-                        USER QUESTION:
-                        \(text)
-
-                        Answer using only DOCUMENT. Copy titles exactly from AUTHORITATIVE TITLE LIST. Do not invent titles.\(actionExtra)
+                        Answer from DOCUMENT only. Exact titles only.\(actionExtra)
                         """
                     )
                 )
 
-                let chatRole: AIRole = {
-                    if case .global = scope { return .askEverything }
-                    return .chat
-                }()
                 let response = try await OllamaClient.shared.chat(
                     messages: apiMessages,
                     model: model,
