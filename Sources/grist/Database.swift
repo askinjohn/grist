@@ -116,6 +116,8 @@ class Database {
         execute("ALTER TABLE meetings ADD COLUMN is_deleted INTEGER DEFAULT 0;")
         execute("ALTER TABLE meetings ADD COLUMN duration_seconds INTEGER DEFAULT 0;")
         execute("ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT;")
+        execute("ALTER TABLE chat_messages ADD COLUMN sources TEXT;")
+        execute("ALTER TABLE chat_conversations ADD COLUMN is_pinned INTEGER DEFAULT 0;")
         migrateLegacyChatThreads()
         migrateLegacyItemScopeKeys()
     }
@@ -471,6 +473,16 @@ struct ChatConversation: Identifiable, Codable, Hashable {
     var title: String
     var createdAt: Double
     var updatedAt: Double
+    var isPinned: Bool
+
+    init(id: String, scopeKey: String, title: String, createdAt: Double, updatedAt: Double, isPinned: Bool = false) {
+        self.id = id
+        self.scopeKey = scopeKey
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.isPinned = isPinned
+    }
 }
 
 struct ChatMessage: Identifiable, Codable, Hashable {
@@ -481,14 +493,25 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var content: String
     var timestamp: Double
     var conversationId: String
+    /// Note/meeting titles used as RAG/document sources (assistant messages).
+    var sources: [String]
 
-    init(id: String, groupName: String, role: String, content: String, timestamp: Double, conversationId: String = "") {
+    init(
+        id: String,
+        groupName: String,
+        role: String,
+        content: String,
+        timestamp: Double,
+        conversationId: String = "",
+        sources: [String] = []
+    ) {
         self.id = id
         self.groupName = groupName
         self.role = role
         self.content = content
         self.timestamp = timestamp
         self.conversationId = conversationId
+        self.sources = sources
     }
 }
 
@@ -502,11 +525,12 @@ extension Database {
             scopeKey: scopeKey,
             title: title.isEmpty ? "New chat" : title,
             createdAt: now,
-            updatedAt: now
+            updatedAt: now,
+            isPinned: false
         )
         let q = """
-        INSERT INTO chat_conversations (id, scope_key, title, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?);
+        INSERT INTO chat_conversations (id, scope_key, title, created_at, updated_at, is_pinned)
+        VALUES (?, ?, ?, ?, ?, 0);
         """
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, q, -1, &stmt, nil) == SQLITE_OK {
@@ -530,7 +554,10 @@ extension Database {
     }
 
     func fetchConversation(id: String) -> ChatConversation? {
-        let q = "SELECT id, scope_key, title, created_at, updated_at FROM chat_conversations WHERE id = ? LIMIT 1;"
+        let q = """
+        SELECT id, scope_key, title, created_at, updated_at, COALESCE(is_pinned, 0)
+        FROM chat_conversations WHERE id = ? LIMIT 1;
+        """
         var stmt: OpaquePointer?
         var result: ChatConversation?
         if sqlite3_prepare_v2(db, q, -1, &stmt, nil) == SQLITE_OK {
@@ -541,7 +568,8 @@ extension Database {
                     scopeKey: String(cString: sqlite3_column_text(stmt, 1)),
                     title: String(cString: sqlite3_column_text(stmt, 2)),
                     createdAt: sqlite3_column_double(stmt, 3),
-                    updatedAt: sqlite3_column_double(stmt, 4)
+                    updatedAt: sqlite3_column_double(stmt, 4),
+                    isPinned: sqlite3_column_int(stmt, 5) == 1
                 )
             }
         }
@@ -557,10 +585,10 @@ extension Database {
 
         if term.isEmpty {
             let q = """
-            SELECT id, scope_key, title, created_at, updated_at
+            SELECT id, scope_key, title, created_at, updated_at, COALESCE(is_pinned, 0)
             FROM chat_conversations
             WHERE scope_key = ?
-            ORDER BY updated_at DESC
+            ORDER BY is_pinned DESC, updated_at DESC
             LIMIT ?;
             """
             if sqlite3_prepare_v2(db, q, -1, &stmt, nil) == SQLITE_OK {
@@ -568,9 +596,8 @@ extension Database {
                 sqlite3_bind_int(stmt, 2, Int32(limit))
             }
         } else {
-            // Search title + any message content in this scope
             let q = """
-            SELECT DISTINCT c.id, c.scope_key, c.title, c.created_at, c.updated_at
+            SELECT DISTINCT c.id, c.scope_key, c.title, c.created_at, c.updated_at, COALESCE(c.is_pinned, 0)
             FROM chat_conversations c
             LEFT JOIN chat_messages m ON m.conversation_id = c.id
             WHERE c.scope_key = ?
@@ -578,7 +605,7 @@ extension Database {
                 c.title LIKE ? COLLATE NOCASE
                 OR m.content LIKE ? COLLATE NOCASE
               )
-            ORDER BY c.updated_at DESC
+            ORDER BY c.is_pinned DESC, c.updated_at DESC
             LIMIT ?;
             """
             let like = "%\(term)%"
@@ -597,7 +624,8 @@ extension Database {
                     scopeKey: String(cString: sqlite3_column_text(stmt, 1)),
                     title: String(cString: sqlite3_column_text(stmt, 2)),
                     createdAt: sqlite3_column_double(stmt, 3),
-                    updatedAt: sqlite3_column_double(stmt, 4)
+                    updatedAt: sqlite3_column_double(stmt, 4),
+                    isPinned: sqlite3_column_int(stmt, 5) == 1
                 ))
             }
         }
@@ -612,6 +640,18 @@ extension Database {
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, q, -1, &stmt, nil) == SQLITE_OK {
             sqlite3_bind_text(stmt, 1, (t as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
+            sqlite3_bind_text(stmt, 3, (id as NSString).utf8String, -1, nil)
+            sqlite3_step(stmt)
+        }
+        sqlite3_finalize(stmt)
+    }
+
+    func setConversationPinned(id: String, pinned: Bool) {
+        let q = "UPDATE chat_conversations SET is_pinned = ?, updated_at = ? WHERE id = ?;"
+        var stmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, q, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_int(stmt, 1, pinned ? 1 : 0)
             sqlite3_bind_double(stmt, 2, Date().timeIntervalSince1970)
             sqlite3_bind_text(stmt, 3, (id as NSString).utf8String, -1, nil)
             sqlite3_step(stmt)
@@ -650,9 +690,15 @@ extension Database {
 
     func saveChatMessage(_ message: ChatMessage) {
         let convId = message.conversationId
+        let sourcesJSON: String = {
+            guard !message.sources.isEmpty,
+                  let data = try? JSONEncoder().encode(message.sources),
+                  let s = String(data: data, encoding: .utf8) else { return "" }
+            return s
+        }()
         let query = """
-        INSERT OR REPLACE INTO chat_messages (id, group_name, role, content, timestamp, conversation_id)
-        VALUES (?, ?, ?, ?, ?, ?);
+        INSERT OR REPLACE INTO chat_messages (id, group_name, role, content, timestamp, conversation_id, sources)
+        VALUES (?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
@@ -662,6 +708,7 @@ extension Database {
             sqlite3_bind_text(stmt, 4, (message.content as NSString).utf8String, -1, nil)
             sqlite3_bind_double(stmt, 5, message.timestamp)
             sqlite3_bind_text(stmt, 6, (convId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 7, (sourcesJSON as NSString).utf8String, -1, nil)
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
@@ -670,9 +717,17 @@ extension Database {
         }
     }
 
+    private func decodeSources(_ raw: UnsafePointer<UInt8>?) -> [String] {
+        guard let raw else { return [] }
+        let s = String(cString: raw)
+        guard !s.isEmpty, let data = s.data(using: .utf8),
+              let arr = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return arr
+    }
+
     func fetchChatMessages(conversationId: String) -> [ChatMessage] {
         let query = """
-        SELECT id, group_name, role, content, timestamp, conversation_id
+        SELECT id, group_name, role, content, timestamp, conversation_id, sources
         FROM chat_messages
         WHERE conversation_id = ?
         ORDER BY timestamp ASC;
@@ -690,7 +745,8 @@ extension Database {
                     role: String(cString: sqlite3_column_text(stmt, 2)),
                     content: String(cString: sqlite3_column_text(stmt, 3)),
                     timestamp: sqlite3_column_double(stmt, 4),
-                    conversationId: cid
+                    conversationId: cid,
+                    sources: decodeSources(sqlite3_column_text(stmt, 6))
                 ))
             }
         }
@@ -701,7 +757,7 @@ extension Database {
     /// Legacy API — all messages for a scope (any thread). Prefer conversationId APIs.
     func fetchChatMessages(forGroup groupName: String) -> [ChatMessage] {
         let query = """
-        SELECT id, group_name, role, content, timestamp, conversation_id
+        SELECT id, group_name, role, content, timestamp, conversation_id, sources
         FROM chat_messages WHERE group_name = ? ORDER BY timestamp ASC;
         """
         var stmt: OpaquePointer?
@@ -716,7 +772,8 @@ extension Database {
                     role: String(cString: sqlite3_column_text(stmt, 2)),
                     content: String(cString: sqlite3_column_text(stmt, 3)),
                     timestamp: sqlite3_column_double(stmt, 4),
-                    conversationId: cid
+                    conversationId: cid,
+                    sources: decodeSources(sqlite3_column_text(stmt, 6))
                 ))
             }
         }
