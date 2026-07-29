@@ -234,6 +234,9 @@ struct MainView: View {
     @State private var showingNewTaskSheet = false
     @State private var newTaskTitle = ""
     @State private var newTaskNotes = ""
+    /// When creating a task while a note/meeting is open, optionally attach it as source.
+    @State private var newTaskLinkToOpenItem = true
+    @FocusState private var newTaskTitleFocused: Bool
     @State private var isExtractingTasks = false
     @AppStorage("autoExtractTasks") private var autoExtractTasks = true
     /// When set, open the best tab for a search hit (summary / notes / transcript).
@@ -623,6 +626,7 @@ struct MainView: View {
                             Button {
                                 newTaskTitle = ""
                                 newTaskNotes = ""
+                                newTaskLinkToOpenItem = selectedMeeting != nil
                                 showingNewTaskSheet = true
                             } label: {
                                 Image(systemName: "plus")
@@ -797,12 +801,31 @@ struct MainView: View {
 
     // MARK: - Tasks UI
 
+    private var canCreateNewTask: Bool {
+        !newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private var newTaskSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("New task")
-                    .font(.title2.weight(.bold))
-                Spacer()
+            // Header
+            HStack(alignment: .top, spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.purple.opacity(0.14))
+                        .frame(width: 44, height: 44)
+                    Image(systemName: "checklist")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(.purple)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("New task")
+                        .font(.title3.weight(.semibold))
+                    Text("Track something to do — optionally link it to the open note.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
                 Button {
                     showingNewTaskSheet = false
                 } label: {
@@ -812,31 +835,107 @@ struct MainView: View {
                         .symbolRenderingMode(.hierarchical)
                 }
                 .buttonStyle(.plain)
+                .help("Close")
+                .keyboardShortcut(.cancelAction)
             }
-            .padding(24)
+            .padding(.horizontal, 22)
+            .padding(.top, 20)
+            .padding(.bottom, 16)
 
-            VStack(alignment: .leading, spacing: 14) {
-                TextField("What needs doing?", text: $newTaskTitle)
-                    .textFieldStyle(.roundedBorder)
-                TextField("Notes (optional)", text: $newTaskNotes, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-                    .lineLimit(3...6)
-            }
-            .padding(.horizontal, 24)
-
-            Spacer(minLength: 16)
             Divider()
-            HStack {
-                Button("Cancel") { showingNewTaskSheet = false }
-                Spacer()
-                Button("Create task") { createManualTask() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .keyboardShortcut(.defaultAction)
+
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Task")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("What needs doing?", text: $newTaskTitle)
+                        .textFieldStyle(.plain)
+                        .font(.body)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        )
+                        .focused($newTaskTitleFocused)
+                        .onSubmit {
+                            if canCreateNewTask { createManualTask() }
+                        }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Notes")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    TextField("Context, owner, deadline…", text: $newTaskNotes, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.body)
+                        .lineLimit(4...8)
+                        .padding(12)
+                        .frame(minHeight: 96, alignment: .topLeading)
+                        .background(Color.primary.opacity(0.05))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                        )
+                }
+
+                if let m = selectedMeeting {
+                    Toggle(isOn: $newTaskLinkToOpenItem) {
+                        HStack(spacing: 10) {
+                            Image(systemName: m.isNoteType ? "note.text" : "waveform")
+                                .foregroundStyle(m.isNoteType ? .blue : .secondary)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Link to open \(m.isNoteType ? "note" : "meeting")")
+                                    .font(.callout.weight(.medium))
+                                Text(m.title.isEmpty ? "Untitled" : m.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.purple.opacity(0.06))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
             }
-            .padding(20)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+
+            Spacer(minLength: 0)
+
+            Divider()
+            HStack(spacing: 12) {
+                Button("Cancel") { showingNewTaskSheet = false }
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button {
+                    createManualTask()
+                } label: {
+                    Label("Create task", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+                .disabled(!canCreateNewTask)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 16)
         }
-        .frame(width: 420, height: 280)
+        .frame(width: 460, height: selectedMeeting == nil ? 360 : 420)
+        .onAppear {
+            newTaskTitleFocused = true
+            // Default: link when something is open
+            newTaskLinkToOpenItem = selectedMeeting != nil
+        }
     }
 
     @ViewBuilder
@@ -925,37 +1024,51 @@ struct MainView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            VStack(spacing: 16) {
-                Image(systemName: "checklist")
-                    .font(.system(size: 44, weight: .ultraLight))
-                    .foregroundStyle(.purple.opacity(0.7))
-                Text("Tasks")
-                    .font(.title2.weight(.semibold))
-                Text("Action items from meetings and notes, or create your own.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 320)
+            VStack(spacing: 18) {
+                ZStack {
+                    Circle()
+                        .fill(Color.purple.opacity(0.12))
+                        .frame(width: 72, height: 72)
+                    Image(systemName: "checklist")
+                        .font(.system(size: 30, weight: .light))
+                        .foregroundStyle(.purple)
+                }
+                VStack(spacing: 6) {
+                    Text("No tasks yet")
+                        .font(.title2.weight(.semibold))
+                    Text("Extract action items after Enhance, or create one by hand.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 340)
+                }
                 HStack(spacing: 12) {
                     Button {
                         newTaskTitle = ""
                         newTaskNotes = ""
+                        newTaskLinkToOpenItem = selectedMeeting != nil
                         showingNewTaskSheet = true
                     } label: {
                         Label("New task", systemImage: "plus")
                     }
                     .buttonStyle(.borderedProminent)
                     .tint(.purple)
+                    .controlSize(.large)
 
                     if selectedMeeting != nil {
                         Button {
                             extractTasksFromCurrent()
                         } label: {
-                            Label("Extract from open note", systemImage: "wand.and.stars")
+                            Label(
+                                "Extract from open \(selectedMeeting?.isNoteType == true ? "note" : "meeting")",
+                                systemImage: "wand.and.stars"
+                            )
                         }
                         .buttonStyle(.bordered)
+                        .controlSize(.large)
                     }
                 }
+                .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -3901,20 +4014,27 @@ struct MainView: View {
     func createManualTask() {
         let title = newTaskTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return }
+        let source: Meeting? = (newTaskLinkToOpenItem ? selectedMeeting : nil)
         let task = GristTask.manual(
             title: title,
-            notes: newTaskNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+            notes: newTaskNotes.trimmingCharacters(in: .whitespacesAndNewlines),
+            source: source
         )
         db.saveTask(task)
         newTaskTitle = ""
         newTaskNotes = ""
+        newTaskLinkToOpenItem = true
         showingNewTaskSheet = false
         loadTasks()
         libraryFilter = .tasks
         focusedFolder = nil
         selectedMeeting = nil
         selectedTask = task
-        statusMessage = "Task created"
+        if let source {
+            statusMessage = "Task created (linked to \(source.kindLabel.lowercased()))"
+        } else {
+            statusMessage = "Task created"
+        }
     }
 
     /// AI extract action items from the open note/meeting into Tasks.
