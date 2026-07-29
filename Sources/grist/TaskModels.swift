@@ -17,13 +17,13 @@ struct GristTask: Identifiable, Codable, Hashable {
     var isOpen: Bool { status == "open" && !isDeleted }
     var isDone: Bool { status == "done" }
 
-    static func manual(title: String, notes: String = "") -> GristTask {
+    static func manual(title: String, notes: String = "", source: Meeting? = nil) -> GristTask {
         GristTask(
             id: UUID().uuidString,
             title: title,
             notes: notes,
-            sourceMeetingId: nil,
-            sourceTitle: nil,
+            sourceMeetingId: source?.id,
+            sourceTitle: source?.title,
             status: "open",
             createdAt: Date().timeIntervalSince1970,
             completedAt: nil,
