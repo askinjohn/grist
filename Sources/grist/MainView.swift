@@ -807,81 +807,33 @@ struct MainView: View {
 
     private var newTaskSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Header
-            HStack(alignment: .top, spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color.purple.opacity(0.14))
-                        .frame(width: 44, height: 44)
-                    Image(systemName: "checklist")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(.purple)
-                }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("New task")
-                        .font(.title3.weight(.semibold))
-                    Text("Track something to do — optionally link it to the open note.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 8)
-                Button {
-                    showingNewTaskSheet = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-                .help("Close")
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 22)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
-
+            GristSheetHeader(
+                title: "New task",
+                subtitle: "Track something to do — optionally link it to the open note.",
+                systemImage: "checklist",
+                tint: .purple,
+                onClose: { showingNewTaskSheet = false }
+            )
             Divider()
 
             VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Task")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                GristLabeledField(label: "Task") {
                     TextField("What needs doing?", text: $newTaskTitle)
                         .textFieldStyle(.plain)
                         .font(.body)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(Color.primary.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                        )
+                        .gristFieldStyle()
                         .focused($newTaskTitleFocused)
                         .onSubmit {
                             if canCreateNewTask { createManualTask() }
                         }
                 }
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Notes")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                GristLabeledField(label: "Notes") {
                     TextField("Context, owner, deadline…", text: $newTaskNotes, axis: .vertical)
                         .textFieldStyle(.plain)
                         .font(.body)
                         .lineLimit(4...8)
-                        .padding(12)
-                        .frame(minHeight: 96, alignment: .topLeading)
-                        .background(Color.primary.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-                        )
+                        .gristFieldStyle(minHeight: 96)
                 }
 
                 if let m = selectedMeeting {
@@ -912,11 +864,10 @@ struct MainView: View {
 
             Spacer(minLength: 0)
 
-            Divider()
-            HStack(spacing: 12) {
+            GristSheetFooter {
                 Button("Cancel") { showingNewTaskSheet = false }
                     .keyboardShortcut(.cancelAction)
-                Spacer()
+            } trailing: {
                 Button {
                     createManualTask()
                 } label: {
@@ -927,13 +878,10 @@ struct MainView: View {
                 .disabled(!canCreateNewTask)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(.horizontal, 22)
-            .padding(.vertical, 16)
         }
         .frame(width: 460, height: selectedMeeting == nil ? 360 : 420)
         .onAppear {
             newTaskTitleFocused = true
-            // Default: link when something is open
             newTaskLinkToOpenItem = selectedMeeting != nil
         }
     }
@@ -1081,39 +1029,27 @@ struct MainView: View {
         let folderCount = exportTargetFolder.map { name in meetings.filter { ($0.groupName ?? "") == name }.count } ?? 0
         let availability = exportTargetMeeting.map { exportOptions.availability(for: $0) }
 
-        return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Export Markdown")
-                        .font(.title2.weight(.bold))
-                    if let folder = exportTargetFolder {
-                        Text("Folder “\(folder)” · \(folderCount) item\(folderCount == 1 ? "" : "s")")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                    } else if let m = exportTargetMeeting {
-                        Text(m.title.isEmpty ? "Untitled" : m.title)
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                    }
-                }
-                Spacer()
-                Button {
-                    showingExportOptionsSheet = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
+        let subtitle: String = {
+            if let folder = exportTargetFolder {
+                return "Folder “\(folder)” · \(folderCount) item\(folderCount == 1 ? "" : "s")"
             }
-            .padding(24)
+            if let m = exportTargetMeeting {
+                return m.title.isEmpty ? "Untitled" : m.title
+            }
+            return "Choose sections for the Markdown file"
+        }()
+
+        return VStack(alignment: .leading, spacing: 0) {
+            GristSheetHeader(
+                title: "Export Markdown",
+                subtitle: subtitle,
+                systemImage: "square.and.arrow.up",
+                tint: .blue,
+                onClose: { showingExportOptionsSheet = false }
+            )
+            Divider()
 
             VStack(alignment: .leading, spacing: 16) {
-                Text("Include")
-                    .font(.headline)
-
                 Text("Choose what goes into the file. Empty sections are skipped automatically.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -1151,27 +1087,27 @@ struct MainView: View {
                 }
                 .background(Color.primary.opacity(0.04))
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                )
 
                 HStack(spacing: 10) {
-                    Button("Summary only") {
-                        exportOptions = .summaryOnly
-                    }
-                    .buttonStyle(.bordered)
-                    Button("Full item") {
-                        exportOptions = .full
-                    }
-                    .buttonStyle(.bordered)
+                    Button("Summary only") { exportOptions = .summaryOnly }
+                        .buttonStyle(.bordered)
+                    Button("Full item") { exportOptions = .full }
+                        .buttonStyle(.bordered)
                     Spacer()
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 8)
 
-            Divider()
-            HStack {
+            GristSheetFooter {
                 Button("Cancel") { showingExportOptionsSheet = false }
-                Spacer()
+            } trailing: {
                 if !isFolder {
                     Button {
                         performExport(copyOnly: true)
@@ -1189,9 +1125,8 @@ struct MainView: View {
                 .disabled(!exportOptions.hasContentSelection)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(20)
         }
-        .frame(width: 460, height: 440)
+        .frame(width: 480, height: 460)
     }
 
     private func exportToggle(_ title: String, isOn: Binding<Bool>, enabled: Bool, emptyHint: Bool = false) -> some View {
@@ -1261,77 +1196,64 @@ struct MainView: View {
     private var folderSummarizeSheet: some View {
         let count = meetings.filter { ($0.groupName ?? "") == folderSummarizeName }.count
         return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Summarize folder")
-                        .font(.title2.weight(.bold))
-                    Text("“\(folderSummarizeName)” · \(count) item\(count == 1 ? "" : "s")")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    showingFolderSummarizeSheet = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-                .disabled(isFolderSummarizing)
-            }
-            .padding(24)
+            GristSheetHeader(
+                title: "Summarize folder",
+                subtitle: "“\(folderSummarizeName)” · \(count) item\(count == 1 ? "" : "s")",
+                systemImage: "sparkles.rectangle.stack",
+                tint: .purple,
+                onClose: { showingFolderSummarizeSheet = false },
+                closeDisabled: isFolderSummarizing
+            )
+            Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("What do you need from this folder?")
-                        .font(.headline)
-
                     Text("Collect blogs, videos, meetings, and notes into one summary. Pick a style or write your own specs.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(FolderSummarizePreset.allCases) { preset in
-                            Button {
-                                folderSummarizePreset = preset
-                                if preset != .custom {
-                                    folderSummarizeCustomSpecs = preset.defaultSpecs
-                                } else if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                                    folderSummarizeCustomSpecs = "Describe what you want (e.g. action items for the product team, risks only, compare viewpoints…)"
+                    GristLabeledField(label: "Style") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(FolderSummarizePreset.allCases) { preset in
+                                Button {
+                                    folderSummarizePreset = preset
+                                    if preset != .custom {
+                                        folderSummarizeCustomSpecs = preset.defaultSpecs
+                                    } else if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                        folderSummarizeCustomSpecs = "Describe what you want (e.g. action items for the product team, risks only, compare viewpoints…)"
+                                    }
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: folderSummarizePreset == preset ? "checkmark.circle.fill" : "circle")
+                                            .foregroundStyle(folderSummarizePreset == preset ? Color.purple : .secondary)
+                                        Text(preset.title)
+                                            .font(.callout.weight(folderSummarizePreset == preset ? .semibold : .regular))
+                                            .foregroundStyle(.primary)
+                                        Spacer()
+                                    }
+                                    .padding(12)
+                                    .background(folderSummarizePreset == preset ? Color.purple.opacity(0.12) : Color.primary.opacity(0.04))
+                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                            .stroke(folderSummarizePreset == preset ? Color.purple.opacity(0.25) : Color.clear, lineWidth: 1)
+                                    )
                                 }
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: folderSummarizePreset == preset ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(folderSummarizePreset == preset ? Color.accentColor : .secondary)
-                                    Text(preset.title)
-                                        .font(.callout.weight(folderSummarizePreset == preset ? .semibold : .regular))
-                                        .foregroundStyle(.primary)
-                                    Spacer()
-                                }
-                                .padding(12)
-                                .background(folderSummarizePreset == preset ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("INSTRUCTIONS")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                    GristLabeledField(label: "Instructions") {
                         TextEditor(text: $folderSummarizeCustomSpecs)
                             .font(.body)
                             .frame(minHeight: 120, maxHeight: 180)
-                            .padding(8)
-                            .background(Color.primary.opacity(0.05))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .gristFieldStyle(minHeight: 120)
                     }
 
                     HStack {
                         Text("Model")
+                            .font(.callout.weight(.medium))
                         Spacer()
                         Picker("", selection: $selectedModel) {
                             ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
@@ -1343,15 +1265,14 @@ struct MainView: View {
                     .background(Color.primary.opacity(0.04))
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 18)
             }
 
-            Divider()
-            HStack {
+            GristSheetFooter {
                 Button("Cancel") { showingFolderSummarizeSheet = false }
                     .disabled(isFolderSummarizing)
-                Spacer()
+            } trailing: {
                 Button {
                     runFolderSummarize()
                 } label: {
@@ -1362,13 +1283,13 @@ struct MainView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .tint(.purple)
                 .disabled(isFolderSummarizing || count == 0
                           || folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(20)
         }
-        .frame(width: 520, height: 560)
+        .frame(width: 520, height: 580)
         .onAppear {
             if folderSummarizeCustomSpecs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 folderSummarizeCustomSpecs = folderSummarizePreset.defaultSpecs
@@ -1480,35 +1401,25 @@ struct MainView: View {
         let count = meetings.filter { ($0.groupName ?? "") == name }.count
 
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Delete folder")
-                        .font(.title2.weight(.bold))
-                    Text(name.isEmpty ? "" : "“\(name)”")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
+            GristSheetHeader(
+                title: "Delete folder",
+                subtitle: name.isEmpty ? nil : "“\(name)”",
+                systemImage: "folder.badge.minus",
+                tint: .red,
+                onClose: {
                     showingDeleteFolderConfirm = false
                     folderPendingDelete = nil
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
                 }
-                .buttonStyle(.plain)
-            }
-            .padding(24)
-
+            )
             Divider()
 
             VStack(alignment: .leading, spacing: 16) {
                 if count == 0 {
-                    Text("This folder is empty. Deleting it only removes the folder.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                    GristInfoCard(tint: .orange) {
+                        Text("This folder is empty. Deleting it only removes the folder.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 } else {
                     Text("This folder has \(count) item\(count == 1 ? "" : "s"). Choose what to do with them:")
                         .font(.callout)
@@ -1536,6 +1447,10 @@ struct MainView: View {
                             .padding(14)
                             .background(Color.blue.opacity(0.08))
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.blue.opacity(0.15), lineWidth: 1)
+                            )
                         }
                         .buttonStyle(.plain)
 
@@ -1561,16 +1476,26 @@ struct MainView: View {
                             .padding(14)
                             .background(Color.red.opacity(0.08))
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(Color.red.opacity(0.15), lineWidth: 1)
+                            )
                         }
                         .buttonStyle(.plain)
                     }
                 }
             }
-            .padding(24)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
 
             Spacer(minLength: 8)
-            Divider()
-            HStack {
+            GristSheetFooter {
+                Button("Cancel") {
+                    showingDeleteFolderConfirm = false
+                    folderPendingDelete = nil
+                }
+                .keyboardShortcut(.cancelAction)
+            } trailing: {
                 if count == 0 {
                     Button("Delete folder", role: .destructive) {
                         confirmDeleteFolder(contents: .moveToUnfiled)
@@ -1578,50 +1503,35 @@ struct MainView: View {
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
                 }
-                Spacer()
-                Button("Cancel") {
-                    showingDeleteFolderConfirm = false
-                    folderPendingDelete = nil
-                }
-                .keyboardShortcut(.cancelAction)
             }
-            .padding(20)
         }
-        .frame(width: 440, height: count == 0 ? 220 : 360)
+        .frame(width: 460, height: count == 0 ? 280 : 400)
     }
 
     private var organizeReportSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(organizeReportTitle)
-                        .font(.title2.weight(.bold))
-                    Text("Untitled items got names; unfiled items got folders when the AI found a fit.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    showingOrganizeReport = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(24)
-
+            GristSheetHeader(
+                title: organizeReportTitle,
+                subtitle: "Untitled items got names; unfiled items got folders when the AI found a fit.",
+                systemImage: "sparkles.rectangle.stack",
+                tint: .purple,
+                onClose: { showingOrganizeReport = false }
+            )
             Divider()
 
             if organizeReportLines.isEmpty {
-                Text("Nothing needed organizing.")
-                    .foregroundStyle(.secondary)
-                    .padding(24)
+                GristEmptyState(
+                    systemImage: "checkmark.circle",
+                    title: "All set",
+                    message: "Nothing needed organizing.",
+                    tint: .green,
+                    badgeSize: 56
+                )
+                .frame(maxWidth: .infinity)
+                .padding(32)
             } else {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         ForEach(Array(organizeReportLines.enumerated()), id: \.offset) { _, line in
                             HStack(alignment: .top, spacing: 10) {
                                 Image(systemName: "checkmark.circle.fill")
@@ -1631,23 +1541,26 @@ struct MainView: View {
                                     .textSelection(.enabled)
                                 Spacer(minLength: 0)
                             }
-                            .padding(.vertical, 4)
+                            .padding(12)
+                            .background(Color.primary.opacity(0.03))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                     }
-                    .padding(24)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 16)
                 }
             }
 
-            Divider()
-            HStack {
-                Spacer()
+            GristSheetFooter {
+                EmptyView()
+            } trailing: {
                 Button("Done") { showingOrganizeReport = false }
                     .buttonStyle(.borderedProminent)
+                    .tint(.purple)
                     .keyboardShortcut(.defaultAction)
             }
-            .padding(20)
         }
-        .frame(width: 480, height: 420)
+        .frame(width: 500, height: 440)
     }
 
     private var sidebarFooter: some View {
@@ -2048,88 +1961,64 @@ struct MainView: View {
         let n = Self.parseImportURLs(from: importUrlString).count
 
         return VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(importAppendToSelected && canAppend ? "Add to item" : "Import URL")
-                        .font(.title2.weight(.bold))
-                    Text(importAppendToSelected && canAppend
-                         ? "Fetch page/YouTube content and append it to the open note or meeting, then you can re-Enhance."
-                         : "Paste one or many URLs. Each link becomes its own note (or append to the open item).")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    showingImportUrlAlert = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(24)
+            GristSheetHeader(
+                title: importAppendToSelected && canAppend ? "Add to item" : "Import URL",
+                subtitle: importAppendToSelected && canAppend
+                    ? "Fetch page or YouTube captions and append to the open note or meeting."
+                    : "Paste one or many URLs. Each link becomes its own note.",
+                systemImage: importAppendToSelected && canAppend ? "plus.rectangle.on.rectangle" : "link",
+                tint: .blue,
+                onClose: { showingImportUrlAlert = false }
+            )
+            Divider()
 
             VStack(alignment: .leading, spacing: 18) {
                 if canAppend {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("DESTINATION")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Picker("", selection: $importAppendToSelected) {
-                            Text("New note(s)").tag(false)
-                            Text("Add to current").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        if importAppendToSelected {
-                            HStack(spacing: 8) {
-                                Image(systemName: selectedMeeting?.isNoteType == true ? "note.text" : "waveform")
-                                    .foregroundStyle(.blue)
-                                Text(appendTargetTitle)
-                                    .font(.callout.weight(.medium))
-                                    .lineLimit(2)
-                                Spacer()
+                    GristLabeledField(label: "Destination") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Picker("", selection: $importAppendToSelected) {
+                                Text("New note(s)").tag(false)
+                                Text("Add to current").tag(true)
                             }
-                            .padding(10)
-                            .background(Color.blue.opacity(0.08))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .pickerStyle(.segmented)
+                            if importAppendToSelected {
+                                HStack(spacing: 8) {
+                                    Image(systemName: selectedMeeting?.isNoteType == true ? "note.text" : "waveform")
+                                        .foregroundStyle(.blue)
+                                    Text(appendTargetTitle)
+                                        .font(.callout.weight(.medium))
+                                        .lineLimit(2)
+                                    Spacer()
+                                }
+                                .padding(10)
+                                .background(Color.blue.opacity(0.08))
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            }
                         }
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text("URL(S)")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        if n > 1 {
-                            Text("\(n) links")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
+                GristLabeledField(label: n > 1 ? "URLs (\(n))" : "URL(s)") {
                     TextEditor(text: $importUrlString)
                         .font(.body)
                         .frame(minHeight: 88, maxHeight: 140)
-                        .padding(8)
-                        .background(Color.primary.opacity(0.05))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .gristFieldStyle(minHeight: 88)
                         .overlay(alignment: .topLeading) {
                             if importUrlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                 Text("One per line (or space-separated)\nhttps://…\nhttps://youtube.com/…")
                                     .font(.body)
                                     .foregroundStyle(.tertiary)
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 16)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 20)
                                     .allowsHitTesting(false)
                             }
                         }
-                    let parsed = Self.parseImportURLs(from: importUrlString)
-                    let ytCount = parsed.filter { YouTubeImporter.isYouTubeURL($0) }.count
-                    if ytCount > 0 {
-                        HStack(spacing: 6) {
+                }
+                let parsed = Self.parseImportURLs(from: importUrlString)
+                let ytCount = parsed.filter { YouTubeImporter.isYouTubeURL($0) }.count
+                if ytCount > 0 {
+                    GristInfoCard(tint: YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .red) {
+                        HStack(spacing: 8) {
                             Image(systemName: YouTubeImporter.resolveYtDlpPath() == nil ? "exclamationmark.triangle.fill" : "play.rectangle.fill")
                                 .foregroundStyle(YouTubeImporter.resolveYtDlpPath() == nil ? .orange : .red)
                             Text(YouTubeImporter.resolveYtDlpPath() == nil
@@ -2138,61 +2027,58 @@ struct MainView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
-                    } else if parsed.count > 1 {
-                        Text(importAppendToSelected && canAppend
-                             ? "All \(parsed.count) pages will be appended to this item"
-                             : "Will import \(parsed.count) pages as separate notes")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
+                } else if parsed.count > 1 {
+                    Text(importAppendToSelected && canAppend
+                         ? "All \(parsed.count) pages will be appended to this item"
+                         : "Will import \(parsed.count) pages as separate notes")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 if !(importAppendToSelected && canAppend) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("FOLDER")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                folderChip(title: "Unfiled", icon: "tray", selected: importFolderSelection.isEmpty && !importIsCreatingFolder) {
-                                    importIsCreatingFolder = false
-                                    importFolderSelection = ""
-                                    importNewFolderName = ""
-                                }
-                                ForEach(folders.sorted(), id: \.self) { name in
-                                    folderChip(title: name, icon: "folder.fill", selected: importFolderSelection == name && !importIsCreatingFolder) {
+                    GristLabeledField(label: "Folder") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    folderChip(title: "Unfiled", icon: "tray", selected: importFolderSelection.isEmpty && !importIsCreatingFolder) {
                                         importIsCreatingFolder = false
-                                        importFolderSelection = name
+                                        importFolderSelection = ""
                                         importNewFolderName = ""
                                     }
-                                }
-                                folderChip(title: "New folder", icon: "folder.badge.plus", selected: importIsCreatingFolder) {
-                                    importIsCreatingFolder = true
-                                    importFolderSelection = ""
+                                    ForEach(folders.sorted(), id: \.self) { name in
+                                        folderChip(title: name, icon: "folder.fill", selected: importFolderSelection == name && !importIsCreatingFolder) {
+                                            importIsCreatingFolder = false
+                                            importFolderSelection = name
+                                            importNewFolderName = ""
+                                        }
+                                    }
+                                    folderChip(title: "New folder", icon: "folder.badge.plus", selected: importIsCreatingFolder) {
+                                        importIsCreatingFolder = true
+                                        importFolderSelection = ""
+                                    }
                                 }
                             }
-                        }
-                        if importIsCreatingFolder {
-                            TextField("Folder name", text: $importNewFolderName)
-                                .textFieldStyle(.plain)
-                                .padding(12)
-                                .background(Color.primary.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .onChange(of: importNewFolderName) { _, val in
-                                    importFolderSelection = val.trimmingCharacters(in: .whitespaces)
-                                }
+                            if importIsCreatingFolder {
+                                TextField("Folder name", text: $importNewFolderName)
+                                    .textFieldStyle(.plain)
+                                    .gristFieldStyle()
+                                    .onChange(of: importNewFolderName) { _, val in
+                                        importFolderSelection = val.trimmingCharacters(in: .whitespaces)
+                                    }
+                            }
                         }
                     }
                 }
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
 
-            Spacer(minLength: 16)
+            Spacer(minLength: 8)
 
-            Divider()
-            HStack {
+            GristSheetFooter {
                 Button("Cancel") { showingImportUrlAlert = false }
-                Spacer()
+            } trailing: {
                 Button {
                     showingImportUrlAlert = false
                     importFromUrl()
@@ -2207,9 +2093,8 @@ struct MainView: View {
                 .disabled(Self.parseImportURLs(from: importUrlString).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(20)
         }
-        .frame(width: 500, height: canAppend ? 480 : 420)
+        .frame(width: 520, height: canAppend ? 500 : 440)
     }
 
     private func openImportSheet(appendToCurrent: Bool = false) {
@@ -2705,23 +2590,20 @@ struct MainView: View {
 
     @ViewBuilder
     var noteEmptyAIState: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "sparkles.rectangle.stack")
-                .font(.system(size: 40, weight: .ultraLight))
-                .foregroundStyle(.blue.opacity(0.7))
-            Text("No AI summary yet")
-                .font(.title3.weight(.semibold))
-            Text("Write in the Write tab, then tap Enhance to get a structured summary and auto-title.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 320)
+        VStack(spacing: 18) {
+            GristEmptyState(
+                systemImage: "sparkles.rectangle.stack",
+                title: "No AI summary yet",
+                message: "Write in the Write tab, then tap Enhance for a structured summary and auto-title.",
+                tint: .blue
+            )
             Button {
                 selectedTab = "notes"
             } label: {
                 Label("Back to writing", systemImage: "square.and.pencil")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -3081,25 +2963,21 @@ struct MainView: View {
     // MARK: - Empty Detail
 
     var emptyDetailPlaceholder: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 52, weight: .ultraLight))
-                .foregroundStyle(.quaternary)
-            Text("Nothing selected")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text("Capture a meeting, jot a note, or pick something from the sidebar.")
-                .font(.callout)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 340)
+        VStack(spacing: 22) {
+            GristEmptyState(
+                systemImage: "square.stack.3d.up",
+                title: "Nothing selected",
+                message: "Capture a meeting, jot a note, or pick something from the sidebar.",
+                tint: .accent,
+                badgeSize: 80
+            )
 
             HStack(spacing: 14) {
                 emptyCreateCard(kind: .meeting)
                 emptyCreateCard(kind: .note)
                 emptyCreateCard(kind: .article)
             }
-            .padding(.top, 8)
+            .padding(.top, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.windowBackground)
@@ -3109,10 +2987,15 @@ struct MainView: View {
         Button {
             openCreateSheet(kind: kind)
         } label: {
-            VStack(spacing: 10) {
-                Image(systemName: kind.icon)
-                    .font(.system(size: 28))
-                    .foregroundStyle(kind.accent)
+            VStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(kind.accent.opacity(0.12))
+                        .frame(width: 48, height: 48)
+                    Image(systemName: kind.icon)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(kind.accent)
+                }
                 Text(kind.title)
                     .font(.headline)
                 Text(kind.subtitle)
@@ -3122,12 +3005,12 @@ struct MainView: View {
                     .frame(maxWidth: 140)
             }
             .padding(20)
-            .frame(width: 180, height: 150)
+            .frame(width: 180, height: 160)
             .background(Color.primary.opacity(0.04))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    .stroke(kind.accent.opacity(0.18), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -4851,23 +4734,19 @@ struct ChatView: View {
             ScrollView {
                 LazyVStack(spacing: 16) {
                     if chatHistory.isEmpty {
-                        VStack(spacing: 12) {
-                            Image(systemName: "sparkles.rectangle.stack")
-                                .font(.system(size: 40, weight: .light))
-                                .foregroundStyle(.tertiary)
-                            Text(scope.emptyTitle)
-                                .font(.title3.weight(.medium))
-                                .foregroundStyle(.secondary)
-                            Text(scope.emptySubtitle)
-                                .font(.callout)
-                                .foregroundStyle(.tertiary)
-                                .multilineTextAlignment(.center)
-                                .frame(maxWidth: 360)
+                        VStack(spacing: 14) {
+                            GristEmptyState(
+                                systemImage: "bubble.left.and.bubble.right",
+                                title: scope.emptyTitle,
+                                message: scope.emptySubtitle,
+                                tint: .purple,
+                                badgeSize: 64
+                            )
                             Text("Past chats stay in History. Use New chat for a fresh thread.")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         }
-                        .padding(.top, 60)
+                        .padding(.top, 48)
                     } else {
                         ForEach(chatHistory) { msg in
                             ChatBubble(message: msg)
@@ -5523,27 +5402,24 @@ struct CreateItemSheet: View {
         _autoStartRecording = State(initialValue: initialKind == .meeting)
     }
 
+    private var createSheetTint: GristSheetTint {
+        switch kind {
+        case .meeting: return .red
+        case .note: return .blue
+        case .article: return .orange
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Create \(kind.title)")
-                        .font(.title2.weight(.bold))
-                    Text(kind.subtitle)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(action: onCancel) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(24)
+            GristSheetHeader(
+                title: "Create \(kind.title)",
+                subtitle: kind.subtitle,
+                systemImage: kind.icon,
+                tint: createSheetTint,
+                onClose: onCancel
+            )
+            Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
@@ -5555,35 +5431,26 @@ struct CreateItemSheet: View {
                     }
 
                     if kind == .article {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text("URL(S)")
-                                    .font(.caption.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                let n = MainView.parseImportURLs(from: articleURL).count
-                                if n > 1 {
-                                    Text("\(n) links")
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
+                        GristLabeledField(label: {
+                            let n = MainView.parseImportURLs(from: articleURL).count
+                            return n > 1 ? "URLs (\(n))" : "URL(s)"
+                        }()) {
                             TextEditor(text: $articleURL)
                                 .font(.body)
                                 .frame(minHeight: 88, maxHeight: 130)
-                                .padding(8)
-                                .background(Color.primary.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .gristFieldStyle(minHeight: 88)
                                 .overlay(alignment: .topLeading) {
                                     if articleURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                                         Text("One or more links — one per line\nhttps://… article or YouTube")
                                             .font(.body)
                                             .foregroundStyle(.tertiary)
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 16)
+                                            .padding(.horizontal, 24)
+                                            .padding(.vertical, 20)
                                             .allowsHitTesting(false)
                                     }
                                 }
+                        }
+                        Group {
                             let parsed = MainView.parseImportURLs(from: articleURL)
                             let ytCount = parsed.filter { YouTubeImporter.isYouTubeURL($0) }.count
                             if ytCount > 0 {
@@ -5602,59 +5469,44 @@ struct CreateItemSheet: View {
                             }
                         }
                     } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("TITLE")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
+                        GristLabeledField(label: "Title") {
                             TextField(kind == .meeting ? "e.g. Weekly Sync" : "e.g. Product ideas", text: $title)
                                 .textFieldStyle(.plain)
-                                .padding(12)
-                                .background(Color.primary.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .gristFieldStyle()
                         }
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("FOLDER")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text(folderSelection.isEmpty ? "Unfiled" : folderSelection)
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                chip("Unfiled", icon: "tray", selected: folderSelection.isEmpty && !isCreatingNewFolder) {
-                                    isCreatingNewFolder = false
-                                    folderSelection = ""
-                                    newFolderName = ""
-                                }
-                                ForEach(folders.sorted(), id: \.self) { name in
-                                    chip(name, icon: "folder.fill", selected: folderSelection == name && !isCreatingNewFolder) {
+                    GristLabeledField(label: folderSelection.isEmpty ? "Folder · Unfiled" : "Folder · \(folderSelection)") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    chip("Unfiled", icon: "tray", selected: folderSelection.isEmpty && !isCreatingNewFolder) {
                                         isCreatingNewFolder = false
-                                        folderSelection = name
+                                        folderSelection = ""
                                         newFolderName = ""
                                     }
-                                }
-                                chip("New folder", icon: "folder.badge.plus", selected: isCreatingNewFolder) {
-                                    isCreatingNewFolder = true
-                                    folderSelection = ""
+                                    ForEach(folders.sorted(), id: \.self) { name in
+                                        chip(name, icon: "folder.fill", selected: folderSelection == name && !isCreatingNewFolder) {
+                                            isCreatingNewFolder = false
+                                            folderSelection = name
+                                            newFolderName = ""
+                                        }
+                                    }
+                                    chip("New folder", icon: "folder.badge.plus", selected: isCreatingNewFolder) {
+                                        isCreatingNewFolder = true
+                                        folderSelection = ""
+                                    }
                                 }
                             }
-                        }
 
-                        if isCreatingNewFolder {
-                            TextField("Folder name", text: $newFolderName)
-                                .textFieldStyle(.plain)
-                                .padding(12)
-                                .background(Color.primary.opacity(0.05))
-                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                .onChange(of: newFolderName) { _, val in
-                                    folderSelection = val.trimmingCharacters(in: .whitespaces)
-                                }
+                            if isCreatingNewFolder {
+                                TextField("Folder name", text: $newFolderName)
+                                    .textFieldStyle(.plain)
+                                    .gristFieldStyle()
+                                    .onChange(of: newFolderName) { _, val in
+                                        folderSelection = val.trimmingCharacters(in: .whitespaces)
+                                    }
+                            }
                         }
                     }
 
@@ -5734,15 +5586,14 @@ struct CreateItemSheet: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                     }
                 }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 8)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 12)
+                .padding(.top, 16)
             }
 
-            Divider()
-
-            HStack {
+            GristSheetFooter {
                 Button("Cancel", action: onCancel)
-                Spacer()
+            } trailing: {
                 Button {
                     let folder: String? = {
                         if isCreatingNewFolder {
@@ -5770,7 +5621,6 @@ struct CreateItemSheet: View {
                 .disabled(kind == .article && MainView.parseImportURLs(from: articleURL).isEmpty)
                 .keyboardShortcut(.defaultAction)
             }
-            .padding(20)
         }
         .frame(width: 560, height: kind == .meeting ? 640 : 520)
         .animation(.easeInOut(duration: 0.2), value: kind)
