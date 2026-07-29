@@ -411,45 +411,154 @@ class OllamaClient: @unchecked Sendable {
         return truncateForEnhance(n, maxChars: enhanceMaxNotesChars, label: "notes")
     }
 
-    /// One model call: produce a short TITLE line plus the markdown summary.
+    private static let enhanceChunkChars = 12_000
+    private static let enhanceMapReduceThreshold = 32_000
+
+    private static func sectionGuide(for template: String) -> String {
+        switch template {
+        case "Daily Standup":
+            return "Sections: ## Yesterday, ## Today, ## Blockers"
+        case "Sales Call":
+            return "Sections: ## Context, ## Needs, ## Objections, ## Next steps"
+        case "Action Items Focus":
+            return "Sections: ## Decisions, ## Action items (owner if named), ## Open questions"
+        case "Note":
+            return "Sections: ## Summary, ## Key points, ## Action items (if any)"
+        default:
+            return "Sections: ## Summary, ## Key points, ## Decisions, ## Action items, ## Open questions"
+        }
+    }
+
+    /// Split long text into overlapping windows for map-reduce enhance.
+    static func chunkTextForEnhance(_ text: String, chunkSize: Int = enhanceChunkChars) -> [String] {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > chunkSize else { return t.isEmpty ? [] : [t] }
+        var chunks: [String] = []
+        var start = t.startIndex
+        let overlap = chunkSize / 10
+        while start < t.endIndex {
+            let endOffset = min(chunkSize, t.distance(from: start, to: t.endIndex))
+            let end = t.index(start, offsetBy: endOffset)
+            chunks.append(String(t[start..<end]))
+            if end == t.endIndex { break }
+            let step = max(1, endOffset - overlap)
+            start = t.index(start, offsetBy: step)
+        }
+        return chunks
+    }
+
+    /// One model call (or map-reduce for long sources): TITLE + markdown summary.
     /// Inputs are original transcript/captions + notes — never the previous AI summary.
     func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> EnhanceResult {
         GristLog.log("[OllamaClient] enhance start model=\(model) rawTranscriptChars=\(transcript.count) rawNotesChars=\(notes.count) template=\(template)")
 
         let cleanedNotes = Self.notesForEnhance(notes: notes, transcript: transcript)
+        let sectionGuide = Self.sectionGuide(for: template)
+
+        // Map-reduce for very long transcripts (e.g. multi-hour podcasts)
+        if transcript.count > Self.enhanceMapReduceThreshold {
+            GristLog.log("[OllamaClient] enhance map-reduce path (\(transcript.count) chars)")
+            return try await enhanceMapReduce(
+                transcript: transcript,
+                notes: cleanedNotes,
+                template: template,
+                sectionGuide: sectionGuide,
+                customPrompt: customPrompt,
+                model: model
+            )
+        }
+
         let body = Self.truncateForEnhance(
             transcript,
             maxChars: Self.enhanceMaxTranscriptChars,
             label: "transcript"
         )
         GristLog.log("[OllamaClient] enhance after prep transcriptChars=\(body.count) notesChars=\(cleanedNotes.count)")
+        return try await enhanceSinglePass(
+            body: body,
+            notes: cleanedNotes,
+            template: template,
+            sectionGuide: sectionGuide,
+            customPrompt: customPrompt,
+            model: model,
+            sourceLength: transcript.count,
+            usedTruncation: transcript.count > Self.enhanceMaxTranscriptChars
+        )
+    }
 
-        // Template → section checklist (keeps small models structured)
-        let sectionGuide: String = {
-            switch template {
-            case "Daily Standup":
-                return "Sections: ## Yesterday, ## Today, ## Blockers"
-            case "Sales Call":
-                return "Sections: ## Context, ## Needs, ## Objections, ## Next steps"
-            case "Action Items Focus":
-                return "Sections: ## Decisions, ## Action items (owner if named), ## Open questions"
-            case "Note":
-                return "Sections: ## Summary, ## Key points, ## Action items (if any)"
-            default:
-                return "Sections: ## Summary, ## Key points, ## Decisions, ## Action items, ## Open questions"
-            }
-        }()
+    private func enhanceMapReduce(
+        transcript: String,
+        notes: String,
+        template: String,
+        sectionGuide: String,
+        customPrompt: String?,
+        model: String
+    ) async throws -> EnhanceResult {
+        let chunks = Self.chunkTextForEnhance(transcript)
+        GristLog.log("[OllamaClient] enhance map: \(chunks.count) chunks")
+        var partials: [String] = []
+        for (i, chunk) in chunks.enumerated() {
+            let prompt = """
+            Summarize part \(i + 1) of \(chunks.count) of a long transcript into tight bullet points.
+            Keep concrete facts, names, decisions, action items. No preamble. Max ~250 words.
 
+            Part \(i + 1)/\(chunks.count):
+            \(chunk)
+            """
+            let partial = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 120)
+            partials.append("### Part \(i + 1)\n\(partial)")
+            GristLog.log("[OllamaClient] enhance map chunk \(i + 1)/\(chunks.count) → \(partial.count) chars")
+        }
+
+        var merged = partials.joined(separator: "\n\n")
+        if merged.count > 24_000 {
+            merged = Self.truncateForEnhance(merged, maxChars: 24_000, label: "partials")
+        }
+        let notesLine = notes.isEmpty ? "(none)" : notes
+        let reduceBody = """
+        PARTIAL SUMMARIES FROM A LONG SOURCE (combine these; do not invent new topics):
+        \(merged)
+
+        SOURCE NOTES / LINKS:
+        \(notesLine)
+        """
+        return try await enhanceSinglePass(
+            body: reduceBody,
+            notes: "",
+            template: template,
+            sectionGuide: sectionGuide,
+            customPrompt: customPrompt,
+            model: model,
+            sourceLength: transcript.count,
+            usedTruncation: false,
+            mapReduce: true
+        )
+    }
+
+    private func enhanceSinglePass(
+        body: String,
+        notes: String,
+        template: String,
+        sectionGuide: String,
+        customPrompt: String?,
+        model: String,
+        sourceLength: Int,
+        usedTruncation: Bool,
+        mapReduce: Bool = false
+    ) async throws -> EnhanceResult {
         let lengthNote: String = {
-            if transcript.count > Self.enhanceMaxTranscriptChars {
-                return "Source length: \(transcript.count) characters (long). You are given head+middle+end excerpts only — summarize those, do not invent sections that are not present."
+            if mapReduce {
+                return "Source length: \(sourceLength) characters. You are combining partial summaries of the full source — stay faithful; do not invent."
             }
-            return "Source length: \(transcript.count) characters."
+            if usedTruncation {
+                return "Source length: \(sourceLength) characters (long). You are given head+middle+end excerpts only — summarize those, do not invent sections that are not present."
+            }
+            return "Source length: \(sourceLength) characters."
         }()
 
         let grounding = """
         Grounding rules (strict):
-        - Summarize ONLY the provided transcript/notes. Do not invent a different topic, book, or talk.
+        - Summarize ONLY the provided text. Do not invent a different topic, book, or talk.
         - Do not invent the medium (e.g. do not call it a "Twitter thread" unless that text says so). If Notes mention YouTube, treat it as a video/podcast transcript.
         - No chatty preamble ("Thank you for sharing…"). Output only TITLE line + Markdown body.
         - \(lengthNote)
@@ -469,7 +578,7 @@ class OllamaClient: @unchecked Sendable {
             \(body)
 
             Notes:
-            \(cleanedNotes.isEmpty ? "(none)" : cleanedNotes)
+            \(notes.isEmpty ? "(none)" : notes)
             """
         } else {
             prompt = """
@@ -487,11 +596,11 @@ class OllamaClient: @unchecked Sendable {
             \(body)
 
             Notes:
-            \(cleanedNotes.isEmpty ? "(none)" : cleanedNotes)
+            \(notes.isEmpty ? "(none)" : notes)
             """
         }
 
-        GristLog.log("[OllamaClient] enhance promptChars=\(prompt.count) (source=transcript+notes, NOT prior summary)")
+        GristLog.log("[OllamaClient] enhance promptChars=\(prompt.count) mapReduce=\(mapReduce)")
         let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 180)
         let parsed = Self.parseEnhanceOutput(raw)
         GristLog.log("[OllamaClient] enhance parsed title=\(parsed.title ?? "(none)") summaryChars=\(parsed.summary.count)")

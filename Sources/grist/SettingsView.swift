@@ -30,8 +30,23 @@ struct SettingsView: View {
                 .ignoresSafeArea()
             
             VStack(spacing: 0) {
+                HStack(alignment: .center, spacing: 14) {
+                    GristIconBadge(systemName: "gearshape.2.fill", tint: .accent, size: 40)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Settings")
+                            .font(.title3.weight(.semibold))
+                        Text("Workflow, models, and search index")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 22)
+                .padding(.bottom, 12)
+
                 // Custom Top Navigation
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     TabButton(title: "General", icon: "gearshape.fill", isSelected: selectedTab == 0) {
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             selectedTab = 0
@@ -47,12 +62,13 @@ struct SettingsView: View {
                             selectedTab = 2
                         }
                     }
+                    Spacer()
                 }
-                .padding(.top, 30)
-                .padding(.bottom, 20)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 14)
                 
                 Rectangle()
-                    .fill(Color.white.opacity(0.1))
+                    .fill(Color.primary.opacity(0.08))
                     .frame(height: 1)
                 
                 // Content Area
@@ -72,7 +88,7 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 640, minHeight: 480)
+        .frame(minWidth: 660, minHeight: 500)
     }
 }
 

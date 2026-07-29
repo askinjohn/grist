@@ -238,7 +238,13 @@ struct MainView: View {
     @State private var newTaskLinkToOpenItem = true
     @FocusState private var newTaskTitleFocused: Bool
     @State private var isExtractingTasks = false
+    /// open | done | all
+    @State private var taskListFilter: String = "open"
     @AppStorage("autoExtractTasks") private var autoExtractTasks = true
+    @AppStorage("healthBannerDismissedAt") private var healthBannerDismissedAt: Double = 0
+    @State private var healthReport: GristHealthReport? = nil
+    @State private var showingHealthSheet = false
+    @State private var isCheckingHealth = false
     /// When set, open the best tab for a search hit (summary / notes / transcript).
     @State private var pendingSearchReveal = false
     @State private var showingNewFolderAlert = false
@@ -418,6 +424,10 @@ struct MainView: View {
                     }
                 }
             }
+            refreshHealthCheck(showSheetIfNeeded: true)
+        }
+        .sheet(isPresented: $showingHealthSheet) {
+            healthChecklistSheet
         }
         .onChange(of: libraryFilter) { _, _ in
             syncModelPickerFromConfig(for: currentModelPickerRole())
@@ -548,6 +558,12 @@ struct MainView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 8)
 
+            if let health = healthReport, !health.issues.isEmpty, shouldShowHealthBanner {
+                healthBanner(health)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
+
             List(selection: $selectedMeeting) {
                 // LIBRARY
                 Section {
@@ -623,6 +639,14 @@ struct MainView: View {
                         HStack {
                             Text("Tasks")
                             Spacer()
+                            Picker("", selection: $taskListFilter) {
+                                Text("Open").tag("open")
+                                Text("Done").tag("done")
+                                Text("All").tag("all")
+                            }
+                            .labelsHidden()
+                            .frame(width: 72)
+                            .controlSize(.small)
                             Button {
                                 newTaskTitle = ""
                                 newTaskNotes = ""
@@ -2119,13 +2143,193 @@ struct MainView: View {
     }
 
     private var filteredTasks: [GristTask] {
+        var list = tasks
+        switch taskListFilter {
+        case "open": list = list.filter { $0.isOpen }
+        case "done": list = list.filter { $0.isDone }
+        default: break
+        }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return tasks }
-        return tasks.filter {
+        guard !q.isEmpty else { return list }
+        return list.filter {
             $0.title.localizedCaseInsensitiveContains(q)
                 || $0.notes.localizedCaseInsensitiveContains(q)
                 || ($0.sourceTitle?.localizedCaseInsensitiveContains(q) ?? false)
         }
+    }
+
+    private var shouldShowHealthBanner: Bool {
+        // Re-show banner after 24h if still unhealthy
+        Date().timeIntervalSince1970 - healthBannerDismissedAt > 86_400
+    }
+
+    private func refreshHealthCheck(showSheetIfNeeded: Bool) {
+        isCheckingHealth = true
+        Task {
+            let report = await GristHealth.check()
+            await MainActor.run {
+                healthReport = report
+                isCheckingHealth = false
+                let blocking = report.issues.contains(where: \.isBlocking)
+                if showSheetIfNeeded, blocking, shouldShowHealthBanner {
+                    showingHealthSheet = true
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func healthBanner(_ report: GristHealthReport) -> some View {
+        let n = report.issues.count
+        Button {
+            showingHealthSheet = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text(n == 1
+                     ? report.issues[0].title
+                     : "\(n) setup items need attention")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+                Text("Fix")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.orange)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Color.orange.opacity(0.12))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.orange.opacity(0.3), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Check Ollama, models, Whisper, yt-dlp")
+    }
+
+    private var healthChecklistSheet: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            GristSheetHeader(
+                title: "Setup checklist",
+                subtitle: "Grist works best with local Ollama models and optional capture tools.",
+                systemImage: "stethoscope",
+                tint: .orange,
+                onClose: { showingHealthSheet = false }
+            )
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if let report = healthReport {
+                        healthRow(
+                            ok: report.ollamaReachable,
+                            title: "Ollama",
+                            detail: report.ollamaReachable
+                                ? "Reachable · \(report.ollamaModels.count) model(s)"
+                                : "Not reachable at configured URL"
+                        )
+                        healthRow(
+                            ok: report.hasChatModel,
+                            title: "Chat / enhance model",
+                            detail: report.hasChatModel
+                                ? "At least one non-embed model available"
+                                : "Pull gemma2:2b or qwen2.5:7b"
+                        )
+                        healthRow(
+                            ok: report.hasEmbedModel,
+                            title: "Embeddings (RAG)",
+                            detail: report.hasEmbedModel
+                                ? "nomic-embed (or similar) present"
+                                : "ollama pull nomic-embed-text"
+                        )
+                        healthRow(
+                            ok: report.ytDlpInstalled,
+                            title: "yt-dlp (YouTube)",
+                            detail: report.ytDlpInstalled ? "Found" : "brew install yt-dlp"
+                        )
+                        healthRow(
+                            ok: report.whisperAvailable,
+                            title: "Whisper",
+                            detail: report.whisperAvailable
+                                ? "Setup folder or binary found"
+                                : "Re-run ./setup.sh Whisper step"
+                        )
+
+                        if !report.issues.isEmpty {
+                            Text("Next steps")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 8)
+                            ForEach(report.issues) { issue in
+                                GristInfoCard(tint: issue.isBlocking ? .orange : .blue) {
+                                    HStack(alignment: .top, spacing: 10) {
+                                        Image(systemName: issue.systemImage)
+                                            .foregroundStyle(issue.isBlocking ? .orange : .blue)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(issue.title)
+                                                .font(.callout.weight(.semibold))
+                                            Text(issue.detail)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .textSelection(.enabled)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else if isCheckingHealth {
+                        ProgressView("Checking…")
+                            .frame(maxWidth: .infinity)
+                            .padding(24)
+                    }
+                }
+                .padding(22)
+            }
+
+            GristSheetFooter {
+                Button("Dismiss for today") {
+                    healthBannerDismissedAt = Date().timeIntervalSince1970
+                    showingHealthSheet = false
+                }
+            } trailing: {
+                Button {
+                    refreshHealthCheck(showSheetIfNeeded: false)
+                } label: {
+                    if isCheckingHealth {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Recheck", systemImage: "arrow.clockwise")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .disabled(isCheckingHealth)
+            }
+        }
+        .frame(width: 480, height: 520)
+    }
+
+    private func healthRow(ok: Bool, title: String, detail: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(ok ? .green : .orange)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private func dropFolder(fromSection name: String) -> String? {
@@ -4626,6 +4830,9 @@ struct ChatView: View {
     @State private var activeConversationId: String = ""
     @State private var threadSearch: String = ""
     @State private var showingThreadPicker = false
+    @State private var renameConversationId: String? = nil
+    @State private var renameConversationTitle: String = ""
+    @State private var showingRenameAlert = false
 
     /// Cap per item when stuffing (characters).
     private let itemContextLimit = 80_000
@@ -4832,8 +5039,12 @@ struct ChatView: View {
                                 showingThreadPicker = false
                             } label: {
                                 HStack(alignment: .top, spacing: 10) {
-                                    Image(systemName: conv.id == activeConversationId ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right")
-                                        .foregroundStyle(conv.id == activeConversationId ? Color.accentColor : .secondary)
+                                    Image(systemName: conv.isPinned
+                                          ? "pin.fill"
+                                          : (conv.id == activeConversationId
+                                             ? "bubble.left.and.bubble.right.fill"
+                                             : "bubble.left.and.bubble.right"))
+                                        .foregroundStyle(conv.isPinned ? .orange : (conv.id == activeConversationId ? Color.accentColor : .secondary))
                                         .frame(width: 18)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(conv.title)
@@ -4853,6 +5064,34 @@ struct ChatView: View {
                                 .background(conv.id == activeConversationId ? Color.accentColor.opacity(0.1) : Color.clear)
                             }
                             .buttonStyle(.plain)
+                            .contextMenu {
+                                Button {
+                                    renameConversationId = conv.id
+                                    renameConversationTitle = conv.title
+                                    showingRenameAlert = true
+                                } label: {
+                                    Label("Rename…", systemImage: "pencil")
+                                }
+                                Button {
+                                    Database.shared.setConversationPinned(id: conv.id, pinned: !conv.isPinned)
+                                    reloadConversationList()
+                                } label: {
+                                    Label(conv.isPinned ? "Unpin" : "Pin", systemImage: conv.isPinned ? "pin.slash" : "pin")
+                                }
+                                Button(role: .destructive) {
+                                    Database.shared.deleteConversation(id: conv.id)
+                                    reloadConversationList()
+                                    if activeConversationId == conv.id {
+                                        if let next = conversations.first {
+                                            selectConversation(next.id)
+                                        } else {
+                                            startNewChat()
+                                        }
+                                    }
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                            }
                             Divider().padding(.leading, 40)
                         }
                     }
@@ -4870,6 +5109,18 @@ struct ChatView: View {
             .buttonStyle(.plain)
         }
         .frame(width: 320, height: 360)
+        .alert("Rename chat", isPresented: $showingRenameAlert) {
+            TextField("Title", text: $renameConversationTitle)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                if let id = renameConversationId {
+                    Database.shared.renameConversation(id: id, title: renameConversationTitle)
+                    reloadConversationList()
+                }
+            }
+        } message: {
+            Text("Choose a short name for this thread.")
+        }
     }
 
     private func relativeDate(_ ts: Double) -> String {
@@ -5114,6 +5365,8 @@ struct ChatView: View {
 
                 var documentBlock = ""
                 var titleInventory = ""
+                /// Titles shown under the answer (RAG / document sources).
+                var answerSources: [String] = []
 
                 switch scope {
                 case .selection(_, let title, let selText):
@@ -5125,6 +5378,9 @@ struct ChatView: View {
                     \(body.isEmpty ? "(empty selection)" : body)
                     """
                     titleInventory = "SELECTION source title: \"\(title)\""
+                    if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        answerSources = [title]
+                    }
 
                 case .item(let meeting):
                     let m = meetingsInContext.first ?? meeting
@@ -5140,6 +5396,8 @@ struct ChatView: View {
                         \(blob)
                         """
                     }
+                    let t = m.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    answerSources = [t.isEmpty ? "This item" : t]
 
                 case .global:
                     let actionFocused = isActionOrAdviceQuery(text)
@@ -5157,6 +5415,7 @@ struct ChatView: View {
                             let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: actionFocused)
                             documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob.isEmpty ? "(empty body)" : blob)\n"
                         }
+                        answerSources = folderItems.map(\.title).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                     } else {
                         // Keyword rank with score floor — drop weak Cooking hits when finance wins
                         let scored = RAGEngine.shared.rankMeetingsByKeywordsScored(meetingsInContext, query: text)
@@ -5170,6 +5429,7 @@ struct ChatView: View {
                         if ranked.isEmpty, let first = scored.first {
                             ranked = [first.meeting]
                         }
+                        answerSources = ranked.map(\.title).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
 
                         // For action/advice: only BEST MATCHES inventory (not whole library catalog)
                         if actionFocused {
@@ -5231,6 +5491,7 @@ struct ChatView: View {
                 Answer only from DOCUMENT. Prefer AI Summary over notes/transcript.
                 Copy TITLE= strings exactly — never invent titles, folders, or notes.
                 Only discuss notes that appear in DOCUMENT for this question.
+                End with a short answer; do NOT invent a Sources list — the app will attach real source titles.
                 """
                 if actionFocused {
                     systemPrompt += """
@@ -5281,13 +5542,23 @@ struct ChatView: View {
                 )
 
                 await MainActor.run {
+                    // Deduplicate sources, cap list for UI
+                    var seen = Set<String>()
+                    let sources = answerSources.filter { s in
+                        let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !t.isEmpty, !seen.contains(t) else { return false }
+                        seen.insert(t)
+                        return true
+                    }.prefix(8).map { $0 }
+
                     let aiMsg = ChatMessage(
                         id: UUID().uuidString,
                         groupName: group,
                         role: "assistant",
                         content: response.content,
                         timestamp: Date().timeIntervalSince1970,
-                        conversationId: convId
+                        conversationId: convId,
+                        sources: Array(sources)
                     )
                     chatHistory.append(aiMsg)
                     Database.shared.saveChatMessage(aiMsg)
@@ -5316,11 +5587,11 @@ struct ChatView: View {
 
 struct ChatBubble: View {
     let message: ChatMessage
-    
+
     var body: some View {
-        HStack {
+        HStack(alignment: .top) {
             if message.role == "user" {
-                Spacer()
+                Spacer(minLength: 40)
                 Text(LocalizedStringKey(message.content))
                     .padding(14)
                     .background(LinearGradient(colors: [Color.blue, Color.purple.opacity(0.8)], startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -5328,16 +5599,56 @@ struct ChatBubble: View {
                     .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                     .shadow(color: .black.opacity(0.15), radius: 5, x: 0, y: 2)
             } else {
-                Text(LocalizedStringKey(message.content))
-                    .padding(16)
-                    .background(.regularMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 1)
-                    )
-                    .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
-                Spacer()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(LocalizedStringKey(message.content))
+                        .padding(16)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 1)
+                        )
+                        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+
+                    if !message.sources.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Sources")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            FlowSourceChips(titles: message.sources)
+                        }
+                        .padding(.leading, 4)
+                    }
+                }
+                Spacer(minLength: 40)
+            }
+        }
+    }
+}
+
+/// Simple wrapping chips for source titles (no FlowLayout dependency).
+struct FlowSourceChips: View {
+    let titles: [String]
+
+    var body: some View {
+        // Horizontal scroll keeps layout simple on macOS without custom flow layout.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(titles, id: \.self) { title in
+                    HStack(spacing: 4) {
+                        Image(systemName: "doc.text")
+                            .font(.caption2)
+                        Text(title)
+                            .font(.caption)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.purple.opacity(0.12))
+                    .foregroundStyle(.purple)
+                    .clipShape(Capsule())
+                    .help(title)
+                }
             }
         }
     }
