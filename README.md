@@ -88,12 +88,22 @@ Minimal example:
 
 ---
 
+## Obsidian
+
+1. **Settings → Integrations → Obsidian** — enable and **Choose…** your vault folder.  
+2. Optional: subfolder (default `Grist`), filename `{date}-{title}`, sections to include.  
+3. On a note/meeting: **Export → Send to Obsidian** (or auto after Enhance).  
+4. Grist writes a new `.md` file (never overwrites; adds `-2` if needed).  
+
+Config: `~/Library/Application Support/Grist/integrations.json`
+
 ## Data
 
 | Path | What |
 |------|------|
 | `~/Library/Application Support/Grist/meetings.db` | Notes, chats, tasks, RAG |
 | `~/Library/Application Support/Grist/ai-config.json` | Model roles |
+| `~/Library/Application Support/Grist/integrations.json` | Obsidian vault path & options |
 | `~/Library/Application Support/Grist/grist.log` | Diagnostics |
 
 ---
