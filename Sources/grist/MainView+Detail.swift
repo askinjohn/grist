@@ -756,7 +756,7 @@ extension MainView {
         return !n.isEmpty
     }
 
-    /// Play AI summary aloud (Voicebox local TTS if running, else macOS voice).
+    /// Play AI summary aloud (macOS system voice).
     @ViewBuilder
     func summarySpeechBar(text: String) -> some View {
         SummarySpeechBar(text: text)

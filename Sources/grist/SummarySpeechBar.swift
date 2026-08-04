@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 import AVFoundation
 
 struct SummarySpeechBar: View {
@@ -32,7 +31,6 @@ struct SummarySpeechBar: View {
                 .tint(.red)
             } else {
                 Button {
-                    Task { await speech.refreshVoicebox() }
                     speech.speak(text)
                 } label: {
                     Label("Read summary", systemImage: "play.fill")
@@ -40,14 +38,11 @@ struct SummarySpeechBar: View {
                 .buttonStyle(.borderedProminent)
                 .tint(.purple)
                 .controlSize(.small)
-                .help("Voicebox (local Qwen3-TTS / Chatterbox / …) if running; otherwise macOS system voice")
+                .help("Read with macOS system voice (pick Enhanced voices in Settings → Integrations)")
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.purple.opacity(0.06))
-        .onAppear {
-            Task { await speech.refreshVoicebox() }
-        }
     }
 }

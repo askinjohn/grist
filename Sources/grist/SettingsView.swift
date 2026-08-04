@@ -970,7 +970,7 @@ struct IntegrationsSettingsView: View {
     }
 }
 
-// MARK: - Voice / TTS settings
+// MARK: - Voice / TTS settings (macOS system speech only)
 
 struct VoiceSettingsCard: View {
     @ObservedObject private var speech = SpeechService.shared
@@ -980,53 +980,60 @@ struct VoiceSettingsCard: View {
             HStack(spacing: 12) {
                 GristIconBadge(systemName: "speaker.wave.2.fill", tint: .purple, size: 40)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Read aloud (TTS)")
+                    Text("Read aloud")
                         .font(.headline)
-                    Text("Play AI summaries with a local voice — not cloud ElevenLabs.")
+                    Text("macOS system voice — on-device only. No cloud, no extra app.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
-                Button {
-                    Task { await speech.refreshVoicebox() }
-                } label: {
-                    Label(speech.voiceboxAvailable ? "Voicebox online" : "Check Voicebox",
-                          systemImage: speech.voiceboxAvailable ? "checkmark.circle.fill" : "arrow.clockwise")
-                }
-                .buttonStyle(.bordered)
-                .tint(speech.voiceboxAvailable ? .green : .secondary)
             }
 
-            Text("Voicebox (voicebox.sh) is the local “app + API” for TTS engines like Qwen3-TTS and Chatterbox — similar idea to Ollama, but for speech. Install Voicebox, open it, then Grist can call http://127.0.0.1:17493. Without Voicebox, Grist uses the macOS system voice.")
+            Text("For a more natural voice, install Enhanced or Premium voices in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices…, then pick them below. Rate and pitch help a little; true emotion/cloning needs neural TTS later.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Picker("Engine preference", selection: $speech.preferredBackend) {
-                ForEach(SpeechService.Backend.allCases) { b in
-                    Text(b.label).tag(b)
+            Picker("Voice", selection: $speech.selectedVoiceId) {
+                Text("Best available English").tag("")
+                ForEach(speech.availableVoices, id: \.identifier) { v in
+                    Text(SpeechService.voiceLabel(v)).tag(v.identifier)
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Rate")
+                    Spacer()
+                    Text(String(format: "%.0f%%", speech.rate * 100))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $speech.rate, in: 0.5...1.15, step: 0.05)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Pitch")
+                    Spacer()
+                    Text(String(format: "%.2f", speech.pitch))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $speech.pitch, in: 0.7...1.4, step: 0.05)
             }
 
             HStack {
-                Text("Voicebox URL")
-                Spacer()
-                TextField("http://127.0.0.1:17493", text: $speech.voiceboxBaseURL)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 220)
-            }
-
-            if !speech.voiceboxProfiles.isEmpty {
-                Picker("Voice profile", selection: $speech.selectedProfileId) {
-                    Text("Default").tag("")
-                    ForEach(speech.voiceboxProfiles, id: \.id) { p in
-                        Text(p.name).tag(p.id)
-                    }
+                Button("System voice settings…") {
+                    speech.openSpokenContentSettings()
                 }
+                .buttonStyle(.bordered)
+                Spacer()
+                Button("Test voice") {
+                    speech.speak("Hello from Grist. This is your read aloud voice.")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
             }
-
-            Link("Download Voicebox →", destination: URL(string: "https://voicebox.sh/")!)
-                .font(.caption)
         }
         .padding(18)
         .background(Color.primary.opacity(0.04))
@@ -1035,8 +1042,5 @@ struct VoiceSettingsCard: View {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.purple.opacity(0.2), lineWidth: 1)
         )
-        .onAppear {
-            Task { await speech.refreshVoicebox() }
-        }
     }
 }
