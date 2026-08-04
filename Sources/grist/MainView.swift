@@ -305,6 +305,8 @@ struct MainView: View {
     @State private var focusedFolder: String? = nil
     /// Accordion: which folders are expanded to list their files.
     @State private var expandedFolders: Set<String> = []
+    /// Folder currently highlighted as a drop target (drag-and-drop).
+    @State private var folderDropTarget: String? = nil
 
     // Create sheet form — present via item so kind is never stale
     @State private var createSheetRequest: CreateSheetRequest? = nil
@@ -574,11 +576,12 @@ struct MainView: View {
                     Text("Library")
                 }
 
-                // FOLDERS — accordion: expand to list files inside
-                if !isSearching && libraryFilter != .tasks && libraryFilter != .askEverything && libraryFilter != .unfiled {
+                // FOLDERS — accordion (always visible when browsing items, including Unfiled,
+                // so you can drop or “Move to…” unfiled notes into a folder).
+                if !isSearching && libraryFilter != .tasks && libraryFilter != .askEverything {
                     Section {
                         if folders.isEmpty {
-                            Text("No folders yet")
+                            Text("No folders yet — use + to create one")
                                 .font(.caption)
                                 .foregroundStyle(.tertiary)
                         } else {
@@ -1843,13 +1846,21 @@ struct MainView: View {
         let items = meetingsInFolder(name)
         let expanded = isFolderExpanded(name)
         let isFocused = focusedFolder == name
+        let isDropTarget = folderDropTarget == name
 
         DisclosureGroup(isExpanded: expanded) {
             if items.isEmpty {
-                Text("Empty")
+                Text("Drop notes here, or right‑click a note → Move to folder")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .padding(.leading, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .dropDestination(for: String.self) { dropped, _ in
+                        acceptDrop(dropped, toFolder: name)
+                    } isTargeted: { hovering in
+                        folderDropTarget = hovering ? name : (folderDropTarget == name ? nil : folderDropTarget)
+                    }
             } else {
                 ForEach(items) { meeting in
                     meetingSidebarRow(meeting, inFolder: name)
@@ -1860,7 +1871,7 @@ struct MainView: View {
             HStack(spacing: 8) {
                 Image(systemName: expandedFolders.contains(name) ? "folder.fill" : "folder")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(isFocused || expandedFolders.contains(name) ? Color.accentColor : .secondary)
+                    .foregroundStyle(isFocused || isDropTarget || expandedFolders.contains(name) ? Color.accentColor : .secondary)
                     .frame(width: 16)
                 Text(name)
                     .font(.callout.weight(isFocused || expandedFolders.contains(name) ? .semibold : .regular))
@@ -1871,10 +1882,23 @@ struct MainView: View {
                     .foregroundStyle(.tertiary)
             }
             .contentShape(Rectangle())
+            .padding(.vertical, 2)
+            // Drop on the folder *label* (works when collapsed)
+            .dropDestination(for: String.self) { dropped, _ in
+                acceptDrop(dropped, toFolder: name)
+            } isTargeted: { hovering in
+                folderDropTarget = hovering ? name : (folderDropTarget == name ? nil : folderDropTarget)
+            }
         }
-        .listRowBackground(isFocused ? Color.accentColor.opacity(0.12) : Color.clear)
+        .listRowBackground(
+            isDropTarget
+                ? Color.accentColor.opacity(0.22)
+                : (isFocused ? Color.accentColor.opacity(0.12) : Color.clear)
+        )
         .dropDestination(for: String.self) { dropped, _ in
-            moveMeetings(dropped, toFolder: name)
+            acceptDrop(dropped, toFolder: name)
+        } isTargeted: { hovering in
+            folderDropTarget = hovering ? name : (folderDropTarget == name ? nil : folderDropTarget)
         }
         .contextMenu {
             Button(expanded.wrappedValue ? "Collapse" : "Expand") {
@@ -1910,24 +1934,51 @@ struct MainView: View {
         }
     }
 
+    /// Handle a sidebar drop of meeting id(s) into a folder (or unfiled if nil).
+    @discardableResult
+    private func acceptDrop(_ ids: [String], toFolder folder: String?) -> Bool {
+        let ok = moveMeetings(ids, toFolder: folder)
+        if ok, let folder {
+            expandedFolders.insert(folder)
+            statusMessage = "Moved to “\(folder)”"
+        } else if ok {
+            statusMessage = "Moved to Unfiled"
+        }
+        return ok
+    }
+
     @ViewBuilder
     private func meetingSidebarRow(_ meeting: Meeting, inFolder: String?) -> some View {
+        // List selection via `.tag` — avoid onTapGesture (it blocks drag-and-drop on macOS).
         SidebarRow(meeting: meeting, isSelected: selectedMeeting?.id == meeting.id)
             .tag(meeting)
-            .draggable(meeting.id)
             .contentShape(Rectangle())
-            .onTapGesture {
-                selectedMeeting = meeting
-                selectedTask = nil
-                // Keep folder expanded when selecting inside it
-                if let inFolder {
-                    expandedFolders.insert(inFolder)
-                }
+            .draggable(meeting.id) {
+                Label(
+                    meeting.title.isEmpty ? "Item" : meeting.title,
+                    systemImage: meeting.isNoteType ? "note.text" : "waveform"
+                )
+                .padding(8)
             }
             .contextMenu {
+                // Reliable alternative when drag-and-drop is flaky in List
+                Menu("Move to folder") {
+                    Button("Unfiled") {
+                        _ = acceptDrop([meeting.id], toFolder: nil)
+                    }
+                    if !folders.isEmpty {
+                        Divider()
+                        ForEach(folders.sorted(), id: \.self) { name in
+                            Button(name) {
+                                _ = acceptDrop([meeting.id], toFolder: name)
+                            }
+                            .disabled((meeting.groupName ?? "") == name)
+                        }
+                    }
+                }
                 if inFolder != nil {
                     Button("Remove from folder") {
-                        moveMeetings([meeting.id], toFolder: nil)
+                        _ = acceptDrop([meeting.id], toFolder: nil)
                     }
                 }
                 Button {
@@ -2384,11 +2435,32 @@ struct MainView: View {
 
     @discardableResult
     private func moveMeetings(_ ids: [String], toFolder folder: String?) -> Bool {
-        guard let meetingId = ids.first, var m = db.getMeeting(id: meetingId) else { return false }
-        m.groupName = folder
-        db.saveMeeting(m)
+        // Accept full drag payloads (sometimes includes whitespace / multiple)
+        let cleaned = ids
+            .flatMap { $0.split(whereSeparator: { $0.isNewline || $0 == "," }).map(String.init) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !cleaned.isEmpty else { return false }
+
+        var moved = 0
+        for meetingId in cleaned {
+            guard var m = db.getMeeting(id: meetingId) ?? meetings.first(where: { $0.id == meetingId }) else {
+                continue
+            }
+            m.groupName = folder
+            db.saveMeeting(m)
+            moved += 1
+            if selectedMeeting?.id == meetingId {
+                selectedMeeting = m
+            }
+        }
+        guard moved > 0 else { return false }
         if let folder { db.saveFolder(folder) }
         loadMeetings()
+        // Keep selection in sync after reload
+        if let id = selectedMeeting?.id {
+            selectedMeeting = meetings.first(where: { $0.id == id }) ?? selectedMeeting
+        }
         return true
     }
 
