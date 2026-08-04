@@ -169,8 +169,8 @@ struct MainView: View {
             .id(request.id) // force fresh state per open (Meeting vs Note)
         }
         .sheet(isPresented: $showingSettingsSheet) {
+            // Flexible size — do not pin width/height (clips tabs + content).
             SettingsView()
-                .frame(width: 600, height: 400)
                 .overlay(alignment: .topTrailing) {
                     Button {
                         showingSettingsSheet = false
@@ -181,6 +181,7 @@ struct MainView: View {
                     }
                     .buttonStyle(.plain)
                     .padding()
+                    .help("Close")
                 }
         }
         .onAppear {

@@ -45,31 +45,32 @@ struct SettingsView: View {
                 .padding(.top, 22)
                 .padding(.bottom, 12)
 
-                // Custom Top Navigation
-                HStack(spacing: 10) {
-                    TabButton(title: "General", icon: "gearshape.fill", isSelected: selectedTab == 0) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 0
+                // Tabs wrap when the sheet is narrow (no fixed bar width).
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        TabButton(title: "General", icon: "gearshape.fill", isSelected: selectedTab == 0) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                selectedTab = 0
+                            }
+                        }
+                        TabButton(title: "AI Models", icon: "cpu", isSelected: selectedTab == 1) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                selectedTab = 1
+                            }
+                        }
+                        TabButton(title: "AI Templates", icon: "sparkles.rectangle.stack.fill", isSelected: selectedTab == 2) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                selectedTab = 2
+                            }
+                        }
+                        TabButton(title: "Integrations", icon: "link", isSelected: selectedTab == 3) {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                                selectedTab = 3
+                            }
                         }
                     }
-                    TabButton(title: "AI Models", icon: "cpu", isSelected: selectedTab == 1) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 1
-                        }
-                    }
-                    TabButton(title: "AI Templates", icon: "sparkles.rectangle.stack.fill", isSelected: selectedTab == 2) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 2
-                        }
-                    }
-                    TabButton(title: "Integrations", icon: "link", isSelected: selectedTab == 3) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 3
-                        }
-                    }
-                    Spacer()
+                    .padding(.horizontal, 20)
                 }
-                .padding(.horizontal, 20)
                 .padding(.bottom, 14)
                 
                 Rectangle()
@@ -96,7 +97,9 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 700, minHeight: 520)
+        // Soft minimums only — grow with content / window; never pin exact size.
+        .frame(minWidth: 520, minHeight: 360)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -154,42 +157,16 @@ struct GeneralSettingsView: View {
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
                     
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Auto-Enhance Meetings")
-                                .font(.system(size: 16, weight: .medium, design: .rounded))
-                            Text("Generate AI summaries automatically when recording stops")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $autoEnhance)
-                            .toggleStyle(.switch)
-                    }
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    settingsToggleRow(
+                        title: "Auto-Enhance Meetings",
+                        subtitle: "Generate AI summaries automatically when recording stops",
+                        isOn: $autoEnhance
                     )
 
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Auto-extract tasks")
-                                .font(.system(size: 16, weight: .medium, design: .rounded))
-                            Text("After Enhance, pull action items into the Tasks list")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $autoExtractTasks)
-                            .toggleStyle(.switch)
-                    }
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    settingsToggleRow(
+                        title: "Auto-extract tasks",
+                        subtitle: "After Enhance, pull action items into the Tasks list",
+                        isOn: $autoExtractTasks
                     )
                 }
 
@@ -257,68 +234,41 @@ struct GeneralSettingsView: View {
                         .textCase(.uppercase)
                     
                     VStack(spacing: 0) {
-                        HStack {
-                            Text("Provider")
-                                .font(.system(size: 15, weight: .medium, design: .rounded))
-                            Spacer()
+                        settingsFieldRow(label: "Provider") {
                             Picker("", selection: $aiProviderType) {
                                 Text("Ollama (Local)").tag("Ollama")
                                 Text("OpenAI Compatible").tag("OpenAI Compatible")
                             }
-                            .frame(width: 160)
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         }
-                        .padding(16)
-                        
+
                         Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-                        
+
                         if aiProviderType == "Ollama" {
-                            HStack {
-                                Text("Local URL")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+                            settingsFieldRow(label: "Local URL") {
                                 TextField("http://127.0.0.1:11434", text: $ollamaURL)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
                         } else {
-                            HStack {
-                                Text("API URL")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+                            settingsFieldRow(label: "API URL") {
                                 TextField("https://api.openai.com/v1", text: $openAIBaseURL)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
-                            
+
                             Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-                            
-                            HStack {
-                                Text("API Key")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+
+                            settingsFieldRow(label: "API Key") {
                                 SecureField("sk-...", text: $openAIAPIKey)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
-                            
+
                             Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-                            
-                            HStack {
-                                Text("Model")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+
+                            settingsFieldRow(label: "Model") {
                                 TextField("gpt-4o", text: $openAIModel)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
                         }
                     }
                     .background(Color.white.opacity(0.05))
@@ -328,8 +278,57 @@ struct GeneralSettingsView: View {
                     )
                 }
             }
-            .padding(32)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Label + control that wraps on narrow sheets (no fixed control widths).
+    @ViewBuilder
+    private func settingsFieldRow<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(label)
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .layoutPriority(1)
+                content()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(16)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(label)
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(16)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsToggleRow(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: isOn)
+                .toggleStyle(.switch)
+                .labelsHidden()
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
     }
 
     private func rebuildIndex() {
@@ -451,7 +450,8 @@ struct AIModelsSettingsView: View {
 
                         TextEditor(text: $ai.jsonText)
                             .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 220, maxHeight: 320)
+                            .frame(minHeight: 160)
+                            .frame(maxWidth: .infinity)
                             .padding(8)
                             .background(Color.black.opacity(0.25))
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -551,33 +551,61 @@ struct AIModelsSettingsView: View {
             },
             set: { draftRoles[role.rawValue] = $0 }
         )
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(role.label)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                Text(role.help)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 150, alignment: .leading)
-
-            Picker("", selection: Binding(
-                get: { binding.wrappedValue.backend },
-                set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
-            )) {
-                ForEach(backendNames, id: \.self) { name in
-                    Text(name).tag(name)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(role.label)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Text(role.help)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            .labelsHidden()
-            .frame(width: 110)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
 
-            TextField("model name", text: Binding(
-                get: { binding.wrappedValue.model },
-                set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 200)
+                Picker("", selection: Binding(
+                    get: { binding.wrappedValue.backend },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
+                )) {
+                    ForEach(backendNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .labelsHidden()
+                .frame(minWidth: 90)
+
+                TextField("model name", text: Binding(
+                    get: { binding.wrappedValue.model },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 100, maxWidth: .infinity)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(role.label)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Text(role.help)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Picker("Backend", selection: Binding(
+                    get: { binding.wrappedValue.backend },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
+                )) {
+                    ForEach(backendNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                TextField("model name", text: Binding(
+                    get: { binding.wrappedValue.model },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -589,9 +617,10 @@ struct AIModelsSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(name)
                 .font(.headline)
-            HStack {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Type")
-                Spacer()
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Picker("", selection: Binding(
                     get: { draftBackends[name]?.type ?? b.type },
                     set: { newType in
@@ -605,11 +634,11 @@ struct AIModelsSettingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 180)
-            }
-            HStack {
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 Text("Base URL")
-                Spacer()
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 TextField("URL", text: Binding(
                     get: { draftBackends[name]?.baseURL ?? b.baseURL },
                     set: { v in
@@ -619,12 +648,12 @@ struct AIModelsSettingsView: View {
                     }
                 ))
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 280)
-            }
-            if (draftBackends[name]?.type ?? b.type) == .openaiCompatible {
-                HStack {
+                .frame(maxWidth: .infinity)
+
+                if (draftBackends[name]?.type ?? b.type) == .openaiCompatible {
                     Text("API key")
-                    Spacer()
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     SecureField("optional if using env", text: Binding(
                         get: { draftBackends[name]?.apiKey ?? b.apiKey ?? "" },
                         set: { v in
@@ -634,11 +663,11 @@ struct AIModelsSettingsView: View {
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 280)
-                }
-                HStack {
+                    .frame(maxWidth: .infinity)
+
                     Text("API key env var")
-                    Spacer()
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     TextField("OPENAI_API_KEY", text: Binding(
                         get: { draftBackends[name]?.apiKeyEnv ?? b.apiKeyEnv ?? "" },
                         set: { v in
@@ -648,7 +677,7 @@ struct AIModelsSettingsView: View {
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 280)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -666,117 +695,122 @@ struct TemplatesSettingsView: View {
     @State private var editingPrompt = ""
     
     var body: some View {
-        HStack(spacing: 0) {
-            // Sidebar
-            VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Your Templates")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                    Spacer()
-                    Button(action: createNewTemplate) {
-                        Image(systemName: "plus.circle.fill")
-                            .foregroundStyle(Color.accentColor)
-                            .font(.title3)
+        // Flexible split: list takes a fraction, not a fixed pixel width.
+        GeometryReader { geo in
+            let listWidth = min(max(geo.size.width * 0.32, 160), 280)
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack {
+                        Text("Your Templates")
+                            .font(.system(size: 13, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Spacer()
+                        Button(action: createNewTemplate) {
+                            Image(systemName: "plus.circle.fill")
+                                .foregroundStyle(Color.accentColor)
+                                .font(.title3)
+                        }
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
-                }
-                .padding(16)
-                
-                ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(templates) { template in
-                            Button {
-                                selectedTemplateId = template.id
-                            } label: {
-                                HStack {
-                                    Text(template.name)
-                                        .font(.system(size: 14, weight: selectedTemplateId == template.id ? .semibold : .regular, design: .rounded))
-                                    Spacer()
+                    .padding(16)
+
+                    ScrollView {
+                        VStack(spacing: 6) {
+                            ForEach(templates) { template in
+                                Button {
+                                    selectedTemplateId = template.id
+                                } label: {
+                                    HStack {
+                                        Text(template.name)
+                                            .font(.system(size: 14, weight: selectedTemplateId == template.id ? .semibold : .regular, design: .rounded))
+                                            .lineLimit(2)
+                                            .multilineTextAlignment(.leading)
+                                        Spacer(minLength: 0)
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(selectedTemplateId == template.id ? Color.accentColor.opacity(0.15) : Color.clear)
+                                    .foregroundColor(selectedTemplateId == template.id ? .accentColor : .primary)
+                                    .cornerRadius(8)
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(selectedTemplateId == template.id ? Color.accentColor.opacity(0.15) : Color.clear)
-                                .foregroundColor(selectedTemplateId == template.id ? .accentColor : .primary)
-                                .cornerRadius(8)
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                    }
+                }
+                .frame(width: listWidth, alignment: .leading)
+                .frame(maxHeight: .infinity)
+                .background(Color.black.opacity(0.1))
+
+                Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1)
+
+                VStack(alignment: .leading, spacing: 20) {
+                    if selectedTemplateId != nil {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Template Name")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+                            TextField("Template Name", text: $editingName)
+                                .font(.system(size: 20, weight: .bold, design: .rounded))
+                                .textFieldStyle(.plain)
+                                .frame(maxWidth: .infinity)
+                        }
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("System Prompt")
+                                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.secondary)
+
+                            TextEditor(text: $editingPrompt)
+                                .font(.system(size: 14, weight: .regular, design: .monospaced))
+                                .padding(12)
+                                .frame(minHeight: 120, maxHeight: .infinity)
+                                .background(Color.black.opacity(0.2))
+                                .cornerRadius(12)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                )
+                        }
+                        .frame(maxHeight: .infinity)
+
+                        HStack {
+                            Button(action: deleteSelected) {
+                                Text("Delete")
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundColor(.red)
                             }
                             .buttonStyle(.plain)
+
+                            Spacer()
+
+                            Button {
+                                saveChanges()
+                            } label: {
+                                Text("Save Changes")
+                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .padding(.horizontal, 16)
+                                    .padding(.vertical, 8)
+                                    .background(Color.accentColor)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(editingName.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
-                    }
-                    .padding(.horizontal, 12)
-                }
-            }
-            .frame(width: 220)
-            .background(Color.black.opacity(0.1))
-            
-            Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1)
-            
-            // Detail
-            VStack(alignment: .leading, spacing: 20) {
-                if let _ = selectedTemplateId {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Template Name")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                        TextField("Template Name", text: $editingName)
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
-                            .textFieldStyle(.plain)
-                    }
-                    
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("System Prompt")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                        
-                        TextEditor(text: $editingPrompt)
-                            .font(.system(size: 14, weight: .regular, design: .monospaced))
-                            .padding(12)
-                            .background(Color.black.opacity(0.2))
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
-                            )
-                    }
-                    
-                    HStack {
-                        Button(action: deleteSelected) {
-                            Text("Delete")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundColor(.red)
-                        }
-                        .buttonStyle(.plain)
-                        
-                        Spacer()
-                        
-                        Button {
-                            saveChanges()
-                        } label: {
-                            Text("Save Changes")
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Color.accentColor)
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(editingName.trimmingCharacters(in: .whitespaces).isEmpty)
-                    }
-                } else {
-                    Spacer()
-                    HStack {
+                    } else {
                         Spacer()
                         Text("Select a template or create a new one.")
                             .font(.system(size: 15, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity)
                         Spacer()
                     }
-                    Spacer()
                 }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .padding(30)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .onAppear {
             loadTemplates()
@@ -880,22 +914,20 @@ struct IntegrationsSettingsView: View {
                         }
                     }
 
-                    HStack {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Subfolder")
                             .font(.callout)
-                        Spacer()
                         TextField("Grist", text: $draft.subfolder)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
+                            .frame(maxWidth: .infinity)
                     }
 
-                    HStack {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Filename pattern")
                             .font(.callout)
-                        Spacer()
                         TextField("{date}-{title}", text: $draft.filenamePattern)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
+                            .frame(maxWidth: .infinity)
                     }
                     Text("{date} = yyyy-MM-dd · {title} = note title · {id} = short id")
                         .font(.caption2)
@@ -962,7 +994,9 @@ struct IntegrationsSettingsView: View {
                 // Voice / TTS (local)
                 VoiceSettingsCard()
             }
-            .padding(28)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .onAppear {
             draft = integrations.config.obsidian
