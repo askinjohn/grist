@@ -24,6 +24,8 @@ Record meetings (mic + system audio), write notes, import articles or YouTube ca
 | **AI roles** | Settings → per-job backend + model (`chat`, `askEverything`, `enhance`, `embed`, …); toolbar dropdown **syncs** with config |
 | **Setup checklist** | Detects Ollama, chat model, embeddings, yt-dlp, Whisper; banner + fix sheet |
 | **Obsidian** | Settings → Integrations; **Send to Obsidian** / folder batch; optional after Enhance |
+| **Read aloud** | **AI Summary → Read summary** uses **macOS system voice** only (on-device; voice / rate / pitch in Settings → Integrations) |
+| **Settings** | Fixed **720×560** sheet: **General**, **AI Models**, **AI Templates**, **Integrations** — header fixed, content scrolls |
 | **DMG** | `./build_app.sh` packages `Grist.dmg` (app only — still need Ollama/models via setup) |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
 | **Local-first** | Ollama by default; optional OpenAI-compatible endpoint |
@@ -84,6 +86,19 @@ Library → **Tasks**. Extract from Enhance or the **Tasks** button; filter Open
 - **Export → Export Markdown…** — pick sections, Save or Copy.  
 - **Export → Send to Obsidian** — requires Settings → Integrations.  
 - Folder: export all as `.md` files, or send folder to Obsidian.
+
+### Read summary aloud
+On **AI Summary** / **Summary**, use the purple **Listen** bar → **Read summary** / **Stop**. Speech is the **macOS system voice** (no cloud, no extra TTS app).
+
+### Settings
+Open **Settings** from the toolbar. The sheet is a fixed size so every tab fits the same chrome:
+
+| Tab | What |
+|-----|------|
+| **General** | Auto-enhance, auto-extract tasks, rebuild RAG index, legacy provider URL |
+| **AI Models** | Per-role backends/models + raw `ai-config.json` |
+| **AI Templates** | Custom enhance prompts |
+| **Integrations** | Obsidian vault + **Read aloud** (voice, rate, pitch, test) |
 
 ---
 
@@ -146,6 +161,34 @@ Config: `~/Library/Application Support/Grist/integrations.json`
 
 ---
 
+## Read summary aloud
+
+Fully **on-device** via macOS `AVSpeechSynthesizer`. No Voicebox, no cloud TTS, no extra install.
+
+1. (Optional, better quality) **macOS System Settings → Accessibility → Spoken Content → System Voice → Manage Voices…** — download an **Enhanced** or **Premium** English voice.  
+2. **Grist → Settings → Integrations → Read aloud** — pick voice, set **rate** / **pitch**, **Test voice**.  
+3. Open a note/meeting with an AI summary → **Read summary** / **Stop**.
+
+Markdown in summaries is stripped before speech (so TTS doesn’t say “asterisk”).
+
+**Later (not shipped):** optional local neural TTS server (e.g. Kokoro / Qwen) — same disk tradeoff as Ollama, not required for clone/build.
+
+---
+
+## Project layout (UI)
+
+Main UI is split for maintainability (not one mega-file):
+
+| File | Role |
+|------|------|
+| `Sources/grist/MainView.swift` | State + root `body` |
+| `MainView+Sidebar/Sheets/Config/Detail/Data/AI.swift` | Feature slices |
+| `ChatView.swift`, `CreateItemSheet.swift`, `MeetingModels.swift` | Chat, create, models |
+| `SpeechService.swift`, `SummarySpeechBar.swift` | Read aloud |
+| `SettingsView.swift` | Settings sheet (fixed size + scroll) |
+
+---
+
 ## Data & logs
 
 | Path | What |
@@ -181,6 +224,9 @@ Point Claude Desktop at that binary. Tools: `list_folders`, `create_note`.
 | Can’t move unfiled items | Right-click → **Move to folder**, or drag onto a folder name |
 | Lost a chat | Use **History** — **New chat** keeps old threads; pin/rename from history menu |
 | Obsidian disabled / fails | Settings → Integrations → enable + vault path; Save |
+| No **Read summary** / **Read aloud** | Rebuild from latest; open **~/Applications/Grist.app**; Settings → **Integrations** |
+| Read aloud silent / robotic | Install Enhanced system voices; pick them in Integrations → Read aloud; check Mac volume |
+| Settings tabs clipped / sheet too tall | Use latest build (fixed 720×560 sheet + scroll) |
 | DMG opens but no AI | Install/start Ollama + pull models; run setup or use Setup checklist |
 | MCP not loading | Restart Claude; check binary path in config |
 
@@ -198,4 +244,4 @@ MIT — see [LICENSE](LICENSE).
 
 PRs welcome. Keep **clone → `./setup.sh` → `./build_app.sh`** working.
 
-**Planned (not built):** Notion push, read-summary-aloud (local TTS), notarized GitHub Releases — see `docs/plans/` for Obsidian/Notion history.
+**Planned (not built):** Notion push, notarized GitHub Releases — see `docs/plans/`.

@@ -22,81 +22,82 @@ struct VisualEffectView: NSViewRepresentable {
 }
 
 struct SettingsView: View {
+    /// Sheet chrome — fixed so content always scrolls inside, never grows off-screen.
+    static let sheetWidth: CGFloat = 720
+    static let sheetHeight: CGFloat = 560
+
     @State private var selectedTab = 0
-    
+
+    private let tabs: [(title: String, icon: String)] = [
+        ("General", "gearshape.fill"),
+        ("AI Models", "cpu"),
+        ("AI Templates", "sparkles.rectangle.stack.fill"),
+        ("Integrations", "link"),
+    ]
+
     var body: some View {
         ZStack {
             VisualEffectView(material: .popover, blendingMode: .behindWindow)
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 14) {
-                    GristIconBadge(systemName: "gearshape.2.fill", tint: .accent, size: 40)
+                // ── Fixed header ───────────────────────────────────────
+                HStack(alignment: .center, spacing: 12) {
+                    GristIconBadge(systemName: "gearshape.2.fill", tint: .accent, size: 36)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Settings")
                             .font(.title3.weight(.semibold))
                         Text("Workflow, models, search index, integrations")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
-                    Spacer()
-                }
-                .padding(.horizontal, 24)
-                .padding(.top, 22)
-                .padding(.bottom, 12)
-
-                // Custom Top Navigation
-                HStack(spacing: 10) {
-                    TabButton(title: "General", icon: "gearshape.fill", isSelected: selectedTab == 0) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 0
-                        }
-                    }
-                    TabButton(title: "AI Models", icon: "cpu", isSelected: selectedTab == 1) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 1
-                        }
-                    }
-                    TabButton(title: "AI Templates", icon: "sparkles.rectangle.stack.fill", isSelected: selectedTab == 2) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 2
-                        }
-                    }
-                    TabButton(title: "Integrations", icon: "link", isSelected: selectedTab == 3) {
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            selectedTab = 3
-                        }
-                    }
-                    Spacer()
+                    Spacer(minLength: 32)
                 }
                 .padding(.horizontal, 20)
-                .padding(.bottom, 14)
-                
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+
+                // ── Fixed tab bar (all four always visible) ───────────
+                HStack(spacing: 6) {
+                    ForEach(Array(tabs.enumerated()), id: \.offset) { index, tab in
+                        TabButton(
+                            title: tab.title,
+                            icon: tab.icon,
+                            isSelected: selectedTab == index
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                selectedTab = index
+                            }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 12)
+
                 Rectangle()
                     .fill(Color.primary.opacity(0.08))
                     .frame(height: 1)
-                
-                // Content Area
-                ZStack {
+
+                // ── Scrollable content (fills remaining height) ───────
+                Group {
                     switch selectedTab {
                     case 0:
                         GeneralSettingsView()
-                            .transition(.opacity)
                     case 1:
                         AIModelsSettingsView()
-                            .transition(.opacity)
                     case 2:
                         TemplatesSettingsView()
-                            .transition(.opacity)
                     default:
                         IntegrationsSettingsView()
-                            .transition(.opacity)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
             }
         }
-        .frame(minWidth: 700, minHeight: 520)
+        .frame(width: Self.sheetWidth, height: Self.sheetHeight)
     }
 }
 
@@ -105,23 +106,24 @@ struct TabButton: View {
     let icon: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 12, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(isSelected ? Color.white.opacity(0.15) : Color.clear)
-            .foregroundColor(isSelected ? .primary : .secondary)
-            .cornerRadius(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.primary.opacity(0.12) : Color.clear)
+            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+            .clipShape(Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.white.opacity(0.2) : Color.clear, lineWidth: 1)
+                Capsule()
+                    .stroke(isSelected ? Color.primary.opacity(0.12) : Color.clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -145,7 +147,7 @@ struct GeneralSettingsView: View {
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: 28) {
                 
                 // Section 1: Workflow
                 VStack(alignment: .leading, spacing: 12) {
@@ -154,42 +156,16 @@ struct GeneralSettingsView: View {
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
                     
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Auto-Enhance Meetings")
-                                .font(.system(size: 16, weight: .medium, design: .rounded))
-                            Text("Generate AI summaries automatically when recording stops")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $autoEnhance)
-                            .toggleStyle(.switch)
-                    }
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    settingsToggleRow(
+                        title: "Auto-Enhance Meetings",
+                        subtitle: "Generate AI summaries automatically when recording stops",
+                        isOn: $autoEnhance
                     )
 
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Auto-extract tasks")
-                                .font(.system(size: 16, weight: .medium, design: .rounded))
-                            Text("After Enhance, pull action items into the Tasks list")
-                                .font(.system(size: 13))
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $autoExtractTasks)
-                            .toggleStyle(.switch)
-                    }
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    settingsToggleRow(
+                        title: "Auto-extract tasks",
+                        subtitle: "After Enhance, pull action items into the Tasks list",
+                        isOn: $autoExtractTasks
                     )
                 }
 
@@ -257,68 +233,41 @@ struct GeneralSettingsView: View {
                         .textCase(.uppercase)
                     
                     VStack(spacing: 0) {
-                        HStack {
-                            Text("Provider")
-                                .font(.system(size: 15, weight: .medium, design: .rounded))
-                            Spacer()
+                        settingsFieldRow(label: "Provider") {
                             Picker("", selection: $aiProviderType) {
                                 Text("Ollama (Local)").tag("Ollama")
                                 Text("OpenAI Compatible").tag("OpenAI Compatible")
                             }
-                            .frame(width: 160)
+                            .labelsHidden()
+                            .frame(maxWidth: .infinity, alignment: .trailing)
                         }
-                        .padding(16)
-                        
+
                         Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-                        
+
                         if aiProviderType == "Ollama" {
-                            HStack {
-                                Text("Local URL")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+                            settingsFieldRow(label: "Local URL") {
                                 TextField("http://127.0.0.1:11434", text: $ollamaURL)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
                         } else {
-                            HStack {
-                                Text("API URL")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+                            settingsFieldRow(label: "API URL") {
                                 TextField("https://api.openai.com/v1", text: $openAIBaseURL)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
-                            
+
                             Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-                            
-                            HStack {
-                                Text("API Key")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+
+                            settingsFieldRow(label: "API Key") {
                                 SecureField("sk-...", text: $openAIAPIKey)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
-                            
+
                             Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-                            
-                            HStack {
-                                Text("Model")
-                                    .font(.system(size: 15, weight: .medium, design: .rounded))
-                                Spacer()
+
+                            settingsFieldRow(label: "Model") {
                                 TextField("gpt-4o", text: $openAIModel)
-                                    .textFieldStyle(.plain)
-                                    .multilineTextAlignment(.trailing)
-                                    .frame(width: 250)
+                                    .textFieldStyle(.roundedBorder)
                             }
-                            .padding(16)
                         }
                     }
                     .background(Color.white.opacity(0.05))
@@ -328,8 +277,58 @@ struct GeneralSettingsView: View {
                     )
                 }
             }
-            .padding(32)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Label + control that wraps on narrow sheets (no fixed control widths).
+    @ViewBuilder
+    private func settingsFieldRow<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                Text(label)
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                    .layoutPriority(1)
+                content()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(16)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(label)
+                    .font(.system(size: 15, weight: .medium, design: .rounded))
+                content()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(16)
+        }
+    }
+
+    @ViewBuilder
+    private func settingsToggleRow(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                Text(subtitle)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle("", isOn: isOn)
+                .toggleStyle(.switch)
+                .labelsHidden()
+        }
+        .padding(16)
+        .background(Color.white.opacity(0.05))
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+        )
     }
 
     private func rebuildIndex() {
@@ -451,7 +450,8 @@ struct AIModelsSettingsView: View {
 
                         TextEditor(text: $ai.jsonText)
                             .font(.system(.body, design: .monospaced))
-                            .frame(minHeight: 220, maxHeight: 320)
+                            .frame(minHeight: 160)
+                            .frame(maxWidth: .infinity)
                             .padding(8)
                             .background(Color.black.opacity(0.25))
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -512,8 +512,11 @@ struct AIModelsSettingsView: View {
                     }
                 }
             }
-            .padding(28)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { loadDrafts() }
     }
 
@@ -551,33 +554,61 @@ struct AIModelsSettingsView: View {
             },
             set: { draftRoles[role.rawValue] = $0 }
         )
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(role.label)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                Text(role.help)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            .frame(width: 150, alignment: .leading)
-
-            Picker("", selection: Binding(
-                get: { binding.wrappedValue.backend },
-                set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
-            )) {
-                ForEach(backendNames, id: \.self) { name in
-                    Text(name).tag(name)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(role.label)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Text(role.help)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-            }
-            .labelsHidden()
-            .frame(width: 110)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
 
-            TextField("model name", text: Binding(
-                get: { binding.wrappedValue.model },
-                set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
-            ))
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 200)
+                Picker("", selection: Binding(
+                    get: { binding.wrappedValue.backend },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
+                )) {
+                    ForEach(backendNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                .labelsHidden()
+                .frame(minWidth: 90)
+
+                TextField("model name", text: Binding(
+                    get: { binding.wrappedValue.model },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+                .frame(minWidth: 100, maxWidth: .infinity)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(role.label)
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    Text(role.help)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Picker("Backend", selection: Binding(
+                    get: { binding.wrappedValue.backend },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: $0, model: binding.wrappedValue.model) }
+                )) {
+                    ForEach(backendNames, id: \.self) { name in
+                        Text(name).tag(name)
+                    }
+                }
+                TextField("model name", text: Binding(
+                    get: { binding.wrappedValue.model },
+                    set: { binding.wrappedValue = AIRoleConfig(backend: binding.wrappedValue.backend, model: $0) }
+                ))
+                .textFieldStyle(.roundedBorder)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -589,9 +620,10 @@ struct AIModelsSettingsView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(name)
                 .font(.headline)
-            HStack {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("Type")
-                Spacer()
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Picker("", selection: Binding(
                     get: { draftBackends[name]?.type ?? b.type },
                     set: { newType in
@@ -605,11 +637,11 @@ struct AIModelsSettingsView: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 180)
-            }
-            HStack {
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 Text("Base URL")
-                Spacer()
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 TextField("URL", text: Binding(
                     get: { draftBackends[name]?.baseURL ?? b.baseURL },
                     set: { v in
@@ -619,12 +651,12 @@ struct AIModelsSettingsView: View {
                     }
                 ))
                 .textFieldStyle(.roundedBorder)
-                .frame(width: 280)
-            }
-            if (draftBackends[name]?.type ?? b.type) == .openaiCompatible {
-                HStack {
+                .frame(maxWidth: .infinity)
+
+                if (draftBackends[name]?.type ?? b.type) == .openaiCompatible {
                     Text("API key")
-                    Spacer()
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     SecureField("optional if using env", text: Binding(
                         get: { draftBackends[name]?.apiKey ?? b.apiKey ?? "" },
                         set: { v in
@@ -634,11 +666,11 @@ struct AIModelsSettingsView: View {
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 280)
-                }
-                HStack {
+                    .frame(maxWidth: .infinity)
+
                     Text("API key env var")
-                    Spacer()
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     TextField("OPENAI_API_KEY", text: Binding(
                         get: { draftBackends[name]?.apiKeyEnv ?? b.apiKeyEnv ?? "" },
                         set: { v in
@@ -648,7 +680,7 @@ struct AIModelsSettingsView: View {
                         }
                     ))
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 280)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -664,120 +696,137 @@ struct TemplatesSettingsView: View {
     @State private var selectedTemplateId: String?
     @State private var editingName = ""
     @State private var editingPrompt = ""
-    
+
+    private let listWidth: CGFloat = 200
+
     var body: some View {
         HStack(spacing: 0) {
-            // Sidebar
+            // Sidebar list
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    Text("Your Templates")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                HStack(spacing: 8) {
+                    Text("Templates")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
-                    Spacer()
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
                     Button(action: createNewTemplate) {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(Color.accentColor)
-                            .font(.title3)
+                            .font(.body)
                     }
                     .buttonStyle(.plain)
+                    .help("New template")
                 }
-                .padding(16)
-                
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
                 ScrollView {
-                    VStack(spacing: 6) {
+                    LazyVStack(spacing: 4) {
+                        if templates.isEmpty {
+                            Text("No templates yet")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 14)
+                                .padding(.top, 8)
+                        }
                         ForEach(templates) { template in
                             Button {
                                 selectedTemplateId = template.id
                             } label: {
-                                HStack {
-                                    Text(template.name)
-                                        .font(.system(size: 14, weight: selectedTemplateId == template.id ? .semibold : .regular, design: .rounded))
-                                    Spacer()
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(selectedTemplateId == template.id ? Color.accentColor.opacity(0.15) : Color.clear)
-                                .foregroundColor(selectedTemplateId == template.id ? .accentColor : .primary)
-                                .cornerRadius(8)
+                                Text(template.name)
+                                    .font(.system(size: 13, weight: selectedTemplateId == template.id ? .semibold : .regular, design: .rounded))
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(selectedTemplateId == template.id ? Color.accentColor.opacity(0.15) : Color.clear)
+                                    .foregroundStyle(selectedTemplateId == template.id ? Color.accentColor : Color.primary)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                             .buttonStyle(.plain)
                         }
                     }
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
                 }
             }
-            .frame(width: 220)
-            .background(Color.black.opacity(0.1))
-            
-            Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1)
-            
-            // Detail
-            VStack(alignment: .leading, spacing: 20) {
-                if let _ = selectedTemplateId {
+            .frame(width: listWidth)
+            .frame(maxHeight: .infinity)
+            .background(Color.primary.opacity(0.04))
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
+
+            // Detail / editor
+            VStack(alignment: .leading, spacing: 14) {
+                if selectedTemplateId != nil {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Template Name")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
                         TextField("Template Name", text: $editingName)
-                            .font(.system(size: 20, weight: .bold, design: .rounded))
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
                             .textFieldStyle(.plain)
                     }
-                    
+
                     VStack(alignment: .leading, spacing: 6) {
                         Text("System Prompt")
-                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(.secondary)
-                        
+
                         TextEditor(text: $editingPrompt)
-                            .font(.system(size: 14, weight: .regular, design: .monospaced))
-                            .padding(12)
-                            .background(Color.black.opacity(0.2))
-                            .cornerRadius(12)
+                            .font(.system(size: 13, weight: .regular, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.primary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             .overlay(
-                                RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
                             )
                     }
-                    
+                    .frame(maxHeight: .infinity)
+
                     HStack {
-                        Button(action: deleteSelected) {
+                        Button(role: .destructive, action: deleteSelected) {
                             Text("Delete")
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                .foregroundColor(.red)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
                         }
                         .buttonStyle(.plain)
-                        
+
                         Spacer()
-                        
-                        Button {
+
+                        Button("Save Changes") {
                             saveChanges()
-                        } label: {
-                            Text("Save Changes")
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Color.accentColor)
-                                .foregroundColor(.white)
-                                .cornerRadius(8)
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(.borderedProminent)
                         .disabled(editingName.trimmingCharacters(in: .whitespaces).isEmpty)
                     }
                 } else {
                     Spacer()
-                    HStack {
-                        Spacer()
+                    VStack(spacing: 10) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.tertiary)
                         Text("Select a template or create a new one.")
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
                             .foregroundStyle(.secondary)
-                        Spacer()
+                        Button("New template", action: createNewTemplate)
+                            .buttonStyle(.bordered)
                     }
+                    .frame(maxWidth: .infinity)
                     Spacer()
                 }
             }
-            .padding(30)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadTemplates()
         }
@@ -880,22 +929,20 @@ struct IntegrationsSettingsView: View {
                         }
                     }
 
-                    HStack {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Subfolder")
                             .font(.callout)
-                        Spacer()
                         TextField("Grist", text: $draft.subfolder)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
+                            .frame(maxWidth: .infinity)
                     }
 
-                    HStack {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Filename pattern")
                             .font(.callout)
-                        Spacer()
                         TextField("{date}-{title}", text: $draft.filenamePattern)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 200)
+                            .frame(maxWidth: .infinity)
                     }
                     Text("{date} = yyyy-MM-dd · {title} = note title · {id} = short id")
                         .font(.caption2)
@@ -958,11 +1005,92 @@ struct IntegrationsSettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
+
+                // Voice / TTS (local)
+                VoiceSettingsCard()
             }
-            .padding(28)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             draft = integrations.config.obsidian
         }
+    }
+}
+
+// MARK: - Voice / TTS settings (macOS system speech only)
+
+struct VoiceSettingsCard: View {
+    @ObservedObject private var speech = SpeechService.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                GristIconBadge(systemName: "speaker.wave.2.fill", tint: .purple, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Read aloud")
+                        .font(.headline)
+                    Text("macOS system voice — on-device only. No cloud, no extra app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Text("For a more natural voice, install Enhanced or Premium voices in System Settings → Accessibility → Spoken Content → System Voice → Manage Voices…, then pick them below. Rate and pitch help a little; true emotion/cloning needs neural TTS later.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("Voice", selection: $speech.selectedVoiceId) {
+                Text("Best available English").tag("")
+                ForEach(speech.availableVoices, id: \.identifier) { v in
+                    Text(SpeechService.voiceLabel(v)).tag(v.identifier)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Rate")
+                    Spacer()
+                    Text(String(format: "%.0f%%", speech.rate * 100))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $speech.rate, in: 0.5...1.15, step: 0.05)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Pitch")
+                    Spacer()
+                    Text(String(format: "%.2f", speech.pitch))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Slider(value: $speech.pitch, in: 0.7...1.4, step: 0.05)
+            }
+
+            HStack {
+                Button("System voice settings…") {
+                    speech.openSpokenContentSettings()
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+                Button("Test voice") {
+                    speech.speak("Hello from Grist. This is your read aloud voice.")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+            }
+        }
+        .padding(18)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+        )
     }
 }

@@ -40,6 +40,7 @@ struct GristApp: App {
         
         Settings {
             SettingsView()
+                .frame(width: SettingsView.sheetWidth, height: SettingsView.sheetHeight)
         }
         
         MenuBarExtra("Grist", systemImage: "waveform") {
