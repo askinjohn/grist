@@ -169,18 +169,20 @@ struct MainView: View {
             .id(request.id) // force fresh state per open (Meeting vs Note)
         }
         .sheet(isPresented: $showingSettingsSheet) {
-            // Flexible size — do not pin width/height (clips tabs + content).
+            // Fixed chrome size; each tab scrolls inside (see SettingsView).
             SettingsView()
+                .frame(width: SettingsView.sheetWidth, height: SettingsView.sheetHeight)
                 .overlay(alignment: .topTrailing) {
                     Button {
                         showingSettingsSheet = false
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .font(.title2)
+                            .symbolRenderingMode(.hierarchical)
                             .foregroundStyle(.secondary)
                     }
                     .buttonStyle(.plain)
-                    .padding()
+                    .padding(16)
                     .help("Close")
                 }
         }

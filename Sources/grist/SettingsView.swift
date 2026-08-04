@@ -22,84 +22,82 @@ struct VisualEffectView: NSViewRepresentable {
 }
 
 struct SettingsView: View {
+    /// Sheet chrome — fixed so content always scrolls inside, never grows off-screen.
+    static let sheetWidth: CGFloat = 720
+    static let sheetHeight: CGFloat = 560
+
     @State private var selectedTab = 0
-    
+
+    private let tabs: [(title: String, icon: String)] = [
+        ("General", "gearshape.fill"),
+        ("AI Models", "cpu"),
+        ("AI Templates", "sparkles.rectangle.stack.fill"),
+        ("Integrations", "link"),
+    ]
+
     var body: some View {
         ZStack {
             VisualEffectView(material: .popover, blendingMode: .behindWindow)
                 .ignoresSafeArea()
-            
+
             VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 14) {
-                    GristIconBadge(systemName: "gearshape.2.fill", tint: .accent, size: 40)
+                // ── Fixed header ───────────────────────────────────────
+                HStack(alignment: .center, spacing: 12) {
+                    GristIconBadge(systemName: "gearshape.2.fill", tint: .accent, size: 36)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Settings")
                             .font(.title3.weight(.semibold))
                         Text("Workflow, models, search index, integrations")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
-                    Spacer()
+                    Spacer(minLength: 32)
                 }
-                .padding(.horizontal, 24)
-                .padding(.top, 22)
+                .padding(.horizontal, 20)
+                .padding(.top, 18)
+                .padding(.bottom, 10)
+
+                // ── Fixed tab bar (all four always visible) ───────────
+                HStack(spacing: 6) {
+                    ForEach(Array(tabs.enumerated()), id: \.offset) { index, tab in
+                        TabButton(
+                            title: tab.title,
+                            icon: tab.icon,
+                            isSelected: selectedTab == index
+                        ) {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                selectedTab = index
+                            }
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
                 .padding(.bottom, 12)
 
-                // Tabs wrap when the sheet is narrow (no fixed bar width).
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        TabButton(title: "General", icon: "gearshape.fill", isSelected: selectedTab == 0) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedTab = 0
-                            }
-                        }
-                        TabButton(title: "AI Models", icon: "cpu", isSelected: selectedTab == 1) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedTab = 1
-                            }
-                        }
-                        TabButton(title: "AI Templates", icon: "sparkles.rectangle.stack.fill", isSelected: selectedTab == 2) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedTab = 2
-                            }
-                        }
-                        TabButton(title: "Integrations", icon: "link", isSelected: selectedTab == 3) {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                                selectedTab = 3
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-                .padding(.bottom, 14)
-                
                 Rectangle()
                     .fill(Color.primary.opacity(0.08))
                     .frame(height: 1)
-                
-                // Content Area
-                ZStack {
+
+                // ── Scrollable content (fills remaining height) ───────
+                Group {
                     switch selectedTab {
                     case 0:
                         GeneralSettingsView()
-                            .transition(.opacity)
                     case 1:
                         AIModelsSettingsView()
-                            .transition(.opacity)
                     case 2:
                         TemplatesSettingsView()
-                            .transition(.opacity)
                     default:
                         IntegrationsSettingsView()
-                            .transition(.opacity)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
             }
         }
-        // Soft minimums only — grow with content / window; never pin exact size.
-        .frame(minWidth: 520, minHeight: 360)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(width: Self.sheetWidth, height: Self.sheetHeight)
     }
 }
 
@@ -108,23 +106,24 @@ struct TabButton: View {
     let icon: String
     let isSelected: Bool
     let action: () -> Void
-    
+
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(.system(size: 12, weight: .semibold))
                 Text(title)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .background(isSelected ? Color.white.opacity(0.15) : Color.clear)
-            .foregroundColor(isSelected ? .primary : .secondary)
-            .cornerRadius(12)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.primary.opacity(0.12) : Color.clear)
+            .foregroundStyle(isSelected ? Color.primary : Color.secondary)
+            .clipShape(Capsule())
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(isSelected ? Color.white.opacity(0.2) : Color.clear, lineWidth: 1)
+                Capsule()
+                    .stroke(isSelected ? Color.primary.opacity(0.12) : Color.clear, lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -148,7 +147,7 @@ struct GeneralSettingsView: View {
     
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: 28) {
                 
                 // Section 1: Workflow
                 VStack(alignment: .leading, spacing: 12) {
@@ -278,10 +277,11 @@ struct GeneralSettingsView: View {
                     )
                 }
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Label + control that wraps on narrow sheets (no fixed control widths).
@@ -512,8 +512,11 @@ struct AIModelsSettingsView: View {
                     }
                 }
             }
-            .padding(28)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear { loadDrafts() }
     }
 
@@ -693,125 +696,137 @@ struct TemplatesSettingsView: View {
     @State private var selectedTemplateId: String?
     @State private var editingName = ""
     @State private var editingPrompt = ""
-    
-    var body: some View {
-        // Flexible split: list takes a fraction, not a fixed pixel width.
-        GeometryReader { geo in
-            let listWidth = min(max(geo.size.width * 0.32, 160), 280)
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack {
-                        Text("Your Templates")
-                            .font(.system(size: 13, weight: .bold, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .textCase(.uppercase)
-                        Spacer()
-                        Button(action: createNewTemplate) {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundStyle(Color.accentColor)
-                                .font(.title3)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .padding(16)
 
-                    ScrollView {
-                        VStack(spacing: 6) {
-                            ForEach(templates) { template in
-                                Button {
-                                    selectedTemplateId = template.id
-                                } label: {
-                                    HStack {
-                                        Text(template.name)
-                                            .font(.system(size: 14, weight: selectedTemplateId == template.id ? .semibold : .regular, design: .rounded))
-                                            .lineLimit(2)
-                                            .multilineTextAlignment(.leading)
-                                        Spacer(minLength: 0)
-                                    }
-                                    .padding(.horizontal, 12)
+    private let listWidth: CGFloat = 200
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Sidebar list
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 8) {
+                    Text("Templates")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                    Button(action: createNewTemplate) {
+                        Image(systemName: "plus.circle.fill")
+                            .foregroundStyle(Color.accentColor)
+                            .font(.body)
+                    }
+                    .buttonStyle(.plain)
+                    .help("New template")
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+
+                ScrollView {
+                    LazyVStack(spacing: 4) {
+                        if templates.isEmpty {
+                            Text("No templates yet")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 14)
+                                .padding(.top, 8)
+                        }
+                        ForEach(templates) { template in
+                            Button {
+                                selectedTemplateId = template.id
+                            } label: {
+                                Text(template.name)
+                                    .font(.system(size: 13, weight: selectedTemplateId == template.id ? .semibold : .regular, design: .rounded))
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 10)
                                     .padding(.vertical, 8)
                                     .background(selectedTemplateId == template.id ? Color.accentColor.opacity(0.15) : Color.clear)
-                                    .foregroundColor(selectedTemplateId == template.id ? .accentColor : .primary)
-                                    .cornerRadius(8)
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                    }
-                }
-                .frame(width: listWidth, alignment: .leading)
-                .frame(maxHeight: .infinity)
-                .background(Color.black.opacity(0.1))
-
-                Rectangle().fill(Color.white.opacity(0.1)).frame(width: 1)
-
-                VStack(alignment: .leading, spacing: 20) {
-                    if selectedTemplateId != nil {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Template Name")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.secondary)
-                            TextField("Template Name", text: $editingName)
-                                .font(.system(size: 20, weight: .bold, design: .rounded))
-                                .textFieldStyle(.plain)
-                                .frame(maxWidth: .infinity)
-                        }
-
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("System Prompt")
-                                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.secondary)
-
-                            TextEditor(text: $editingPrompt)
-                                .font(.system(size: 14, weight: .regular, design: .monospaced))
-                                .padding(12)
-                                .frame(minHeight: 120, maxHeight: .infinity)
-                                .background(Color.black.opacity(0.2))
-                                .cornerRadius(12)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
-                                )
-                        }
-                        .frame(maxHeight: .infinity)
-
-                        HStack {
-                            Button(action: deleteSelected) {
-                                Text("Delete")
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                                    .foregroundColor(.red)
+                                    .foregroundStyle(selectedTemplateId == template.id ? Color.accentColor : Color.primary)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                             .buttonStyle(.plain)
-
-                            Spacer()
-
-                            Button {
-                                saveChanges()
-                            } label: {
-                                Text("Save Changes")
-                                    .font(.system(size: 14, weight: .bold, design: .rounded))
-                                    .padding(.horizontal, 16)
-                                    .padding(.vertical, 8)
-                                    .background(Color.accentColor)
-                                    .foregroundColor(.white)
-                                    .cornerRadius(8)
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(editingName.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
-                    } else {
-                        Spacer()
-                        Text("Select a template or create a new one.")
-                            .font(.system(size: 15, weight: .medium, design: .rounded))
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity)
-                        Spacer()
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, 12)
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(width: listWidth)
+            .frame(maxHeight: .infinity)
+            .background(Color.primary.opacity(0.04))
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
+
+            // Detail / editor
+            VStack(alignment: .leading, spacing: 14) {
+                if selectedTemplateId != nil {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Template Name")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        TextField("Template Name", text: $editingName)
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .textFieldStyle(.plain)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("System Prompt")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.secondary)
+
+                        TextEditor(text: $editingPrompt)
+                            .font(.system(size: 13, weight: .regular, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.primary.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                            )
+                    }
+                    .frame(maxHeight: .infinity)
+
+                    HStack {
+                        Button(role: .destructive, action: deleteSelected) {
+                            Text("Delete")
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        }
+                        .buttonStyle(.plain)
+
+                        Spacer()
+
+                        Button("Save Changes") {
+                            saveChanges()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(editingName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                } else {
+                    Spacer()
+                    VStack(spacing: 10) {
+                        Image(systemName: "doc.text")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.tertiary)
+                        Text("Select a template or create a new one.")
+                            .font(.system(size: 14, weight: .medium, design: .rounded))
+                            .foregroundStyle(.secondary)
+                        Button("New template", action: createNewTemplate)
+                            .buttonStyle(.bordered)
+                    }
+                    .frame(maxWidth: .infinity)
+                    Spacer()
+                }
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             loadTemplates()
         }
@@ -994,10 +1009,11 @@ struct IntegrationsSettingsView: View {
                 // Voice / TTS (local)
                 VoiceSettingsCard()
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             draft = integrations.config.obsidian
         }
