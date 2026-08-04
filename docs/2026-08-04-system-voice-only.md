@@ -1,26 +1,30 @@
-# 2026-08-04 — Read aloud: system voice only
+# 2026-08-04 — Read aloud (system voice) + Settings UI + MainView split
 
 ## What changed
 
-Removed Voicebox / external TTS integration. **Read summary** uses macOS `AVSpeechSynthesizer` only.
+### Read aloud
+- **AI Summary** bar: **Read summary** / **Stop**
+- **macOS system voice only** (`AVSpeechSynthesizer`) — no Voicebox / cloud
+- **Settings → Integrations → Read aloud**: voice picker, rate, pitch, Test voice, open System Settings
 
-Settings → Integrations → **Read aloud**:
-- Voice picker (English; Enhanced/Premium preferred)
-- Rate & pitch
-- Open System Settings for downloading better voices
-- Test voice
+### Settings UI
+- Fixed sheet **720×560**
+- Sticky header + four tabs always visible
+- **General / AI Models / Integrations** scroll inside; **AI Templates** split sidebar + editor
+
+### MainView split
+- `MainView.swift` ~state + body; extensions and companions for chat, create, models, speech
 
 ## Why
 
-Keep Grist zero-extra-app for speech. Neural local TTS (Kokoro/Qwen script) deferred.
-
-## Expressiveness
-
-macOS can sound better with Enhanced/Premium voices and rate/pitch, but not “instruct” emotion or cloning. True expressive TTS is a later optional stack.
+Zero extra TTS app for users; Settings usable without clipping; codebase maintainable.
 
 ## Key files
 
-- `Sources/grist/SpeechService.swift`
-- `Sources/grist/SettingsView.swift` (`VoiceSettingsCard`)
-- `Sources/grist/SummarySpeechBar.swift`
+- `Sources/grist/SpeechService.swift`, `SummarySpeechBar.swift`
+- `Sources/grist/SettingsView.swift`, `MainView.swift` (+ `MainView+*.swift`)
 - `README.md`
+
+## Follow-ups
+
+- Optional scripted local neural TTS (Kokoro/Qwen) later
