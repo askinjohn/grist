@@ -4,11 +4,20 @@ import WebKit
 // MARK: - Markdown → HTML Converter (No external deps)
 
 struct MarkdownRenderer {
-    static func toHTML(_ markdown: String, bodyFontSize: CGFloat = 14, contentPadding: CGFloat = 24) -> String {
+    /// - Parameters:
+    ///   - compact: Tighter type and spacing for AI summaries (less vertical whitespace).
+    static func toHTML(
+        _ markdown: String,
+        bodyFontSize: CGFloat = 14,
+        contentPadding: CGFloat = 24,
+        compact: Bool = false
+    ) -> String {
         let lines = markdown.components(separatedBy: "\n")
         var html = ""
         var inList = false
         var inCodeBlock = false
+        // Collapse runs of blank lines in compact mode (model often emits double blanks)
+        var lastWasBlank = false
 
         for (_, line) in lines.enumerated() {
             // Code fence
@@ -21,11 +30,13 @@ struct MarkdownRenderer {
                     html += "<pre><code>"
                     inCodeBlock = true
                 }
+                lastWasBlank = false
                 continue
             }
 
             if inCodeBlock {
                 html += escapeHTML(line) + "\n"
+                lastWasBlank = false
                 continue
             }
 
@@ -41,36 +52,52 @@ struct MarkdownRenderer {
             // Headings
             if trimmed.hasPrefix("#### ") {
                 html += "<h4>\(inline(trimmed.dropFirst(5)))</h4>\n"
+                lastWasBlank = false
             } else if trimmed.hasPrefix("### ") {
                 html += "<h3>\(inline(trimmed.dropFirst(4)))</h3>\n"
+                lastWasBlank = false
             } else if trimmed.hasPrefix("## ") {
                 html += "<h2>\(inline(trimmed.dropFirst(3)))</h2>\n"
+                lastWasBlank = false
             } else if trimmed.hasPrefix("# ") {
                 html += "<h1>\(inline(trimmed.dropFirst(2)))</h1>\n"
+                lastWasBlank = false
             // Horizontal rule
             } else if trimmed == "---" || trimmed == "***" || trimmed == "___" {
                 html += "<hr/>\n"
+                lastWasBlank = false
             // Bullet list
             } else if isBullet {
                 if !inList { html += "<ul>\n"; inList = true }
                 let content = String(trimmed.dropFirst(2))
                 html += "<li>\(inline(content))</li>\n"
+                lastWasBlank = false
             // Blockquote
             } else if trimmed.hasPrefix("> ") {
                 html += "<blockquote>\(inline(String(trimmed.dropFirst(2))))</blockquote>\n"
-            // Empty line → paragraph break
+                lastWasBlank = false
+            // Empty line → paragraph break (skip double blanks when compact)
             } else if trimmed.isEmpty {
-                html += "<br/>\n"
+                if compact {
+                    if !lastWasBlank {
+                        html += "\n" // spacing via CSS only; no extra <br/>
+                        lastWasBlank = true
+                    }
+                } else {
+                    html += "<br/>\n"
+                    lastWasBlank = true
+                }
             // Regular paragraph
             } else {
                 html += "<p>\(inline(trimmed))</p>\n"
+                lastWasBlank = false
             }
         }
 
         if inList { html += "</ul>\n" }
         if inCodeBlock { html += "</code></pre>\n" }
 
-        return wrapHTML(html, bodyFontSize: bodyFontSize, contentPadding: contentPadding)
+        return wrapHTML(html, bodyFontSize: bodyFontSize, contentPadding: contentPadding, compact: compact)
     }
 
     // Process inline styles: **bold**, *italic*, `code`, [link](url)
@@ -111,9 +138,25 @@ struct MarkdownRenderer {
         return regex.stringByReplacingMatches(in: input, options: [], range: range, withTemplate: replacement)
     }
 
-    private static func wrapHTML(_ body: String, bodyFontSize: CGFloat = 14, contentPadding: CGFloat = 24) -> String {
+    private static func wrapHTML(
+        _ body: String,
+        bodyFontSize: CGFloat = 14,
+        contentPadding: CGFloat = 24,
+        compact: Bool = false
+    ) -> String {
         let fontSize = Int(bodyFontSize.rounded())
         let pad = Int(contentPadding.rounded())
+        let lineHeight = compact ? "1.45" : "1.7"
+        let bodyPadV = compact ? 10 : 16
+        let bodyPadBottom = compact ? 28 : 48
+        let pMargin = compact ? "0 0 0.45em 0" : "0 0 1em 0"
+        let hTop = compact ? 12 : 20
+        let hBottom = compact ? 4 : 6
+        let h1Size = compact ? 18 : 22
+        let h2Size = compact ? 15 : 17
+        let h3Size = compact ? 13 : 15
+        let ulPad = compact ? 16 : 20
+        let liMargin = compact ? 1 : 3
         return """
         <!DOCTYPE html>
         <html>
@@ -150,26 +193,26 @@ struct MarkdownRenderer {
             color: var(--text);
             font-family: -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
             font-size: \(fontSize)px;
-            line-height: 1.7;
-            padding: 16px \(pad)px 48px;
+            line-height: \(lineHeight);
+            padding: \(bodyPadV)px \(pad)px \(bodyPadBottom)px;
             max-width: none;
             width: 100%;
           }
-          /* Prefer paragraphs with spacing for long transcripts */
-          p { margin: 0 0 1em 0; max-width: none; }
+          p { margin: \(pMargin); max-width: none; }
           h1, h2, h3, h4 {
             color: var(--text);
             font-family: -apple-system, 'SF Pro Display', sans-serif;
             font-weight: 700;
-            margin-top: 20px;
-            margin-bottom: 6px;
+            margin-top: \(hTop)px;
+            margin-bottom: \(hBottom)px;
           }
-          h1 { font-size: 22px; border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 12px; }
-          h2 { font-size: 17px; }
-          h3 { font-size: 15px; color: var(--subtext); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
-          h4 { font-size: 14px; }
-          ul { padding-left: 20px; margin: 6px 0; }
-          li { margin: 3px 0; }
+          h1:first-child, h2:first-child, h3:first-child { margin-top: 0; }
+          h1 { font-size: \(h1Size)px; border-bottom: 1px solid var(--border); padding-bottom: \(compact ? 4 : 8)px; margin-bottom: \(compact ? 8 : 12)px; }
+          h2 { font-size: \(h2Size)px; }
+          h3 { font-size: \(h3Size)px; color: var(--subtext); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+          h4 { font-size: \(compact ? 13 : 14)px; }
+          ul { padding-left: \(ulPad)px; margin: \(compact ? 2 : 6)px 0 \(compact ? 6 : 6)px; }
+          li { margin: \(liMargin)px 0; }
           li::marker { color: var(--accent); }
           code {
             background: var(--code-bg);
@@ -183,9 +226,9 @@ struct MarkdownRenderer {
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 14px 16px;
+            padding: \(compact ? 10 : 14)px \(compact ? 12 : 16)px;
             overflow-x: auto;
-            margin: 12px 0;
+            margin: \(compact ? 8 : 12)px 0;
           }
           pre code {
             background: none;
@@ -196,14 +239,14 @@ struct MarkdownRenderer {
           blockquote {
             border-left: 3px solid var(--accent);
             padding-left: 14px;
-            margin: 10px 0;
+            margin: \(compact ? 6 : 10)px 0;
             color: var(--subtext);
             font-style: italic;
           }
           hr {
             border: none;
             border-top: 1px solid var(--border);
-            margin: 14px 0;
+            margin: \(compact ? 8 : 14)px 0;
           }
           a { color: var(--accent); text-decoration: none; user-select: text; -webkit-user-select: text; }
           a:hover { text-decoration: underline; }
@@ -234,6 +277,13 @@ struct MarkdownView: NSViewRepresentable {
     var bodyFontSize: CGFloat = 14
     /// Horizontal padding inside the web document.
     var contentPadding: CGFloat = 24
+    /// Denser layout for AI summaries (tighter headings, lists, padding).
+    var compact: Bool = false
+
+    /// Prefab for AI Summary tabs.
+    static func summary(_ markdown: String) -> MarkdownView {
+        MarkdownView(markdown: markdown, bodyFontSize: 13, contentPadding: 16, compact: true)
+    }
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -249,14 +299,21 @@ struct MarkdownView: NSViewRepresentable {
     }
 
     func updateNSView(_ wv: WKWebView, context: Context) {
-        let html = MarkdownRenderer.toHTML(markdown, bodyFontSize: bodyFontSize, contentPadding: contentPadding)
+        let html = MarkdownRenderer.toHTML(
+            markdown,
+            bodyFontSize: bodyFontSize,
+            contentPadding: contentPadding,
+            compact: compact
+        )
         // Avoid reloading the same document on every layout pass
         if context.coordinator.lastMarkdown != markdown
             || context.coordinator.lastFontSize != bodyFontSize
-            || context.coordinator.lastPadding != contentPadding {
+            || context.coordinator.lastPadding != contentPadding
+            || context.coordinator.lastCompact != compact {
             context.coordinator.lastMarkdown = markdown
             context.coordinator.lastFontSize = bodyFontSize
             context.coordinator.lastPadding = contentPadding
+            context.coordinator.lastCompact = compact
             wv.loadHTMLString(html, baseURL: nil)
         }
     }
@@ -267,6 +324,7 @@ struct MarkdownView: NSViewRepresentable {
 
     final class Coordinator {
         var lastMarkdown: String = ""
+        var lastCompact: Bool = false
         var lastFontSize: CGFloat = 0
         var lastPadding: CGFloat = 0
     }

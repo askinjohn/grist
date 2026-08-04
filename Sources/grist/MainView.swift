@@ -2514,7 +2514,7 @@ struct MainView: View {
                 noteWritingSurface
             } else if selectedTab == "summary" {
                 if let summary = selectedMeeting?.summary, !summary.isEmpty {
-                    MarkdownView(markdown: summary)
+                    MarkdownView.summary(summary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     noteEmptyAIState
@@ -3218,7 +3218,7 @@ struct MainView: View {
         switch selectedTab {
         case "summary":
             if let summary = selectedMeeting?.summary, !summary.isEmpty {
-                MarkdownView(markdown: summary)
+                MarkdownView.summary(summary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 aiEmptyState(
