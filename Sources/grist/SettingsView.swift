@@ -958,11 +958,85 @@ struct IntegrationsSettingsView: View {
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .textSelection(.enabled)
+
+                // Voice / TTS (local)
+                VoiceSettingsCard()
             }
             .padding(28)
         }
         .onAppear {
             draft = integrations.config.obsidian
+        }
+    }
+}
+
+// MARK: - Voice / TTS settings
+
+struct VoiceSettingsCard: View {
+    @ObservedObject private var speech = SpeechService.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                GristIconBadge(systemName: "speaker.wave.2.fill", tint: .purple, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Read aloud (TTS)")
+                        .font(.headline)
+                    Text("Play AI summaries with a local voice — not cloud ElevenLabs.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    Task { await speech.refreshVoicebox() }
+                } label: {
+                    Label(speech.voiceboxAvailable ? "Voicebox online" : "Check Voicebox",
+                          systemImage: speech.voiceboxAvailable ? "checkmark.circle.fill" : "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .tint(speech.voiceboxAvailable ? .green : .secondary)
+            }
+
+            Text("Voicebox (voicebox.sh) is the local “app + API” for TTS engines like Qwen3-TTS and Chatterbox — similar idea to Ollama, but for speech. Install Voicebox, open it, then Grist can call http://127.0.0.1:17493. Without Voicebox, Grist uses the macOS system voice.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Picker("Engine preference", selection: $speech.preferredBackend) {
+                ForEach(SpeechService.Backend.allCases) { b in
+                    Text(b.label).tag(b)
+                }
+            }
+
+            HStack {
+                Text("Voicebox URL")
+                Spacer()
+                TextField("http://127.0.0.1:17493", text: $speech.voiceboxBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 220)
+            }
+
+            if !speech.voiceboxProfiles.isEmpty {
+                Picker("Voice profile", selection: $speech.selectedProfileId) {
+                    Text("Default").tag("")
+                    ForEach(speech.voiceboxProfiles, id: \.id) { p in
+                        Text(p.name).tag(p.id)
+                    }
+                }
+            }
+
+            Link("Download Voicebox →", destination: URL(string: "https://voicebox.sh/")!)
+                .font(.caption)
+        }
+        .padding(18)
+        .background(Color.primary.opacity(0.04))
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+        )
+        .onAppear {
+            Task { await speech.refreshVoicebox() }
         }
     }
 }

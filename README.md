@@ -24,6 +24,7 @@ Record meetings (mic + system audio), write notes, import articles or YouTube ca
 | **AI roles** | Settings → per-job backend + model (`chat`, `askEverything`, `enhance`, `embed`, …); toolbar dropdown **syncs** with config |
 | **Setup checklist** | Detects Ollama, chat model, embeddings, yt-dlp, Whisper; banner + fix sheet |
 | **Obsidian** | Settings → Integrations; **Send to Obsidian** / folder batch; optional after Enhance |
+| **Read aloud (TTS)** | Play AI summary: **Voicebox** local API (Qwen3-TTS / Chatterbox / …) if running, else macOS system voice |
 | **DMG** | `./build_app.sh` packages `Grist.dmg` (app only — still need Ollama/models via setup) |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
 | **Local-first** | Ollama by default; optional OpenAI-compatible endpoint |
@@ -146,6 +147,21 @@ Config: `~/Library/Application Support/Grist/integrations.json`
 
 ---
 
+## Read summary aloud (TTS)
+
+On **AI Summary** / **Summary**, use **Read summary**.
+
+| Backend | What |
+|---------|------|
+| **Voicebox** ([voicebox.sh](https://voicebox.sh/)) | Local voice studio + API at `http://127.0.0.1:17493`. Loads engines such as **Qwen3-TTS** / Chatterbox (open, expressive, cloneable). Think **Ollama for voices** — not Ollama itself. |
+| **macOS system voice** | Always works if Voicebox is off / not installed. Clearer but less “studio” expression. |
+
+1. (Optional) Install & open **Voicebox**, download a TTS engine (e.g. Qwen3-TTS).  
+2. **Settings → Integrations → Read aloud** — prefer Auto or Voicebox; pick a profile if listed.  
+3. Open a note with a summary → **Read summary** / **Stop**.
+
+---
+
 ## Data & logs
 
 | Path | What |
@@ -198,4 +214,4 @@ MIT — see [LICENSE](LICENSE).
 
 PRs welcome. Keep **clone → `./setup.sh` → `./build_app.sh`** working.
 
-**Planned (not built):** Notion push, read-summary-aloud (local TTS), notarized GitHub Releases — see `docs/plans/` for Obsidian/Notion history.
+**Planned (not built):** Notion push, notarized GitHub Releases — see `docs/plans/`.

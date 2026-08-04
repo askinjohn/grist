@@ -2514,8 +2514,11 @@ struct MainView: View {
                 noteWritingSurface
             } else if selectedTab == "summary" {
                 if let summary = selectedMeeting?.summary, !summary.isEmpty {
-                    MarkdownView.summary(summary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 0) {
+                        summarySpeechBar(text: summary)
+                        MarkdownView.summary(summary)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 } else {
                     noteEmptyAIState
                 }
@@ -3213,13 +3216,22 @@ struct MainView: View {
         return !n.isEmpty
     }
 
+    /// Play AI summary aloud (Voicebox local TTS if running, else macOS voice).
+    @ViewBuilder
+    private func summarySpeechBar(text: String) -> some View {
+        SummarySpeechBar(text: text)
+    }
+
     @ViewBuilder
     var aiContentView: some View {
         switch selectedTab {
         case "summary":
             if let summary = selectedMeeting?.summary, !summary.isEmpty {
-                MarkdownView.summary(summary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                VStack(spacing: 0) {
+                    summarySpeechBar(text: summary)
+                    MarkdownView.summary(summary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             } else {
                 aiEmptyState(
                     icon: "wand.and.stars",
@@ -6275,5 +6287,57 @@ struct CreateItemSheet: View {
     private func isPlaceholderTitle(_ t: String) -> Bool {
         let s = t.trimmingCharacters(in: .whitespacesAndNewlines)
         return s.isEmpty || s.hasPrefix("Untitled ") || s.hasPrefix("Meeting ") || s.hasPrefix("Note ")
+    }
+}
+
+// MARK: - Summary read-aloud bar
+
+/// Observes `SpeechService` so Play/Stop and status update while speaking.
+struct SummarySpeechBar: View {
+    let text: String
+    @ObservedObject private var speech = SpeechService.shared
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "speaker.wave.2.fill")
+                .foregroundStyle(.purple)
+            Text("Listen")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            if !speech.status.isEmpty {
+                Text(speech.status)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if speech.isSpeaking {
+                Button {
+                    speech.stop()
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(.red)
+            } else {
+                Button {
+                    Task { await speech.refreshVoicebox() }
+                    speech.speak(text)
+                } label: {
+                    Label("Read summary", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+                .controlSize(.small)
+                .help("Voicebox (local Qwen3-TTS / Chatterbox / …) if running; otherwise macOS system voice")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.purple.opacity(0.06))
+        .onAppear {
+            Task { await speech.refreshVoicebox() }
+        }
     }
 }
