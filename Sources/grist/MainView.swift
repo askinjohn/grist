@@ -5362,8 +5362,13 @@ struct ChatView: View {
         }
     }
 
-    /// Prefer AI summary + written notes + transcript. Action questions lean on Summary first.
-    private func contextBlob(for m: Meeting, limit: Int, actionFocused: Bool = false) -> String {
+    /// Prefer AI summary + written notes + transcript. Action / summary questions lean on Summary first.
+    private func contextBlob(
+        for m: Meeting,
+        limit: Int,
+        actionFocused: Bool = false,
+        summaryFocused: Bool = false
+    ) -> String {
         var parts: [String] = []
         let summary = m.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let notes = m.manualNotes.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -5371,25 +5376,70 @@ struct ChatView: View {
         let folder = (m.groupName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if !folder.isEmpty { parts.append("### Folder\n\(folder)") }
         if !summary.isEmpty { parts.append("### AI Summary\n\(summary)") }
-        if actionFocused {
-            // Keep notes short — action lists should come from summary when present
+
+        if actionFocused || summaryFocused {
+            // Prefer summary; only pull body/transcript when needed (keeps model on content, not noise)
             if !notes.isEmpty {
-                let n = notes.count > 6000 ? String(notes.prefix(6000)) + "\n[…notes truncated…]" : notes
-                parts.append("### Notes (supporting)\n\(n)")
+                let cap = summaryFocused ? 4_000 : 6_000
+                let n = notes.count > cap ? String(notes.prefix(cap)) + "\n[…notes truncated…]" : notes
+                if summary.isEmpty || (!summaryFocused && notes.count < 12_000) {
+                    parts.append("### Notes (supporting)\n\(n)")
+                } else if summaryFocused, summary.count < 400 {
+                    parts.append("### Notes (supporting)\n\(n)")
+                }
             }
             if summary.isEmpty, !transcript.isEmpty {
-                let t = transcript.count > 8000 ? String(transcript.prefix(8000)) + "\n[…truncated…]" : transcript
+                let cap = summaryFocused ? 6_000 : 8_000
+                let t = transcript.count > cap ? String(transcript.prefix(cap)) + "\n[…truncated…]" : transcript
                 parts.append("### Transcript (supporting)\n\(t)")
             }
         } else {
-            if !notes.isEmpty { parts.append("### Notes / article body\n\(notes)") }
-            if !transcript.isEmpty { parts.append("### Transcript / captions\n\(transcript)") }
+            if !notes.isEmpty {
+                let n = notes.count > 14_000 ? String(notes.prefix(14_000)) + "\n[…notes truncated…]" : notes
+                parts.append("### Notes / article body\n\(n)")
+            }
+            if !transcript.isEmpty {
+                // Cap huge YouTube mega-episodes so chat stays on topic
+                let t = transcript.count > 10_000 ? String(transcript.prefix(10_000)) + "\n[…truncated…]" : transcript
+                parts.append("### Transcript / captions\n\(t)")
+            }
         }
         var blob = parts.joined(separator: "\n\n")
         if blob.count > limit {
             blob = String(blob.prefix(limit)) + "\n\n[…truncated…]"
         }
         return blob
+    }
+
+    /// User wants a summary / overview / “what is this about” — not a title list.
+    private func isSummaryOrExplainQuery(_ q: String) -> Bool {
+        let l = q.lowercased()
+        let keys = [
+            "summary", "summarize", "summarise", "overview", "update", "explain",
+            "what is", "what's", "whats", "about", "key points", "main points",
+            "tell me", "describe", "recap", "tl;dr", "tldr", "gist",
+            "how to", "how do", "what does", "walk me through",
+        ]
+        return keys.contains { l.contains($0) }
+    }
+
+    /// Assistant replies that are only note titles (bad model habit) — drop from history context.
+    private func isTitleOnlyDump(_ content: String, knownTitles: [String]) -> Bool {
+        let t = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return true }
+        // Very short, no sentence structure
+        if t.count < 120, !t.contains("."), !t.contains("?") {
+            return true
+        }
+        let lines = t.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if lines.isEmpty { return true }
+        let titleSet = Set(knownTitles.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        let matching = lines.filter { titleSet.contains($0.lowercased()) }
+        if matching.count == lines.count { return true }
+        if matching.count >= 1, lines.count <= 3, t.count < 200 { return true }
+        return false
     }
 
     /// User wants steps / advice / “what should I do” — stay in DOCUMENT, no generic coaching.
@@ -5541,50 +5591,49 @@ struct ChatView: View {
 
                 case .global:
                     let actionFocused = isActionOrAdviceQuery(text)
+                    let summaryFocused = isSummaryOrExplainQuery(text)
+                    let listingish =
+                        text.lowercased().contains("title")
+                        || text.lowercased().contains("list")
+                        || text.lowercased().contains("folder")
+                        || text.lowercased().contains("which notes")
+                        || text.lowercased().contains("what notes")
 
                     // Prefer exact folder membership when the question names a folder
                     if let folderItems = meetingsMatchingFolderQuery(text, in: meetingsInContext) {
                         let folderName = folderItems.first?.groupName ?? "folder"
                         titleInventory = authoritativeTitleList(
                             folderItems,
-                            header: "AUTHORITATIVE TITLES IN FOLDER \"\(folderName)\" (complete list)"
+                            header: "NOTES IN FOLDER \"\(folderName)\" (use content below — do not only list titles)"
                         )
                         documentBlock = titleInventory + "\n\n"
-                        documentBlock += "=== FULL CONTENT FOR THESE NOTES ONLY (do not mention other library notes) ===\n"
+                        documentBlock += "=== FULL CONTENT FOR THESE NOTES ONLY ===\n"
                         for m in folderItems.sorted(by: { $0.timestamp > $1.timestamp }) {
-                            let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: actionFocused)
+                            let blob = contextBlob(
+                                for: m,
+                                limit: keywordHitLimit,
+                                actionFocused: actionFocused,
+                                summaryFocused: summaryFocused
+                            )
                             documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob.isEmpty ? "(empty body)" : blob)\n"
                         }
                         answerSources = folderItems.map(\.title).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
                     } else {
-                        // Keyword rank with score floor — drop weak Cooking hits when finance wins
                         let scored = RAGEngine.shared.rankMeetingsByKeywordsScored(meetingsInContext, query: text)
                         var ranked = RAGEngine.shared.rankMeetingsByKeywords(
                             meetingsInContext,
                             query: text,
-                            topK: actionFocused ? 5 : 8,
+                            topK: actionFocused || summaryFocused ? 5 : 6,
                             minScoreRatio: 0.35,
-                            absoluteMinScore: 10
+                            absoluteMinScore: 8
                         )
                         if ranked.isEmpty, let first = scored.first {
                             ranked = [first.meeting]
                         }
                         answerSources = ranked.map(\.title).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
 
-                        // For action/advice: only BEST MATCHES inventory (not whole library catalog)
-                        if actionFocused {
-                            titleInventory = authoritativeTitleList(
-                                ranked,
-                                header: "AUTHORITATIVE TITLES — ONLY THESE NOTES APPLY TO THIS QUESTION"
-                            )
-                            documentBlock = titleInventory + "\n\n"
-                            documentBlock += "=== SOURCE CONTENT (derive action items from AI Summary first) ===\n"
-                            for m in ranked {
-                                let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: true)
-                                if blob.isEmpty { continue }
-                                documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
-                            }
-                        } else {
+                        // Whole-library title dump only when user asks for a list
+                        if listingish {
                             titleInventory = authoritativeTitleList(
                                 meetingsInContext,
                                 header: "AUTHORITATIVE TITLES — ENTIRE LIBRARY"
@@ -5592,23 +5641,37 @@ struct ChatView: View {
                             documentBlock = titleInventory + "\n\n"
                             documentBlock += authoritativeTitleList(
                                 ranked,
-                                header: "AUTHORITATIVE TITLES — BEST MATCHES FOR THIS QUESTION"
+                                header: "BEST MATCHES FOR THIS QUESTION"
+                            ) + "\n\n"
+                        } else {
+                            // Normal Q&A: best matches only (prevents title-echo answers)
+                            titleInventory = authoritativeTitleList(
+                                ranked,
+                                header: "NOTES TO USE (cite in prose; answer from content)"
                             )
-                            documentBlock += "\n\n=== CONTENT FOR BEST MATCHES ===\n"
-                            for m in ranked {
-                                let blob = contextBlob(for: m, limit: keywordHitLimit, actionFocused: false)
-                                if blob.isEmpty { continue }
-                                documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
-                            }
+                            documentBlock = titleInventory + "\n\n"
+                        }
 
-                            // Semantic only over ranked ids (not whole library) to avoid Cooking bleed
+                        documentBlock += "=== SOURCE CONTENT (prefer AI Summary) ===\n"
+                        for m in ranked {
+                            let blob = contextBlob(
+                                for: m,
+                                limit: summaryFocused ? 12_000 : keywordHitLimit,
+                                actionFocused: actionFocused,
+                                summaryFocused: summaryFocused || actionFocused
+                            )
+                            if blob.isEmpty { continue }
+                            documentBlock += "\n--- NOTE TITLE=\"\(m.title)\" ---\n\(blob)\n"
+                        }
+
+                        if !summaryFocused, !actionFocused {
                             let meetingIds = ranked.map(\.id)
                             if !meetingIds.isEmpty {
                                 do {
                                     let topChunks = try await RAGEngine.shared.search(
                                         query: text,
                                         meetingIds: meetingIds,
-                                        topK: 10,
+                                        topK: 8,
                                         maxPerMeeting: 2
                                     )
                                     if !topChunks.isEmpty {
@@ -5627,11 +5690,24 @@ struct ChatView: View {
                 }
 
                 let actionFocused = isActionOrAdviceQuery(text)
+                let summaryFocused = isSummaryOrExplainQuery(text)
+                let listingish =
+                    text.lowercased().contains("title")
+                    || text.lowercased().contains("list")
+                    || text.lowercased().contains("folder")
+                    || text.lowercased().contains("which notes")
+                    || text.lowercased().contains("what notes")
+
                 var systemPrompt = """
-                Answer only from DOCUMENT. Prefer AI Summary over notes/transcript.
-                Copy TITLE= strings exactly — never invent titles, folders, or notes.
-                Only discuss notes that appear in DOCUMENT for this question.
-                End with a short answer; do NOT invent a Sources list — the app will attach real source titles.
+                You are a library Q&A assistant. Answer using DOCUMENT only.
+
+                CRITICAL — answer quality:
+                - NEVER reply with only note titles. Titles alone are not an answer.
+                - Write a real answer: multiple sentences, or bullets with substance from AI Summary / notes.
+                - When the user asks for a summary, update, overview, or “how to…”, synthesize the content.
+                - Prefer ### AI Summary sections when present.
+                - If you name a note, use its TITLE= string exactly — but always add what the note says.
+                - Do NOT invent notes or a Sources list (the app attaches sources).
                 """
                 if actionFocused {
                     systemPrompt += """
@@ -5639,28 +5715,51 @@ struct ChatView: View {
                     For this question: numbered actions only. Each action must cite a real note title and an idea from DOCUMENT. No generic advice that is not in DOCUMENT.
                     """
                 }
+                if summaryFocused {
+                    systemPrompt += """
 
-                let listingish =
-                    text.lowercased().contains("title")
-                    || text.lowercased().contains("list")
-                    || text.lowercased().contains("folder")
+                    For this question: provide a clear summary of the relevant note(s). Structure with short bullets or short paragraphs. Include key ideas, not just the title.
+                    """
+                }
+                if listingish {
+                    systemPrompt += """
+
+                    For this question: list matching note titles from DOCUMENT, each with a one-line description from content when available.
+                    """
+                }
+
+                let knownTitles = meetingsInContext.map(\.title)
                 let skipHistory = listingish || actionFocused
+                    || historySnapshot.contains {
+                        $0.role == "assistant" && isTitleOnlyDump($0.content, knownTitles: knownTitles)
+                    }
 
                 var apiMessages: [OllamaClient.OllamaChatMessage] = [
                     OllamaClient.OllamaChatMessage(role: "system", content: systemPrompt),
                 ]
                 if !skipHistory {
                     for msg in historySnapshot.dropLast() {
+                        if msg.role == "assistant", isTitleOnlyDump(msg.content, knownTitles: knownTitles) {
+                            continue
+                        }
                         apiMessages.append(OllamaClient.OllamaChatMessage(role: msg.role, content: msg.content))
                     }
                 }
-                // Single DOCUMENT block (title inventory already inside for global/folder paths)
                 let docPayload = documentBlock.contains("TITLE=")
                     ? documentBlock
                     : "\(titleInventory)\n\n\(documentBlock)"
-                let actionExtra = actionFocused
-                    ? "\nReply with numbered actions tied to real titles from DOCUMENT."
-                    : ""
+                let answerShape: String = {
+                    if actionFocused {
+                        return "Reply with numbered actions tied to real titles and content from DOCUMENT."
+                    }
+                    if summaryFocused {
+                        return "Write a useful multi-sentence or multi-bullet summary from DOCUMENT content. Do not answer with titles only."
+                    }
+                    if listingish {
+                        return "List matching notes with a short description from content when possible."
+                    }
+                    return "Write a useful answer from DOCUMENT content (paragraphs or bullets). Do not answer with titles only."
+                }()
                 apiMessages.append(
                     OllamaClient.OllamaChatMessage(
                         role: "user",
@@ -5670,16 +5769,35 @@ struct ChatView: View {
 
                         QUESTION: \(text)
 
-                        Answer from DOCUMENT only. Exact titles only.\(actionExtra)
+                        \(answerShape)
                         """
                     )
                 )
 
-                let response = try await OllamaClient.shared.chat(
+                var response = try await OllamaClient.shared.chat(
                     messages: apiMessages,
                     model: model,
                     role: chatRole
                 )
+
+                // Retry once if the model still dumps titles only
+                if isTitleOnlyDump(response.content, knownTitles: answerSources + knownTitles) {
+                    GristLog.log("[Chat] title-only reply; retrying with stricter instruction")
+                    var retry = apiMessages
+                    retry.append(OllamaClient.OllamaChatMessage(role: "assistant", content: response.content))
+                    retry.append(OllamaClient.OllamaChatMessage(
+                        role: "user",
+                        content: """
+                        That reply was only title(s). Rewrite now as a full answer using the AI Summary / content in DOCUMENT.
+                        At least 4 bullet points or 3 full sentences. Still no invented sources list.
+                        """
+                    ))
+                    response = try await OllamaClient.shared.chat(
+                        messages: retry,
+                        model: model,
+                        role: chatRole
+                    )
+                }
 
                 await MainActor.run {
                     // Deduplicate sources, cap list for UI
