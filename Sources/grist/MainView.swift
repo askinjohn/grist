@@ -1935,6 +1935,12 @@ struct MainView: View {
                 } label: {
                     Label("Export Markdown…", systemImage: "square.and.arrow.up")
                 }
+                Button {
+                    sendToObsidian(meeting: meeting)
+                } label: {
+                    Label("Send to Obsidian", systemImage: "book.closed")
+                }
+                .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
                 Button(role: .destructive) {
                     Database.shared.softDeleteMeeting(id: meeting.id)
                     NotificationCenter.default.post(name: .meetingDeleted, object: nil)
@@ -1942,6 +1948,42 @@ struct MainView: View {
                     Label("Delete", systemImage: "trash")
                 }
             }
+    }
+
+    // MARK: - Obsidian
+
+    @MainActor
+    func sendToObsidian(meeting: Meeting) {
+        do {
+            let url = try ObsidianExporter.exportMeeting(meeting)
+            statusMessage = "Obsidian: \(url.lastPathComponent)"
+            GristLog.log("[Obsidian] send ok \(url.path)")
+        } catch {
+            statusMessage = "Obsidian: \(error.localizedDescription)"
+            GristLog.log("[Obsidian] send failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    func sendFolderToObsidian(_ folder: String) {
+        let items = meetings.filter { ($0.groupName ?? "") == folder }
+        guard !items.isEmpty else {
+            statusMessage = "Folder is empty"
+            return
+        }
+        var ok = 0
+        var lastName = ""
+        for m in items {
+            do {
+                let url = try ObsidianExporter.exportMeeting(m)
+                ok += 1
+                lastName = url.lastPathComponent
+            } catch {
+                statusMessage = "Obsidian: \(error.localizedDescription) (\(ok) saved)"
+                return
+            }
+        }
+        statusMessage = "Obsidian: \(ok) file(s) in “\(folder)”" + (lastName.isEmpty ? "" : " · last \(lastName)")
     }
 
     private func confirmDeleteFolder(contents: Database.FolderDeleteContentsMode) {
@@ -3320,6 +3362,15 @@ struct MainView: View {
                         Label("Export Markdown…", systemImage: "square.and.arrow.up")
                     }
                     .keyboardShortcut("e", modifiers: [.command, .shift])
+                    Button {
+                        sendToObsidian(meeting: m)
+                    } label: {
+                        Label("Send to Obsidian", systemImage: "book.closed")
+                    }
+                    .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
+                    .help(IntegrationsConfigManager.shared.config.obsidian.isConfigured
+                          ? "Write Markdown into your Obsidian vault"
+                          : "Enable and pick a vault in Settings → Integrations")
                     if let folder = m.groupName, !folder.isEmpty {
                         Divider()
                         Button {
@@ -3332,11 +3383,17 @@ struct MainView: View {
                         } label: {
                             Label("Export Folder “\(folder)”…", systemImage: "folder")
                         }
+                        Button {
+                            sendFolderToObsidian(folder)
+                        } label: {
+                            Label("Send Folder to Obsidian…", systemImage: "book.closed")
+                        }
+                        .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
                     }
                 } label: {
                     Label("Export", systemImage: "square.and.arrow.up")
                 }
-                .help("Choose sections and export Markdown")
+                .help("Export Markdown or send to Obsidian")
             }
 
             if selectedMeeting?.isNoteType == true {
@@ -4456,7 +4513,18 @@ struct MainView: View {
                     if autoExtractTasks {
                         extractTasks(from: updated)
                     }
-                    statusMessage = "Done"
+                    // Optional: push Markdown into Obsidian vault after Enhance
+                    if IntegrationsConfigManager.shared.config.obsidian.isConfigured,
+                       IntegrationsConfigManager.shared.config.obsidian.autoExportAfterEnhance {
+                        do {
+                            let url = try ObsidianExporter.exportMeeting(updated)
+                            statusMessage = "Done · Obsidian \(url.lastPathComponent)"
+                        } catch {
+                            statusMessage = "Done · Obsidian failed: \(error.localizedDescription)"
+                        }
+                    } else {
+                        statusMessage = "Done"
+                    }
                     selectedTab = "summary"
                     GristLog.log("[Enhance] done id=\(meetingId) \(String(format: "%.1f", elapsed))s model=\(model)")
                     GristLog.log("[Enhance] summaryChars \(oldSummaryChars) → \(result.summary.count) title=\(result.title ?? "(none)")")

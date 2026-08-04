@@ -35,7 +35,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Settings")
                             .font(.title3.weight(.semibold))
-                        Text("Workflow, models, and search index")
+                        Text("Workflow, models, search index, integrations")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -62,6 +62,11 @@ struct SettingsView: View {
                             selectedTab = 2
                         }
                     }
+                    TabButton(title: "Integrations", icon: "link", isSelected: selectedTab == 3) {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                            selectedTab = 3
+                        }
+                    }
                     Spacer()
                 }
                 .padding(.horizontal, 20)
@@ -80,15 +85,18 @@ struct SettingsView: View {
                     case 1:
                         AIModelsSettingsView()
                             .transition(.opacity)
-                    default:
+                    case 2:
                         TemplatesSettingsView()
+                            .transition(.opacity)
+                    default:
+                        IntegrationsSettingsView()
                             .transition(.opacity)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(minWidth: 660, minHeight: 500)
+        .frame(minWidth: 700, minHeight: 520)
     }
 }
 
@@ -805,5 +813,156 @@ struct TemplatesSettingsView: View {
         let updated = AITemplate(id: id, name: editingName, prompt: editingPrompt)
         Database.shared.saveTemplate(updated)
         loadTemplates()
+    }
+}
+
+// MARK: - Integrations (Obsidian)
+
+struct IntegrationsSettingsView: View {
+    @ObservedObject private var integrations = IntegrationsConfigManager.shared
+    @State private var draft: ObsidianIntegrationConfig = .default
+    @State private var status = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Integrations")
+                        .font(.title3.weight(.semibold))
+                    Text("Optional bridges to apps on your machine. Nothing leaves this Mac unless you connect a cloud service later.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                // Obsidian card
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        GristIconBadge(systemName: "book.closed.fill", tint: .purple, size: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Obsidian")
+                                .font(.headline)
+                            Text("Write Grist notes as Markdown into your vault")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $draft.enabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Vault folder")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 10) {
+                            Text(draft.vaultPath.isEmpty ? "No vault selected" : draft.vaultPath)
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(draft.vaultPath.isEmpty ? .tertiary : .secondary)
+                                .lineLimit(2)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("Choose…") {
+                                if let url = ObsidianExporter.pickVaultFolder() {
+                                    draft.vaultPath = url.path
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            if !draft.vaultPath.isEmpty {
+                                Button("Reveal") {
+                                    NSWorkspace.shared.activateFileViewerSelecting(
+                                        [URL(fileURLWithPath: draft.vaultPath)]
+                                    )
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    }
+
+                    HStack {
+                        Text("Subfolder")
+                            .font(.callout)
+                        Spacer()
+                        TextField("Grist", text: $draft.subfolder)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                    }
+
+                    HStack {
+                        Text("Filename pattern")
+                            .font(.callout)
+                        Spacer()
+                        TextField("{date}-{title}", text: $draft.filenamePattern)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 200)
+                    }
+                    Text("{date} = yyyy-MM-dd · {title} = note title · {id} = short id")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    Divider()
+
+                    Text("Default sections")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Toggle("Metadata", isOn: $draft.includeMetadata)
+                    Toggle("Sources / links", isOn: $draft.includeSources)
+                    Toggle("AI Summary", isOn: $draft.includeSummary)
+                    Toggle("Notes body", isOn: $draft.includeNotes)
+                    Toggle("Transcript / captions", isOn: $draft.includeTranscript)
+
+                    Divider()
+
+                    Toggle(isOn: $draft.autoExportAfterEnhance) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("After Enhance, send to Obsidian")
+                            Text("Writes a new Markdown file when Enhance finishes")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Toggle(isOn: $draft.openAfterExport) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Open in Obsidian after send")
+                            Text("Uses the obsidian:// URL scheme if Obsidian is installed")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    HStack {
+                        if !status.isEmpty {
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Save") {
+                            integrations.updateObsidian { $0 = draft }
+                            status = integrations.lastMessage
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.purple)
+                    }
+                }
+                .padding(18)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+                )
+
+                Text("Config file: \(integrations.configPath)")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .textSelection(.enabled)
+            }
+            .padding(28)
+        }
+        .onAppear {
+            draft = integrations.config.obsidian
+        }
     }
 }
