@@ -429,15 +429,11 @@ extension MainView {
             .help("Extract action items into Tasks")
             .disabled(isExtractingTasks || noteBodyEmpty)
 
-            Button {
-                runEnhance()
-            } label: {
-                Label(statusMessage == "Enhancing…" ? "Working…" : "Enhance", systemImage: "wand.and.stars")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
-            .disabled(statusMessage == "Enhancing…" || noteBodyEmpty)
-            .help("AI summary + title from what you wrote")
+            enhanceToolbarButton(
+                title: statusMessage == "Enhancing…" ? "Working…" : "Enhance",
+                disabled: statusMessage == "Enhancing…" || noteBodyEmpty,
+                help: "AI summary + title from what you wrote"
+            )
         }
     }
 
@@ -735,16 +731,52 @@ extension MainView {
             .disabled(isExtractingTasks || !meetingHasEnhanceableContent)
             .controlSize(.regular)
 
-            Button {
-                runEnhance()
-            } label: {
-                Label(statusMessage == "Enhancing…" ? "Enhancing…" : "Enhance",
-                      systemImage: "wand.and.stars")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(statusMessage == "Enhancing…" || !meetingHasEnhanceableContent)
+            enhanceToolbarButton(
+                title: statusMessage == "Enhancing…" ? "Enhancing…" : "Enhance",
+                disabled: statusMessage == "Enhancing…" || !meetingHasEnhanceableContent,
+                help: "Generate structured AI summary from transcript and notes"
+            )
             .controlSize(.regular)
         }
+    }
+
+    /// Prominent Enhance control that stays readable in light and dark mode.
+    /// System `.borderedProminent` + blue tint often yields an empty blue pill in dark appearance.
+    @ViewBuilder
+    func enhanceToolbarButton(title: String, disabled: Bool, help: String) -> some View {
+        Button {
+            runEnhance()
+        } label: {
+            HStack(spacing: 6) {
+                if statusMessage == "Enhancing…" {
+                    ProgressView()
+                        .controlSize(.small)
+                        .tint(.white)
+                } else {
+                    Image(systemName: "wand.and.stars")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(
+                LinearGradient(
+                    colors: disabled
+                        ? [Color.gray.opacity(0.45), Color.gray.opacity(0.35)]
+                        : [Color.blue, Color.purple.opacity(0.9)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                in: Capsule()
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.75 : 1)
+        .help(help)
     }
 
     /// Meeting can enhance from transcript and/or written notes.
