@@ -13,7 +13,7 @@ Record meetings (mic + system audio), write notes, import articles or YouTube ca
 | **Meetings** | Mic + system audio (ScreenCaptureKit), Whisper transcription, AI summary |
 | **Notes** | Markdown write / preview, selection chat |
 | **Articles & YouTube** | Multi-URL import; `yt-dlp` captions; append to open item; auth-wall detection |
-| **Folders** | Accordion sidebar; expand to list files; **drag or right-click → Move to folder**; unfiled under Today / Yesterday / Last 7 Days / Older |
+| **Folders** | Accordion sidebar; expand to list files; **drag or right-click → Move to folder**; **right-click folder → Rename…**; unfiled under Today / Yesterday / Last 7 Days / Older |
 | **Library** | All / Unfiled / Meetings / Notes / Tasks / Ask everything |
 | **Search** | Whole-library search; jump to best tab + snippets |
 | **Export** | Markdown with section picker (summary / notes / transcript / sources); folder multi-file export |
@@ -68,7 +68,7 @@ Sidebar: **Meeting** (record), **Note** (write), **Article** (one or many URLs).
 - Collapse/expand folders; items **with** a folder live only inside that folder.  
 - **Unfiled** items appear under date groups.  
 - **Move:** drag onto a folder, or **right-click → Move to folder**.  
-- Right-click folder: summarize, export, delete (unfile or soft-delete contents).
+- Right-click folder: **Rename…**, summarize, export, delete (unfile or soft-delete contents).
 
 ### Enhance
 Toolbar **Enhance** rewrites the AI summary from source content. Long YouTube/podcasts use chunked map-reduce when needed. Logs: `grist.log`.

@@ -123,6 +123,10 @@ struct MainView: View {
     // Delete folder
     @State var folderPendingDelete: String? = nil
     @State var showingDeleteFolderConfirm = false
+    // Rename folder
+    @State var folderPendingRename: String? = nil
+    @State var renameFolderDraft = ""
+    @State var showingRenameFolderAlert = false
 
     let db = Database.shared
     let recorder = AudioRecorder.shared
