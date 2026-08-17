@@ -207,6 +207,8 @@ extension MainView {
             Button("Show only this folder") {
                 focusedFolder = name
                 expandedFolders.insert(name)
+                // Leave detail open, but list selection must match visible rows
+                // (otherwise AppKit paints a ghost selected row over empty state).
             }
             Button("New meeting here") {
                 focusedFolder = name

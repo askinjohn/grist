@@ -67,7 +67,9 @@ extension MainView {
                     .padding(.bottom, 8)
             }
 
-            List(selection: $selectedMeeting) {
+            // Use a filtered selection binding so List never keeps a tag that is not
+            // currently in the sidebar (macOS draws a floating “ghost” selected row).
+            List(selection: sidebarListSelection) {
                 // LIBRARY
                 Section {
                     ForEach(LibraryFilter.allCases) { filter in
@@ -200,9 +202,17 @@ extension MainView {
                         Section {
                             let items = meetingsInFolder(folder)
                             if items.isEmpty {
-                                Text("Empty folder")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Text("Empty folder")
+                                        .font(.caption)
+                                        .foregroundStyle(.tertiary)
+                                    Text("Drop a note here, or right‑click a note → Move to folder.")
+                                        .font(.caption2)
+                                        .foregroundStyle(.quaternary)
+                                }
+                                .padding(.vertical, 4)
+                                // Avoid selection interaction on empty placeholder
+                                .selectionDisabled(true)
                             } else {
                                 ForEach(items) { meeting in
                                     meetingSidebarRow(meeting, inFolder: folder)
@@ -301,8 +311,16 @@ extension MainView {
                 if !name.isEmpty {
                     db.saveFolder(name)
                     loadMeetings()
-                    focusedFolder = name
+                    // Expand in the accordion only — do not enter “focused folder”
+                    // mode. Focusing an empty folder while a meeting is open hid that
+                    // meeting from the List while selection stayed set, which made
+                    // macOS paint a floating ghost row over “Empty folder”.
+                    expandedFolders.insert(name)
+                    if focusedFolder != nil {
+                        focusedFolder = nil
+                    }
                     libraryFilter = .all
+                    statusMessage = "Folder “\(name)” created"
                 }
             }
             Button("Cancel", role: .cancel) { }
@@ -325,6 +343,57 @@ extension MainView {
         .sheet(isPresented: $showingNewTaskSheet) {
             newTaskSheet
         }
+    }
+
+    // MARK: - Sidebar list selection (no ghost rows)
+
+    /// List selection that only reflects meetings currently tagged in the sidebar.
+    /// Keeping selection when the row is off-list makes AppKit paint a floating row.
+    var sidebarListSelection: Binding<Meeting?> {
+        Binding(
+            get: {
+                guard let m = selectedMeeting else { return nil }
+                return isMeetingVisibleInSidebar(m) ? m : nil
+            },
+            set: { newValue in
+                if let newValue {
+                    selectedMeeting = newValue
+                    selectedTask = nil
+                } else {
+                    // User cleared list selection; keep detail only if still intentional.
+                    // Deselect in list without forcing detail closed when get() returned nil.
+                    if let m = selectedMeeting, isMeetingVisibleInSidebar(m) {
+                        selectedMeeting = nil
+                    }
+                }
+            }
+        )
+    }
+
+    /// Whether `meeting` currently has a `.tag` in the sidebar List content.
+    func isMeetingVisibleInSidebar(_ meeting: Meeting) -> Bool {
+        if isSearching {
+            return filteredMeetings.contains(where: { $0.id == meeting.id })
+        }
+        if libraryFilter == .tasks && focusedFolder == nil {
+            return false
+        }
+        if libraryFilter == .askEverything && focusedFolder == nil {
+            return false
+        }
+        // Focused folder mode: only that folder’s items are listed below.
+        if let folder = focusedFolder {
+            return (meeting.groupName ?? "") == folder
+                && meetingsInFolder(folder).contains(where: { $0.id == meeting.id })
+        }
+        // Unfiled date groups
+        if (meeting.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+            return unfiledMeetingsForSidebar.contains(where: { $0.id == meeting.id })
+        }
+        // Accordion: only when that folder is expanded
+        let folder = meeting.groupName ?? ""
+        guard expandedFolders.contains(folder) else { return false }
+        return meetingsInFolder(folder).contains(where: { $0.id == meeting.id })
     }
 
     // MARK: - Tasks UI
