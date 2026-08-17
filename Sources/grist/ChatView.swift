@@ -79,139 +79,239 @@ struct ChatView: View {
         return Database.shared.fetchConversations(scopeKey: scope.historyKey, search: q, limit: 80)
     }
 
+    /// Readable column width for chat (avoids full-width walls of text).
+    private let chatColumnMax: CGFloat = 720
+
+    private var canSend: Bool {
+        !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isThinking
+    }
+
+    private var composerPlaceholder: String {
+        switch scope {
+        case .item: return "Ask about this note or meeting…"
+        case .global: return "Ask across your library…"
+        case .selection: return "Ask about the selection…"
+        }
+    }
+
+    private var suggestionPrompts: [String] {
+        switch scope {
+        case .item:
+            return [
+                "What is the crux of this note?",
+                "List key action items",
+                "Summarize in 5 bullets",
+            ]
+        case .global:
+            return [
+                "What themes show up across my library?",
+                "Find decisions I need to follow up on",
+            ]
+        case .selection:
+            return [
+                "Explain this in plain language",
+                "What are the key points?",
+            ]
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Toolbar: thread history + new / delete
-            HStack(spacing: 8) {
-                if case .selection(_, let title, _) = scope {
-                    Label("Selection chat", systemImage: "text.quote")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.purple)
-                    Text(title)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                    if let onExitSelection {
-                        Button("Exit selection") { onExitSelection() }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                    }
-                    Spacer(minLength: 8)
-                }
-
-                // Searchable history dropdown
-                Button {
-                    threadSearch = ""
-                    reloadConversationList()
-                    showingThreadPicker = true
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.system(size: 12, weight: .semibold))
-                        Text(activeConversation?.title ?? "New chat")
-                            .lineLimit(1)
-                            .frame(maxWidth: 220, alignment: .leading)
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.primary.opacity(0.06))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help("Past chats — search and reopen any thread")
-                .popover(isPresented: $showingThreadPicker, arrowEdge: .bottom) {
-                    threadPickerPopover
-                }
-
-                Spacer(minLength: 8)
-
-                Button {
-                    startNewChat()
-                } label: {
-                    Label("New chat", systemImage: "square.and.pencil")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isThinking)
-                .help("Start a new thread (keeps past chats in history)")
-
-                Button {
-                    deleteCurrentChat()
-                } label: {
-                    Label("Delete", systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(isThinking || activeConversationId.isEmpty)
-                .help("Delete this thread from history")
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.primary.opacity(0.03))
+            chatToolbar
 
             if case .selection(_, _, let sel) = scope {
-                ScrollView(.vertical, showsIndicators: false) {
-                    Text(sel)
-                        .font(.caption)
+                selectionBanner(sel)
+            }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 18) {
+                        if chatHistory.isEmpty && !isThinking {
+                            chatEmptyState
+                                .padding(.top, 36)
+                        } else {
+                            ForEach(chatHistory) { msg in
+                                ChatBubble(message: msg)
+                                    .id(msg.id)
+                            }
+                        }
+                        if isThinking {
+                            ChatThinkingBubble()
+                                .id("thinking")
+                        }
+                        Color.clear
+                            .frame(height: 8)
+                            .id("chat-bottom")
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                    .frame(maxWidth: chatColumnMax)
+                    .frame(maxWidth: .infinity)
+                }
+                .background(Color.primary.opacity(0.02))
+                .onChange(of: chatHistory.count) { _, _ in
+                    scrollChatToBottom(proxy)
+                }
+                .onChange(of: isThinking) { _, _ in
+                    scrollChatToBottom(proxy)
+                }
+            }
+
+            chatComposer
+        }
+        .onAppear {
+            bootstrapThreads()
+        }
+        .onChange(of: scope.historyKey) { _, _ in bootstrapThreads() }
+    }
+
+    private func scrollChatToBottom(_ proxy: ScrollViewProxy) {
+        DispatchQueue.main.async {
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(isThinking ? "thinking" : "chat-bottom", anchor: .bottom)
+            }
+        }
+    }
+
+    // MARK: - Chrome
+
+    @ViewBuilder
+    private var chatToolbar: some View {
+        HStack(spacing: 10) {
+            if case .selection(_, let title, _) = scope {
+                Label("Selection", systemImage: "text.quote")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.purple)
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if let onExitSelection {
+                    Button("Exit") { onExitSelection() }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                Spacer(minLength: 8)
+            }
+
+            Button {
+                threadSearch = ""
+                reloadConversationList()
+                showingThreadPicker = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.purple)
+                    Text(activeConversation?.title ?? "New chat")
+                        .font(.system(size: 13, weight: .medium))
+                        .lineLimit(1)
+                        .frame(maxWidth: 260, alignment: .leading)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
                 }
-                .frame(maxHeight: 88)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(Color.purple.opacity(0.06))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(Color.primary.opacity(0.06))
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .help("Past chats — search and reopen any thread")
+            .popover(isPresented: $showingThreadPicker, arrowEdge: .bottom) {
+                threadPickerPopover
             }
 
-            ScrollView {
-                LazyVStack(spacing: 16) {
-                    if chatHistory.isEmpty {
-                        VStack(spacing: 14) {
-                            GristEmptyState(
-                                systemImage: "bubble.left.and.bubble.right",
-                                title: scope.emptyTitle,
-                                message: scope.emptySubtitle,
-                                tint: .purple,
-                                badgeSize: 64
-                            )
-                            Text("Past chats stay in History. Use New chat for a fresh thread.")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.top, 48)
-                    } else {
-                        ForEach(chatHistory) { msg in
-                            ChatBubble(message: msg)
-                        }
-                    }
-                    if isThinking {
-                        HStack {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("AI is thinking...")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                        .padding(.leading, 12)
-                    }
-                }
-                .padding()
-            }
+            Spacer(minLength: 8)
 
+            Button {
+                startNewChat()
+            } label: {
+                Label("New chat", systemImage: "square.and.pencil")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isThinking)
+
+            Button {
+                deleteCurrentChat()
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(isThinking || activeConversationId.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    @ViewBuilder
+    private func selectionBanner(_ sel: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Using selected text only")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.purple)
+            Text(sel)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(4)
+                .textSelection(.enabled)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color.purple.opacity(0.08))
+    }
+
+    @ViewBuilder
+    private var chatEmptyState: some View {
+        VStack(spacing: 18) {
+            GristEmptyState(
+                systemImage: "bubble.left.and.bubble.right",
+                title: scope.emptyTitle,
+                message: scope.emptySubtitle,
+                tint: .purple,
+                badgeSize: 56
+            )
+            Text("History keeps past threads. New chat starts fresh.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+
+            // One-tap starters so the pane doesn’t feel empty
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Try asking")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                FlowLayoutChips(items: suggestionPrompts) { prompt in
+                    inputText = prompt
+                    sendMessage()
+                }
+            }
+            .frame(maxWidth: 420)
+            .padding(.top, 4)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder
+    private var chatComposer: some View {
+        VStack(spacing: 0) {
             Divider()
-            HStack(spacing: 12) {
-                TextField("Ask about this content…", text: $inputText)
+            HStack(alignment: .bottom, spacing: 12) {
+                TextField(composerPlaceholder, text: $inputText, axis: .vertical)
                     .textFieldStyle(.plain)
                     .font(.body)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .clipShape(Capsule())
-                    .overlay(Capsule().stroke(Color(NSColor.separatorColor).opacity(0.3), lineWidth: 1))
+                    .lineLimit(1...6)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                    .background(Color(NSColor.textBackgroundColor))
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
                     .onSubmit { sendMessage() }
 
                 Button {
@@ -220,20 +320,21 @@ struct ChatView: View {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(.white)
-                        .padding(10)
-                        .background(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isThinking ? Color.gray.opacity(0.5) : Color.accentColor)
+                        .frame(width: 36, height: 36)
+                        .background(canSend ? Color.accentColor : Color.gray.opacity(0.35))
                         .clipShape(Circle())
                 }
                 .buttonStyle(.plain)
-                .disabled(inputText.trimmingCharacters(in: .whitespaces).isEmpty || isThinking)
+                .disabled(!canSend)
+                .help("Send")
+                .keyboardShortcut(.return, modifiers: [.command])
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .background(.regularMaterial)
-            .shadow(color: .black.opacity(0.05), radius: 10, y: -5)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .frame(maxWidth: chatColumnMax)
+            .frame(maxWidth: .infinity)
+            .background(.bar)
         }
-        .onAppear { bootstrapThreads() }
-        .onChange(of: scope.historyKey) { _, _ in bootstrapThreads() }
     }
 
     // MARK: - Thread picker (searchable history)
@@ -934,50 +1035,165 @@ struct ChatView: View {
 struct ChatBubble: View {
     let message: ChatMessage
 
-    var body: some View {
-        HStack(alignment: .top) {
-            if message.role == "user" {
-                Spacer(minLength: 40)
-                Text(LocalizedStringKey(message.content))
-                    .padding(14)
-                    .background(LinearGradient(colors: [Color.blue, Color.purple.opacity(0.8)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .shadow(color: .black.opacity(0.15), radius: 5, x: 0, y: 2)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(LocalizedStringKey(message.content))
-                        .padding(16)
-                        .background(.regularMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(Color(NSColor.separatorColor).opacity(0.5), lineWidth: 1)
-                        )
-                        .shadow(color: .black.opacity(0.05), radius: 8, x: 0, y: 4)
+    private var isUser: Bool { message.role == "user" }
+    private var isError: Bool {
+        message.content.hasPrefix("Error:")
+    }
 
-                    if !message.sources.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Sources")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                            FlowSourceChips(titles: message.sources)
-                        }
-                        .padding(.leading, 4)
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if isUser { Spacer(minLength: 48) }
+
+            if !isUser {
+                // Assistant avatar
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: isError
+                                    ? [Color.red.opacity(0.85), Color.orange.opacity(0.7)]
+                                    : [Color.purple, Color.blue.opacity(0.85)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 28, height: 28)
+                    Image(systemName: isError ? "exclamationmark" : "sparkles")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white)
+                }
+                .padding(.top, 2)
+            }
+
+            VStack(alignment: isUser ? .trailing : .leading, spacing: 8) {
+                if !isUser {
+                    Text(isError ? "Error" : "Grist")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Group {
+                    if isUser {
+                        Text(message.content)
+                            .font(.body)
+                            .foregroundStyle(.white)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        chatMarkdownText(message.content)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Spacer(minLength: 40)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(bubbleBackground)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(bubbleStroke, lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(isUser ? 0.12 : 0.04), radius: isUser ? 6 : 4, y: 2)
+                .frame(maxWidth: isUser ? 480 : 600, alignment: isUser ? .trailing : .leading)
+
+                if !isUser, !message.sources.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Sources", systemImage: "link")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        FlowSourceChips(titles: message.sources)
+                    }
+                    .padding(.leading, 2)
+                }
             }
+
+            if !isUser { Spacer(minLength: 48) }
+        }
+    }
+
+    @ViewBuilder
+    private var bubbleBackground: some View {
+        if isUser {
+            LinearGradient(
+                colors: [Color.blue, Color.purple.opacity(0.88)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+        } else if isError {
+            Color.red.opacity(0.08)
+        } else {
+            Color(NSColor.controlBackgroundColor)
+        }
+    }
+
+    private var bubbleStroke: Color {
+        if isUser { return Color.clear }
+        if isError { return Color.red.opacity(0.25) }
+        return Color.primary.opacity(0.08)
+    }
+
+    @ViewBuilder
+    private func chatMarkdownText(_ raw: String) -> some View {
+        if let attr = try? AttributedString(
+            markdown: raw,
+            options: AttributedString.MarkdownParsingOptions(
+                interpretedSyntax: .full,
+                failurePolicy: .returnPartiallyParsedIfPossible
+            )
+        ) {
+            Text(attr)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineSpacing(3)
+        } else {
+            Text(raw)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .lineSpacing(3)
         }
     }
 }
 
-/// Simple wrapping chips for source titles (no FlowLayout dependency).
+struct ChatThinkingBubble: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(Color.purple.opacity(0.2))
+                    .frame(width: 28, height: 28)
+                ProgressView()
+                    .controlSize(.small)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Grist")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Thinking…")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color(NSColor.controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                )
+            }
+            Spacer(minLength: 48)
+        }
+    }
+}
+
+/// Source chips (horizontal scroll).
 struct FlowSourceChips: View {
     let titles: [String]
 
     var body: some View {
-        // Horizontal scroll keeps layout simple on macOS without custom flow layout.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(titles, id: \.self) { title in
@@ -997,6 +1213,64 @@ struct FlowSourceChips: View {
                 }
             }
         }
+    }
+}
+
+/// Prompt suggestion chips (wrap in rows of ~2 for empty state).
+struct FlowLayoutChips: View {
+    let items: [String]
+    var onTap: ((String) -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(chunked(items, size: 2), id: \.self) { row in
+                HStack(spacing: 8) {
+                    ForEach(row, id: \.self) { title in
+                        chip(title)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func chip(_ title: String) -> some View {
+        Button {
+            onTap?(title)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "text.bubble")
+                    .font(.caption2)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.purple.opacity(0.12))
+            .foregroundStyle(.purple)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.purple.opacity(0.2), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(onTap == nil)
+    }
+
+    private func chunked(_ arr: [String], size: Int) -> [[String]] {
+        guard size > 0, !arr.isEmpty else { return [] }
+        var out: [[String]] = []
+        var i = 0
+        while i < arr.count {
+            let end = min(i + size, arr.count)
+            out.append(Array(arr[i..<end]))
+            i = end
+        }
+        return out
     }
 }
 
