@@ -17,6 +17,9 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
     var enabled: Bool
     /// Absolute path to vault root (folder containing `.obsidian` is ideal but not required)
     var vaultPath: String
+    /// Optional vault name as shown in Obsidian’s vault switcher (if different from folder name).
+    /// Empty = derive from folder name / `.obsidian` parent.
+    var vaultName: String
     /// Subfolder under vault, e.g. `Grist` or `Meetings/Grist`
     var subfolder: String
     /// `{date}` = yyyy-MM-dd, `{title}` = sanitized title, `{id}` = short id
@@ -35,6 +38,7 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
     static let `default` = ObsidianIntegrationConfig(
         enabled: false,
         vaultPath: "",
+        vaultName: "",
         subfolder: "Grist",
         filenamePattern: "{date}-{title}",
         autoExportAfterEnhance: false,
@@ -45,6 +49,72 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
         includeNotes: true,
         includeTranscript: false
     )
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, vaultPath, vaultName, subfolder, filenamePattern
+        case autoExportAfterEnhance, openAfterExport
+        case includeMetadata, includeSources, includeSummary, includeNotes, includeTranscript
+    }
+
+    init(
+        enabled: Bool,
+        vaultPath: String,
+        vaultName: String = "",
+        subfolder: String,
+        filenamePattern: String,
+        autoExportAfterEnhance: Bool,
+        openAfterExport: Bool,
+        includeMetadata: Bool,
+        includeSources: Bool,
+        includeSummary: Bool,
+        includeNotes: Bool,
+        includeTranscript: Bool
+    ) {
+        self.enabled = enabled
+        self.vaultPath = vaultPath
+        self.vaultName = vaultName
+        self.subfolder = subfolder
+        self.filenamePattern = filenamePattern
+        self.autoExportAfterEnhance = autoExportAfterEnhance
+        self.openAfterExport = openAfterExport
+        self.includeMetadata = includeMetadata
+        self.includeSources = includeSources
+        self.includeSummary = includeSummary
+        self.includeNotes = includeNotes
+        self.includeTranscript = includeTranscript
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        vaultPath = try c.decodeIfPresent(String.self, forKey: .vaultPath) ?? ""
+        vaultName = try c.decodeIfPresent(String.self, forKey: .vaultName) ?? ""
+        subfolder = try c.decodeIfPresent(String.self, forKey: .subfolder) ?? "Grist"
+        filenamePattern = try c.decodeIfPresent(String.self, forKey: .filenamePattern) ?? "{date}-{title}"
+        autoExportAfterEnhance = try c.decodeIfPresent(Bool.self, forKey: .autoExportAfterEnhance) ?? false
+        openAfterExport = try c.decodeIfPresent(Bool.self, forKey: .openAfterExport) ?? true
+        includeMetadata = try c.decodeIfPresent(Bool.self, forKey: .includeMetadata) ?? true
+        includeSources = try c.decodeIfPresent(Bool.self, forKey: .includeSources) ?? true
+        includeSummary = try c.decodeIfPresent(Bool.self, forKey: .includeSummary) ?? true
+        includeNotes = try c.decodeIfPresent(Bool.self, forKey: .includeNotes) ?? true
+        includeTranscript = try c.decodeIfPresent(Bool.self, forKey: .includeTranscript) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(enabled, forKey: .enabled)
+        try c.encode(vaultPath, forKey: .vaultPath)
+        try c.encode(vaultName, forKey: .vaultName)
+        try c.encode(subfolder, forKey: .subfolder)
+        try c.encode(filenamePattern, forKey: .filenamePattern)
+        try c.encode(autoExportAfterEnhance, forKey: .autoExportAfterEnhance)
+        try c.encode(openAfterExport, forKey: .openAfterExport)
+        try c.encode(includeMetadata, forKey: .includeMetadata)
+        try c.encode(includeSources, forKey: .includeSources)
+        try c.encode(includeSummary, forKey: .includeSummary)
+        try c.encode(includeNotes, forKey: .includeNotes)
+        try c.encode(includeTranscript, forKey: .includeTranscript)
+    }
 
     var isConfigured: Bool {
         enabled && !vaultPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -186,14 +256,32 @@ enum ObsidianExporter {
         GristLog.log("[Obsidian] wrote \(fileURL.path)")
 
         if cfg.openAfterExport {
-            openInObsidian(vault: vault, fileURL: fileURL)
+            openInObsidian(vault: vault, fileURL: fileURL, preferredVaultName: cfg.vaultName)
         }
         return fileURL
     }
 
+    /// Walk up from `selected` until a folder containing `.obsidian` is found.
+    static func resolveVaultRoot(from selected: URL) -> URL {
+        var current = selected.standardizedFileURL
+        let fm = FileManager.default
+        for _ in 0..<12 {
+            let marker = current.appendingPathComponent(".obsidian", isDirectory: true)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: marker.path, isDirectory: &isDir), isDir.boolValue {
+                return current
+            }
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path { break }
+            current = parent
+        }
+        return selected.standardizedFileURL
+    }
+
     /// Relative path under vault for URI (posix, no leading slash).
     static func vaultRelativePath(vault: URL, fileURL: URL) -> String {
-        let v = vault.standardizedFileURL.path
+        let root = resolveVaultRoot(from: vault)
+        let v = root.standardizedFileURL.path
         let f = fileURL.standardizedFileURL.path
         if f.hasPrefix(v) {
             var rel = String(f.dropFirst(v.count))
@@ -203,20 +291,53 @@ enum ObsidianExporter {
         return fileURL.lastPathComponent
     }
 
-    static func openInObsidian(vault: URL, fileURL: URL) {
-        let vaultName = vault.lastPathComponent
-        let rel = vaultRelativePath(vault: vault, fileURL: fileURL)
-        // Prefer open-by-path when possible; vault name is the folder name.
+    /// Open the written note in Obsidian.
+    /// Prefer absolute `path=` (does not depend on vault display name). Fall back to vault+file.
+    static func openInObsidian(vault: URL, fileURL: URL, preferredVaultName: String = "") {
+        let absPath = fileURL.standardizedFileURL.path
+
+        // 1) Absolute path — most reliable when the vault is already known to Obsidian
+        if let pathURL = makeObsidianOpenURL(queryItems: [
+            URLQueryItem(name: "path", value: absPath),
+        ]) {
+            if NSWorkspace.shared.open(pathURL) {
+                GristLog.log("[Obsidian] open path \(absPath)")
+                return
+            }
+        }
+
+        // 2) vault name + relative file
+        let root = resolveVaultRoot(from: vault)
+        let name: String = {
+            let custom = preferredVaultName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !custom.isEmpty { return custom }
+            return root.lastPathComponent
+        }()
+        var rel = vaultRelativePath(vault: root, fileURL: fileURL)
+        if rel.lowercased().hasSuffix(".md") {
+            rel = String(rel.dropLast(3))
+        }
+        if let vaultURL = makeObsidianOpenURL(queryItems: [
+            URLQueryItem(name: "vault", value: name),
+            URLQueryItem(name: "file", value: rel),
+        ]) {
+            if NSWorkspace.shared.open(vaultURL) {
+                GristLog.log("[Obsidian] open vault=\(name) file=\(rel)")
+                return
+            }
+        }
+
+        // 3) Reveal in Finder so the user still finds the file (export already succeeded)
+        NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+        GristLog.log("[Obsidian] open URI failed; revealed in Finder \(absPath)")
+    }
+
+    private static func makeObsidianOpenURL(queryItems: [URLQueryItem]) -> URL? {
         var comps = URLComponents()
         comps.scheme = "obsidian"
         comps.host = "open"
-        comps.queryItems = [
-            URLQueryItem(name: "vault", value: vaultName),
-            URLQueryItem(name: "file", value: rel.replacingOccurrences(of: ".md", with: "")),
-        ]
-        if let url = comps.url {
-            NSWorkspace.shared.open(url)
-        }
+        comps.queryItems = queryItems
+        return comps.url
     }
 
     private static func destinationDirectory(vault: URL, subfolder: String) -> URL {
