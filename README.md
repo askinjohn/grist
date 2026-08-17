@@ -51,7 +51,9 @@ chmod +x setup.sh build_app.sh
 | **Disk image** | `./Grist.dmg` — open, drag **Grist** → **Applications** |
 | Dev install | `~/Applications/Grist.app` (launched after build) |
 
-Rebuild: `./build_app.sh`  
+**Day to day:** open **`~/Applications/Grist.app`** (or Spotlight / Dock). You do **not** leave `build_app.sh` running — the script only builds/installs.
+
+Rebuild after pulling code: `./build_app.sh`  
 
 Flags: `SKIP_DMG=1`, `SKIP_INSTALL=1`, `SKIP_LAUNCH=1`.
 
@@ -84,8 +86,8 @@ Library → **Tasks**. Extract from Enhance or the **Tasks** button; filter Open
 
 ### Export & Obsidian
 - **Export → Export Markdown…** — pick sections, Save or Copy.  
-- **Export → Send to Obsidian** — requires Settings → Integrations.  
-- Folder: export all as `.md` files, or send folder to Obsidian.
+- **Export → Send to Obsidian** — write Markdown into your vault (setup below).  
+- Sidebar: right‑click a note → **Send to Obsidian**, or right‑click a folder → **Send Folder to Obsidian…**.
 
 ### Read summary aloud
 On **AI Summary** / **Summary**, use the purple **Listen** bar → **Read summary** / **Stop**. Speech is the **macOS system voice** (no cloud, no extra TTS app).
@@ -152,12 +154,46 @@ The main UI model dropdown follows the active role (Chat / Ask everything / Enha
 
 ## Obsidian
 
-1. **Settings → Integrations → Obsidian** — enable and **Choose…** your vault.  
-2. Optional: subfolder (`Grist`), filename `{date}-{title}`, sections, auto after Enhance.  
-3. Note/meeting: **Export → Send to Obsidian** (or folder batch).  
-4. Writes `{vault}/{subfolder}/{date}-{title}.md` (never overwrites; adds `-2` if needed).  
+Send existing notes/meetings into your local Obsidian vault as Markdown. **No cloud** — Grist only writes files under the folder you choose.
 
-Config: `~/Library/Application Support/Grist/integrations.json`
+### Setup (important)
+
+1. **Settings → Integrations → Obsidian** — enable.  
+2. **Choose…** the vault folder that **contains `.obsidian`**  
+   (the folder named like your vault in Obsidian’s switcher — e.g. **`My notes`**, **not** a parent folder also called `Obsidian`).  
+3. Optional **Vault name in Obsidian** — only if open-after-send fails; must match the name in Obsidian’s vault switcher (e.g. `My notes`).  
+4. Optional: **Subfolder** (default `Grist`), filename pattern `{date}-{title}`, which sections to include, auto after Enhance, open after send.  
+5. **Save**.
+
+Config file:
+
+```text
+~/Library/Application Support/Grist/integrations.json
+```
+
+### Send an existing note
+
+1. Open the note/meeting in Grist.  
+2. Toolbar **Export** → **Send to Obsidian**  
+   **or** sidebar right‑click → **Send to Obsidian**.  
+3. File lands at: `{vault}/{subfolder}/{date}-{title}.md`  
+   (never overwrites; adds `-2`, `-3`, … if needed).  
+4. In Obsidian: open that vault → expand the subfolder (e.g. **Grist**) or use Quick switcher (⌘O).
+
+### Send a whole folder
+
+Sidebar right‑click the folder → **Send Folder to Obsidian…**.
+
+### “Vault not found” when opening
+
+The **file usually still wrote successfully**. The error is from Obsidian’s URL open:
+
+- Wrong vault folder (parent of the real vault), or  
+- Vault **display name** ≠ folder last component.
+
+**Fix:** re-**Choose…** the folder that contains `.obsidian`, set optional vault name to the switcher name (e.g. `My notes`), or turn off **Open in Obsidian after send** and open the note from Obsidian’s file list.
+
+With current builds, Grist prefers `obsidian://open?path=…` and falls back to Finder if the URI fails.
 
 ---
 
@@ -223,7 +259,9 @@ Point Claude Desktop at that binary. Tools: `list_folders`, `create_note`.
 | Model dropdown ≠ Settings | Close Settings (reloads config); dropdown edits the active role |
 | Can’t move unfiled items | Right-click → **Move to folder**, or drag onto a folder name |
 | Lost a chat | Use **History** — **New chat** keeps old threads; pin/rename from history menu |
-| Obsidian disabled / fails | Settings → Integrations → enable + vault path; Save |
+| Obsidian disabled / greyed out | Settings → Integrations → enable + **Choose…** vault (folder with `.obsidian`); Save |
+| Obsidian “Vault not found” | File may already be in vault; pick folder that contains `.obsidian`; set vault name to switcher name (e.g. My notes); or disable open-after-send |
+| Note not visible in Obsidian | Confirm path is *inside* the open vault (not a parent folder); expand **Grist** subfolder; ⌘O search title |
 | No **Read summary** / **Read aloud** | Rebuild from latest; open **~/Applications/Grist.app**; Settings → **Integrations** |
 | Read aloud silent / robotic | Install Enhanced system voices; pick them in Integrations → Read aloud; check Mac volume |
 | Settings tabs clipped / sheet too tall | Use latest build (fixed 720×560 sheet + scroll) |
