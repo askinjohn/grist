@@ -325,6 +325,20 @@ extension MainView {
             }
             Button("Cancel", role: .cancel) { }
         }
+        .alert("Rename Folder", isPresented: $showingRenameFolderAlert) {
+            TextField("Folder name", text: $renameFolderDraft)
+            Button("Rename") {
+                commitRenameFolder()
+            }
+            .disabled(renameFolderDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            Button("Cancel", role: .cancel) {
+                folderPendingRename = nil
+            }
+        } message: {
+            if let old = folderPendingRename {
+                Text("Rename “\(old)” and update all notes in this folder.")
+            }
+        }
         .sheet(isPresented: $showingDeleteFolderConfirm) {
             deleteFolderSheet
         }

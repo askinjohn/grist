@@ -229,10 +229,66 @@ extension MainView {
                 Label("Export folder as Markdown…", systemImage: "square.and.arrow.up")
             }
             Divider()
+            Button {
+                beginRenameFolder(name)
+            } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
             Button("Delete Folder…", role: .destructive) {
                 folderPendingDelete = name
                 showingDeleteFolderConfirm = true
             }
+        }
+    }
+
+    func beginRenameFolder(_ name: String) {
+        folderPendingRename = name
+        renameFolderDraft = name
+        showingRenameFolderAlert = true
+    }
+
+    @MainActor
+    func commitRenameFolder() {
+        guard let old = folderPendingRename else { return }
+        let new = renameFolderDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        showingRenameFolderAlert = false
+        folderPendingRename = nil
+        guard !new.isEmpty else {
+            statusMessage = "Folder name can’t be empty"
+            return
+        }
+        guard new != old else { return }
+
+        do {
+            let n = try db.renameFolder(from: old, to: new)
+            // Keep accordion / focus state on the new name
+            if expandedFolders.contains(old) {
+                expandedFolders.remove(old)
+                expandedFolders.insert(new)
+            }
+            if focusedFolder == old {
+                focusedFolder = new
+            }
+            if folderSummarizeName == old {
+                folderSummarizeName = new
+            }
+            if exportTargetFolder == old {
+                exportTargetFolder = new
+            }
+            loadMeetings()
+            // Refresh open item if it was in this folder
+            if let id = selectedMeeting?.id {
+                selectedMeeting = meetings.first(where: { $0.id == id }) ?? selectedMeeting
+            }
+            if n == 0 {
+                statusMessage = "Renamed “\(old)” → “\(new)”"
+            } else if n == 1 {
+                statusMessage = "Renamed “\(old)” → “\(new)” (1 item)"
+            } else {
+                statusMessage = "Renamed “\(old)” → “\(new)” (\(n) items)"
+            }
+        } catch {
+            statusMessage = error.localizedDescription
         }
     }
 

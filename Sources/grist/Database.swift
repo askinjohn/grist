@@ -377,6 +377,80 @@ class Database {
         }
         sqlite3_finalize(statement)
     }
+
+    enum FolderRenameError: LocalizedError {
+        case emptyName
+        case sameName
+        case targetExists(String)
+        case sourceMissing(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .emptyName: return "Folder name can’t be empty."
+            case .sameName: return "New name is the same as the old name."
+            case .targetExists(let n): return "A folder named “\(n)” already exists."
+            case .sourceMissing(let n): return "Folder “\(n)” was not found."
+            }
+        }
+    }
+
+    /// Rename a folder and re-point all meetings that use it.
+    /// Returns number of meetings updated.
+    @discardableResult
+    func renameFolder(from oldName: String, to newName: String) throws -> Int {
+        let old = oldName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let new = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !new.isEmpty else { throw FolderRenameError.emptyName }
+        guard old != new else { throw FolderRenameError.sameName }
+
+        let existing = fetchFolders()
+        guard existing.contains(old) else { throw FolderRenameError.sourceMissing(old) }
+        if existing.contains(new) {
+            throw FolderRenameError.targetExists(new)
+        }
+
+        // Preserve created_at when possible
+        var createdAt = Date().timeIntervalSince1970
+        let sel = "SELECT created_at FROM folders WHERE name = ?;"
+        var selStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, sel, -1, &selStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(selStmt, 1, (old as NSString).utf8String, -1, nil)
+            if sqlite3_step(selStmt) == SQLITE_ROW {
+                createdAt = sqlite3_column_double(selStmt, 0)
+            }
+        }
+        sqlite3_finalize(selStmt)
+
+        let del = "DELETE FROM folders WHERE name = ?;"
+        var delStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, del, -1, &delStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(delStmt, 1, (old as NSString).utf8String, -1, nil)
+            sqlite3_step(delStmt)
+        }
+        sqlite3_finalize(delStmt)
+
+        let ins = "INSERT INTO folders (name, created_at) VALUES (?, ?);"
+        var insStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, ins, -1, &insStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(insStmt, 1, (new as NSString).utf8String, -1, nil)
+            sqlite3_bind_double(insStmt, 2, createdAt)
+            sqlite3_step(insStmt)
+        }
+        sqlite3_finalize(insStmt)
+
+        let upd = "UPDATE meetings SET group_name = ? WHERE group_name = ?;"
+        var updStmt: OpaquePointer?
+        var changed = 0
+        if sqlite3_prepare_v2(db, upd, -1, &updStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(updStmt, 1, (new as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(updStmt, 2, (old as NSString).utf8String, -1, nil)
+            if sqlite3_step(updStmt) == SQLITE_DONE {
+                changed = Int(sqlite3_changes(db))
+            }
+        }
+        sqlite3_finalize(updStmt)
+        return changed
+    }
     
     enum FolderDeleteContentsMode {
         /// Keep notes/meetings; clear their folder → Unfiled
