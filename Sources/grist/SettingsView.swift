@@ -930,6 +930,18 @@ struct IntegrationsSettingsView: View {
                     }
 
                     VStack(alignment: .leading, spacing: 6) {
+                        Text("Vault name in Obsidian (optional)")
+                            .font(.callout)
+                        TextField("Leave blank to use folder name", text: $draft.vaultName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+                        Text("Must match the name in Obsidian’s vault switcher if “Open after send” fails with “Vault not found”. Prefer choosing the folder that contains `.obsidian`.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
                         Text("Subfolder")
                             .font(.callout)
                         TextField("Grist", text: $draft.subfolder)
@@ -972,7 +984,7 @@ struct IntegrationsSettingsView: View {
                     Toggle(isOn: $draft.openAfterExport) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Open in Obsidian after send")
-                            Text("Uses the obsidian:// URL scheme if Obsidian is installed")
+                            Text("Opens the new note via obsidian:// (falls back to Finder if vault name doesn’t match)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
