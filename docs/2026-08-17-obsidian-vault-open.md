@@ -6,11 +6,11 @@
 - Resolve vault root via `.obsidian`
 - Optional `vaultName` in integrations config / Settings
 - Finder fallback if URI fails
-- **README:** full Obsidian setup, send existing notes, “Vault not found”, troubleshooting
+- README: Obsidian setup and generic “vault not found” troubleshooting
 
-## User pitfall
+## Pitfall (generic)
 
-Choosing parent folder `…/Obsidian` while the real vault is `…/Obsidian/My notes` (name **My notes**). Files land outside the vault; open URL uses `vault=Obsidian` → Obsidian error.
+Choosing a **parent** folder of the real vault means files may be written outside the vault Obsidian has open, and `vault=` in the URI may not match the name in Obsidian’s vault switcher.
 
 ## Key files
 
