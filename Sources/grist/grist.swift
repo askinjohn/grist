@@ -5,6 +5,8 @@ import AppKit
 
 @main
 struct GristApp: App {
+    @StateObject private var recordingStatus = RecordingStatus.shared
+
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
@@ -37,36 +39,75 @@ struct GristApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
             }
         }
-        
+
         Settings {
             SettingsView()
                 .frame(width: SettingsView.sheetWidth, height: SettingsView.sheetHeight)
         }
-        
-        MenuBarExtra("Grist", systemImage: "waveform") {
-            Button("New Meeting") {
-                NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.meeting.rawValue)
+
+        MenuBarExtra {
+            menuBarContent
+        } label: {
+            // Recording: red record glyph; idle: waveform
+            Label {
+                Text(recordingStatus.isRecording
+                     ? "Grist · REC \(recordingStatus.formattedElapsed)"
+                     : "Grist")
+            } icon: {
+                Image(systemName: recordingStatus.isRecording ? "record.circle.fill" : "waveform")
             }
-            Button("New Note") {
-                NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.note.rawValue)
-            }
-            
-            Divider()
-            
-            Button("Settings...") {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-            }
-            .keyboardShortcut(",")
-            
-            Divider()
-            
-            Button("Quit Grist") {
-                NSApplication.shared.terminate(nil)
-            }
-            .keyboardShortcut("q")
+            .help(recordingStatus.isRecording
+                  ? "Recording \(recordingStatus.formattedElapsed) — click to stop or show Grist"
+                  : "Grist")
         }
+    }
+
+    @ViewBuilder
+    private var menuBarContent: some View {
+        if recordingStatus.isRecording {
+            Text("Recording \(recordingStatus.formattedElapsed)")
+                .foregroundStyle(.secondary)
+            Button("Stop Recording") {
+                NotificationCenter.default.post(name: .stopRecordingRequested, object: nil)
+                NSApp.activate(ignoringOtherApps: true)
+                NotificationCenter.default.post(name: .showGristWindowRequested, object: nil)
+            }
+            .keyboardShortcut(".", modifiers: [.command, .shift])
+            Button("Show Grist") {
+                NSApp.activate(ignoringOtherApps: true)
+                NotificationCenter.default.post(name: .showGristWindowRequested, object: nil)
+            }
+            Divider()
+        }
+
+        Button("New Meeting") {
+            NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(name: .showGristWindowRequested, object: nil)
+            NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.meeting.rawValue)
+        }
+        Button("New Note") {
+            NSApp.activate(ignoringOtherApps: true)
+            NotificationCenter.default.post(name: .showGristWindowRequested, object: nil)
+            NotificationCenter.default.post(name: .newMeetingRequested, object: CreateKind.note.rawValue)
+        }
+
+        Divider()
+
+        Button("Settings...") {
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        }
+        .keyboardShortcut(",")
+
+        Divider()
+
+        Button("Quit Grist") {
+            if recordingStatus.isRecording {
+                NotificationCenter.default.post(name: .stopRecordingRequested, object: nil)
+            }
+            NSApplication.shared.terminate(nil)
+        }
+        .keyboardShortcut("q")
     }
 }
 

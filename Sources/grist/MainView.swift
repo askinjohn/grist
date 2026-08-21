@@ -265,6 +265,18 @@ struct MainView: View {
             }
             openCreateSheet(kind: kind)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .stopRecordingRequested)) { _ in
+            if isRecording {
+                stopRecording()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .showGristWindowRequested)) { _ in
+            NSApp.activate(ignoringOtherApps: true)
+            for window in NSApp.windows where window.isVisible || window.canBecomeMain {
+                window.makeKeyAndOrderFront(nil)
+            }
+            NSApp.windows.first?.makeKeyAndOrderFront(nil)
+        }
         .onChange(of: selectedMeeting?.id) { _, id in
             suggestedGroup = nil
             if let id {
