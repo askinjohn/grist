@@ -28,6 +28,7 @@ Record meetings (mic + system audio), write notes, import articles or YouTube ca
 | **Settings** | Fixed **720×560** sheet: **General**, **AI Models**, **AI Templates**, **Integrations** — header fixed, content scrolls |
 | **DMG** | `./build_app.sh` packages `Grist.dmg` (app only — still need Ollama/models via setup) |
 | **MCP** | `list_folders`, `create_note` for Claude Desktop |
+| **Menu bar** | Waveform icon; while recording shows **record** glyph + **Stop Recording** / Show Grist |
 | **Local-first** | Ollama by default; optional OpenAI-compatible endpoint |
 
 ---

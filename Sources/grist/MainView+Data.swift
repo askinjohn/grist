@@ -893,9 +893,13 @@ extension MainView {
     func startRecording(meetingId: String) {
         isRecording = true
         recordingSeconds = 0
+        RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
         statusMessage = "Starting capture…"
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            Task { @MainActor in recordingSeconds += 1 }
+            Task { @MainActor in
+                recordingSeconds += 1
+                RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: recordingSeconds)
+            }
         }
         Task {
             do {
@@ -911,6 +915,7 @@ extension MainView {
                 await MainActor.run {
                     isRecording = false
                     recordingTimer?.invalidate()
+                    RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
                     statusMessage = "Mic error"
                 }
             }
@@ -923,6 +928,7 @@ extension MainView {
         recordingTimer = nil
         let capturedDuration = recordingSeconds
         recordingSeconds = 0
+        RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
         statusMessage = "Transcribing…"
 
         guard let m = selectedMeeting else { return }
