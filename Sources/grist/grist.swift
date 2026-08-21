@@ -5,7 +5,8 @@ import AppKit
 
 @main
 struct GristApp: App {
-    @StateObject private var recordingStatus = RecordingStatus.shared
+    // Shared singleton — use ObservedObject so Published updates refresh the menu bar label.
+    @ObservedObject private var recordingStatus = RecordingStatus.shared
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
