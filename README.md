@@ -18,6 +18,7 @@ Grist stays in the **menu bar** so you can record, stop, or act on a detected me
 
 ### Understand
 - **Enhance** — Structured AI summary from the original transcript and notes (handles long sources)  
+- **Live transcription** — While recording, a rolling transcript appears in the Transcript tab (local Whisper); a final pass still runs when you stop  
 - **Chat** — Ask about the open item, or **Ask everything** across your library with sources  
 - **Tasks** — Extract action items after Enhance, or create them manually  
 - **Read aloud** — Listen to summaries with macOS system voices (on-device)  

@@ -829,18 +829,70 @@ extension MainView {
                 }
             }
         case "transcript":
-            if let transcript = selectedMeeting?.transcript, !transcript.isEmpty {
-                MarkdownView(markdown: transcript)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                aiEmptyState(
-                    icon: "waveform",
-                    title: "No Transcript",
-                    subtitle: "Record a meeting using the toolbar button. The transcript will appear here automatically."
-                )
-            }
+            liveOrSavedTranscriptView
         default:
             EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    var liveOrSavedTranscriptView: some View {
+        let saved = selectedMeeting?.transcript ?? ""
+        let liveText = liveTranscription.liveText
+        let showLive = isRecording || liveTranscription.isRunning
+
+        if showLive {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 8, height: 8)
+                        .opacity(liveTranscription.isProcessingChunk ? 1 : 0.45)
+                    Text("Live transcript")
+                        .font(.caption.weight(.semibold))
+                    if liveTranscription.isProcessingChunk {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text("Updates every few seconds · final pass on Stop")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background(Color.red.opacity(0.06))
+
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        Text(liveText.isEmpty
+                             ? "Listening… speak or play audio. Text will appear here shortly."
+                             : liveText)
+                            .font(.body)
+                            .foregroundStyle(liveText.isEmpty ? .secondary : .primary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                            .padding(20)
+                            .id("live-tail")
+                    }
+                    .onChange(of: liveText) { _, _ in
+                        withAnimation {
+                            proxy.scrollTo("live-tail", anchor: .bottom)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if !saved.isEmpty {
+            MarkdownView(markdown: saved)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            aiEmptyState(
+                icon: "waveform",
+                title: "No Transcript",
+                subtitle: "Record a meeting using the toolbar button. A live transcript appears while recording; the final pass runs when you stop."
+            )
         }
     }
 
