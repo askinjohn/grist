@@ -894,6 +894,7 @@ extension MainView {
         isRecording = true
         recordingSeconds = 0
         RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
+        RecordingStatus.shared.clearLiveTranscript()
         statusMessage = "Starting capture…"
         recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
             Task { @MainActor in
@@ -910,12 +911,19 @@ extension MainView {
                     } else {
                         statusMessage = "Recording mic only (no system audio). Toggle Grist OFF→ON in Screen Recording, quit app, relaunch."
                     }
+                    // Rolling live transcript (non-blocking); final Whisper pass still runs on Stop.
+                    LiveTranscriptionService.shared.start(meetingId: meetingId)
+                    if selectedTab != "transcript", selectedMeeting?.id == meetingId {
+                        // Nudge users to the live view once
+                        selectedTab = "transcript"
+                    }
                 }
             } catch {
                 await MainActor.run {
                     isRecording = false
                     recordingTimer?.invalidate()
                     RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
+                    LiveTranscriptionService.shared.stop()
                     statusMessage = "Mic error"
                 }
             }
@@ -929,21 +937,36 @@ extension MainView {
         let capturedDuration = recordingSeconds
         recordingSeconds = 0
         RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
+        let liveDraft = LiveTranscriptionService.shared.liveText
+        LiveTranscriptionService.shared.stop()
         statusMessage = "Transcribing…"
 
         guard let m = selectedMeeting else { return }
+        // Show live draft immediately while final pass runs
+        if !liveDraft.isEmpty,
+           (selectedMeeting?.transcript.isEmpty ?? true)
+            || (selectedMeeting?.transcript.hasPrefix("[Error") ?? false) {
+            selectedMeeting?.transcript = liveDraft + "\n\n_Finalizing transcript…_"
+        }
+
         Task {
             await recorder.stop()
             let transcript = await transcriber.transcribe(meetingId: m.id)
             await MainActor.run {
-                selectedMeeting?.transcript = transcript
+                // Prefer final Whisper output; fall back to live draft if final failed
+                if transcript.hasPrefix("[Error"), !liveDraft.isEmpty {
+                    selectedMeeting?.transcript = liveDraft
+                } else {
+                    selectedMeeting?.transcript = transcript
+                }
+                RecordingStatus.shared.clearLiveTranscript()
                 if capturedDuration > 0 {
                     selectedMeeting?.durationSeconds = max(selectedMeeting?.durationSeconds ?? 0, capturedDuration)
                 }
                 saveMeeting()
                 statusMessage = ""
 
-                let transcriptToRAG = transcript
+                let transcriptToRAG = selectedMeeting?.transcript ?? transcript
                 if let m = selectedMeeting {
                     RAGEngine.shared.indexMeetingNow(m)
                 }

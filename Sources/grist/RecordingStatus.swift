@@ -8,6 +8,7 @@ final class RecordingStatus: ObservableObject {
 
     @Published private(set) var isRecording = false
     @Published private(set) var elapsedSeconds = 0
+    @Published private(set) var liveTranscript: String = ""
 
     private init() {}
 
@@ -18,6 +19,19 @@ final class RecordingStatus: ObservableObject {
         if self.elapsedSeconds != elapsedSeconds {
             self.elapsedSeconds = elapsedSeconds
         }
+        if !isRecording {
+            // Keep last live text until UI clears / final transcript lands
+        }
+    }
+
+    func setLiveTranscript(_ text: String) {
+        if liveTranscript != text {
+            liveTranscript = text
+        }
+    }
+
+    func clearLiveTranscript() {
+        liveTranscript = ""
     }
 
     var formattedElapsed: String {
