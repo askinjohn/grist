@@ -131,6 +131,8 @@ struct MainView: View {
     let db = Database.shared
     let recorder = AudioRecorder.shared
     let transcriber = WhisperTranscriber.shared
+    @ObservedObject var liveTranscription = LiveTranscriptionService.shared
+    @ObservedObject var recordingStatus = RecordingStatus.shared
     let ollama = OllamaClient.shared
 
     let templates = ["Standard Summary", "Daily Standup", "Sales Call", "Action Items Focus"]
