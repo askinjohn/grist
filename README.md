@@ -177,6 +177,14 @@ bun build ./index.js --compile --outfile grist-mcp-server
 
 Point Claude Desktop’s MCP config at the compiled binary under `grist/grist-mcp-server/grist-mcp-server`.
 
+| Tool | Purpose |
+|------|---------|
+| `list_folders` | List folder names |
+| `list_notes` | Search/list notes & meetings (ids for updates) |
+| `get_note` | Fetch one note by id or title |
+| `create_note` | Create a note (body → written notes) |
+| `update_note` | Update title, notes, summary, and/or folder (`append` optional) |
+
 ---
 
 ## Troubleshooting

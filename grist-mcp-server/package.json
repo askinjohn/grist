@@ -1,7 +1,7 @@
 {
   "name": "grist-mcp-server",
   "version": "1.0.0",
-  "description": "MCP server for Grist — list folders and create notes in the local meetings database",
+  "description": "MCP server for Grist — list/get/create/update notes and folders in the local meetings database",
   "type": "module",
   "main": "index.js",
   "bin": {
