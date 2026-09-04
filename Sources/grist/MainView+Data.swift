@@ -682,6 +682,66 @@ extension MainView {
         if selectedMeeting == nil { selectedMeeting = meetings.first }
     }
 
+    /// Re-read SQLite when the app becomes key again so MCP / external DB writes show up.
+    /// Keeps the open note’s in-memory editor state (edits already autosave) to avoid cursor jumps.
+    func refreshLibraryOnFocus() {
+        guard !isRefreshingLibrary else { return }
+        // Don’t fight in-progress capture / import / AI work.
+        if isRecording || isImportingUrl || isFolderSummarizing || isOrganizing
+            || isExtractingTasks || isImportingSuggestedYouTube
+            || statusMessage == "Enhancing…" || statusMessage == "Transcribing…" {
+            return
+        }
+
+        isRefreshingLibrary = true
+        let previousId = selectedMeeting?.id
+        let previousTaskId = selectedTask?.id
+
+        meetings = db.fetchActiveMeetings()
+        folders = db.fetchFolders()
+        loadTasks()
+
+        if let previousId {
+            if !meetings.contains(where: { $0.id == previousId }) {
+                selectedMeeting = meetings.first
+            }
+            // else: keep selectedMeeting as-is (already autosaved; avoids TextEditor reset)
+        } else if selectedMeeting == nil {
+            selectedMeeting = meetings.first
+        }
+
+        if let previousTaskId {
+            selectedTask = tasks.first(where: { $0.id == previousTaskId })
+        }
+
+        // SQLite is fast — hold the banner briefly so the indicator is readable.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            isRefreshingLibrary = false
+        }
+    }
+
+    var libraryRefreshBanner: some View {
+        HStack(spacing: 8) {
+            ProgressView()
+                .controlSize(.small)
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("Fetching latest notes…")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        .accessibilityLabel("Fetching latest notes")
+    }
+
     func loadTasks() {
         tasks = db.fetchTasks(includeDone: true)
         if let id = selectedTask?.id {

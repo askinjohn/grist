@@ -128,6 +128,11 @@ struct MainView: View {
     @State var renameFolderDraft = ""
     @State var showingRenameFolderAlert = false
 
+    /// True while reloading notes/tasks after the app becomes active (e.g. MCP wrote to the DB).
+    @State var isRefreshingLibrary = false
+    /// Skip the launch-time `didBecomeActive` so we don't flash the banner on cold start.
+    @State var allowFocusLibraryRefresh = false
+
     let db = Database.shared
     let recorder = AudioRecorder.shared
     let transcriber = WhisperTranscriber.shared
@@ -216,7 +221,20 @@ struct MainView: View {
                 }
             }
             refreshHealthCheck(showSheetIfNeeded: true)
+            // Launch also posts didBecomeActive — wait a beat before treating focus as a refresh.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                allowFocusLibraryRefresh = true
+            }
         }
+        .overlay(alignment: .top) {
+            if isRefreshingLibrary {
+                libraryRefreshBanner
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(20)
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: isRefreshingLibrary)
         .sheet(isPresented: $showingHealthSheet) {
             healthChecklistSheet
         }
@@ -243,6 +261,10 @@ struct MainView: View {
                 ensureConfigModelsInPicker()
                 syncModelPickerFromConfig(for: currentModelPickerRole())
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard allowFocusLibraryRefresh else { return }
+            refreshLibraryOnFocus()
         }
         .onReceive(NotificationCenter.default.publisher(for: .meetingDeleted)) { _ in
             let wasSelectedId = selectedMeeting?.id
