@@ -187,6 +187,13 @@ Point Claude Desktop’s MCP config at the compiled binary under `grist/grist-mc
 | `get_note` | Fetch one note by id or title |
 | `create_note` | Create a note (body → written notes) |
 | `update_note` | Update title, notes, summary, and/or folder (`append` optional) |
+| `list_tasks` | List tasks (`open` / `done` / `all`, optional meeting link) |
+| `get_task` | Fetch one task by id or title |
+| `create_task` | Create an open task (optional link to a meeting/note) |
+| `complete_task` | Mark a task done |
+| `reopen_task` | Mark a task open again |
+| `update_task` | Change title, notes, or source link |
+| `delete_task` | Soft-delete a task |
 
 ---
 
