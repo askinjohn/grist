@@ -19,6 +19,10 @@ struct GristApp: App {
         Task {
             await PermissionHelper.ensureMicrophonePermission()
         }
+        DispatchQueue.main.async {
+            MeetingPromptController.shared.configure()
+            MeetingDetector.shared.start()
+        }
     }
 
     var body: some Scene {
@@ -49,18 +53,43 @@ struct GristApp: App {
         MenuBarExtra {
             menuBarContent
         } label: {
-            // Recording: red record glyph; idle: waveform
             Label {
-                Text(recordingStatus.isRecording
-                     ? "Grist · REC \(recordingStatus.formattedElapsed)"
-                     : "Grist")
+                Text(menuBarTitle)
             } icon: {
-                Image(systemName: recordingStatus.isRecording ? "record.circle.fill" : "waveform")
+                Image(systemName: menuBarSymbol)
             }
-            .help(recordingStatus.isRecording
-                  ? "Recording \(recordingStatus.formattedElapsed) — click to stop or show Grist"
-                  : "Grist")
+            .help(menuBarHelp)
         }
+    }
+
+    private var menuBarTitle: String {
+        if recordingStatus.isRecording {
+            return "Grist · REC \(recordingStatus.formattedElapsed)"
+        }
+        if recordingStatus.hasDetectedMeeting {
+            return "Grist · \(recordingStatus.detectedMeetingApp)"
+        }
+        return "Grist"
+    }
+
+    private var menuBarSymbol: String {
+        if recordingStatus.isRecording {
+            return "record.circle.fill"
+        }
+        if recordingStatus.hasDetectedMeeting {
+            return "bell.badge.fill"
+        }
+        return "waveform"
+    }
+
+    private var menuBarHelp: String {
+        if recordingStatus.isRecording {
+            return "Recording \(recordingStatus.formattedElapsed) — click to stop or show Grist"
+        }
+        if recordingStatus.hasDetectedMeeting {
+            return "\(recordingStatus.detectedMeetingApp) detected — record in Grist?"
+        }
+        return "Grist"
     }
 
     @ViewBuilder
@@ -77,6 +106,26 @@ struct GristApp: App {
             Button("Show Grist") {
                 NSApp.activate(ignoringOtherApps: true)
                 NotificationCenter.default.post(name: .showGristWindowRequested, object: nil)
+            }
+            Divider()
+        } else if recordingStatus.hasDetectedMeeting {
+            Text("\(recordingStatus.detectedMeetingApp) looks active")
+                .foregroundStyle(.secondary)
+            if !recordingStatus.detectedMeetingDetail.isEmpty {
+                Text(recordingStatus.detectedMeetingDetail)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+            }
+            Button("Record in Grist") {
+                NotificationCenter.default.post(
+                    name: .recordDetectedMeetingRequested,
+                    object: recordingStatus.detectedMeetingApp
+                )
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Not now") {
+                MeetingDetector.shared.dismissCurrentPrompt()
             }
             Divider()
         }
@@ -106,6 +155,7 @@ struct GristApp: App {
             if recordingStatus.isRecording {
                 NotificationCenter.default.post(name: .stopRecordingRequested, object: nil)
             }
+            MeetingDetector.shared.stop()
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q")
