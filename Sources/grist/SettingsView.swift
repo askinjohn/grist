@@ -133,6 +133,12 @@ struct TabButton: View {
 struct GeneralSettingsView: View {
     @AppStorage("autoEnhance") private var autoEnhance = true
     @AppStorage("autoExtractTasks") private var autoExtractTasks = true
+    @AppStorage("meetingDetectEnabled") private var meetingDetectEnabled = true
+    @AppStorage("meetingDetectMode") private var meetingDetectMode = "prompt"
+    @AppStorage("meetingDetectZoom") private var meetingDetectZoom = true
+    @AppStorage("meetingDetectTeams") private var meetingDetectTeams = true
+    @AppStorage("meetingDetectMeet") private var meetingDetectMeet = true
+    @AppStorage("meetingDetectWebex") private var meetingDetectWebex = true
     @AppStorage("aiProviderType") private var aiProviderType: String = "Ollama"
     @AppStorage("OllamaURL") private var ollamaURL: String = "http://127.0.0.1:11434"
     
@@ -167,6 +173,36 @@ struct GeneralSettingsView: View {
                         subtitle: "After Enhance, pull action items into the Tasks list",
                         isOn: $autoExtractTasks
                     )
+                }
+
+                // Meeting detection
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Meeting detection")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+
+                    settingsToggleRow(
+                        title: "Detect meetings",
+                        subtitle: "Watch for Zoom, Teams, Google Meet, or Webex and offer to record in Grist.",
+                        isOn: $meetingDetectEnabled
+                    )
+                    .onChange(of: meetingDetectEnabled) { _, on in
+                        if on { MeetingDetector.shared.start() }
+                        else { MeetingDetector.shared.stop(); RecordingStatus.shared.clearDetectedMeeting() }
+                    }
+
+                    if meetingDetectEnabled {
+                        Picker("When detected", selection: $meetingDetectMode) {
+                            Text("Ask first (recommended)").tag("prompt")
+                            Text("Auto-start recording").tag("auto")
+                        }
+
+                        Toggle("Zoom", isOn: $meetingDetectZoom)
+                        Toggle("Microsoft Teams", isOn: $meetingDetectTeams)
+                        Toggle("Google Meet (browser)", isOn: $meetingDetectMeet)
+                        Toggle("Webex", isOn: $meetingDetectWebex)
+                    }
                 }
 
                 // Library search / RAG

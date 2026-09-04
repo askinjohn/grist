@@ -277,6 +277,11 @@ struct MainView: View {
             }
             NSApp.windows.first?.makeKeyAndOrderFront(nil)
         }
+        .onReceive(NotificationCenter.default.publisher(for: .recordDetectedMeetingRequested)) { note in
+            let trimmed = (note.object as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = (trimmed?.isEmpty == false) ? trimmed : nil
+            startMeetingFromDetection(appName: name)
+        }
         .onChange(of: selectedMeeting?.id) { _, id in
             suggestedGroup = nil
             if let id {

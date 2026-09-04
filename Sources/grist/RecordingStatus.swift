@@ -1,15 +1,22 @@
 import Foundation
 import Combine
 
-/// Shared recording state for the menu bar extra (lives outside `MainView`).
+/// Shared recording / detection state for the menu bar extra (lives outside `MainView`).
 @MainActor
 final class RecordingStatus: ObservableObject {
     static let shared = RecordingStatus()
 
     @Published private(set) var isRecording = false
     @Published private(set) var elapsedSeconds = 0
+    /// When a call is detected and we're waiting on the user (prompt mode).
+    @Published private(set) var detectedMeetingApp: String = ""
+    @Published private(set) var detectedMeetingDetail: String = ""
 
     private init() {}
+
+    var hasDetectedMeeting: Bool {
+        !detectedMeetingApp.isEmpty && !isRecording
+    }
 
     func sync(isRecording: Bool, elapsedSeconds: Int) {
         if self.isRecording != isRecording {
@@ -18,6 +25,19 @@ final class RecordingStatus: ObservableObject {
         if self.elapsedSeconds != elapsedSeconds {
             self.elapsedSeconds = elapsedSeconds
         }
+        if isRecording {
+            clearDetectedMeeting()
+        }
+    }
+
+    func setDetectedMeeting(appName: String, detail: String) {
+        detectedMeetingApp = appName
+        detectedMeetingDetail = detail
+    }
+
+    func clearDetectedMeeting() {
+        detectedMeetingApp = ""
+        detectedMeetingDetail = ""
     }
 
     var formattedElapsed: String {

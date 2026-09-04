@@ -881,6 +881,36 @@ extension MainView {
         }
     }
 
+    /// Create a meeting from a detected call and start recording immediately.
+    func startMeetingFromDetection(appName: String?) {
+        if isRecording {
+            statusMessage = "Already recording"
+            return
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        NotificationCenter.default.post(name: .showGristWindowRequested, object: nil)
+
+        let label = appName ?? MeetingDetector.shared.pendingPrompt?.appName ?? "Meeting"
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        let title = "\(label) · \(df.string(from: Date()))"
+
+        let payload = CreateItemPayload(
+            kind: .meeting,
+            title: title,
+            folderName: nil,
+            template: selectedTemplate,
+            model: selectedModel == "custom" ? customModelName : selectedModel,
+            autoStartRecording: true,
+            articleURL: nil
+        )
+        MeetingDetector.shared.clearPromptAfterRecordingStarted()
+        createSession(from: payload)
+        statusMessage = "Recording \(label)"
+        GristLog.log("[MeetingDetect] started recording for \(label)")
+    }
+
     // MARK: - Recording
 
     func toggleRecording() {

@@ -10,8 +10,11 @@ Record meetings, write notes, import articles or YouTube captions, and turn them
 
 ### Capture
 - **Meetings** — Microphone + system audio (calls, browsers, video apps), transcribed with Whisper  
+- **Meeting detection** — Notices Zoom / Teams / Google Meet / Webex and asks whether to record (optional auto-start)  
 - **Notes** — Markdown editor with write / preview  
 - **Articles & YouTube** — Paste one or many URLs; fetch page text or captions and attach them to a note  
+
+Grist stays in the **menu bar** so you can record, stop, or act on a detected meeting without hunting for the window.
 
 ### Understand
 - **Enhance** — Structured AI summary from the original transcript and notes (handles long sources)  
