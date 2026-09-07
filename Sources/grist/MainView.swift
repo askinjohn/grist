@@ -268,11 +268,18 @@ struct MainView: View {
             guard allowFocusLibraryRefresh else { return }
             refreshLibraryOnFocus()
         }
-        .onReceive(NotificationCenter.default.publisher(for: .meetingDeleted)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .meetingDeleted)) { note in
+            let deletedId = note.object as? String
             let wasSelectedId = selectedMeeting?.id
+            // Soft-delete one meeting/note only — never remove the parent folder.
             loadMeetings()
-            if meetings.first(where: { $0.id == wasSelectedId }) == nil {
+            if let deletedId, wasSelectedId == deletedId {
                 selectedMeeting = meetings.first
+            } else if let wasSelectedId, meetings.first(where: { $0.id == wasSelectedId }) == nil {
+                selectedMeeting = meetings.first
+            }
+            if deletedId != nil {
+                statusMessage = "Item deleted"
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .exportMeetingRequested)) { note in

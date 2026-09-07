@@ -189,6 +189,48 @@ extension MainView {
             } isTargeted: { hovering in
                 folderDropTarget = hovering ? name : (folderDropTarget == name ? nil : folderDropTarget)
             }
+            // Folder actions only on the label — if this sits on the whole
+            // DisclosureGroup, right‑clicking a note inside often shows
+            // “Delete Folder…” and wipes the folder instead of one file.
+            .contextMenu {
+                Button(expanded.wrappedValue ? "Collapse" : "Expand") {
+                    withAnimation { expanded.wrappedValue.toggle() }
+                }
+                Button("Show only this folder") {
+                    focusedFolder = name
+                    expandedFolders.insert(name)
+                    // Leave detail open, but list selection must match visible rows
+                    // (otherwise AppKit paints a ghost selected row over empty state).
+                }
+                Button("New meeting here") {
+                    focusedFolder = name
+                    openCreateSheet(kind: .meeting)
+                }
+                Button("New note here") {
+                    focusedFolder = name
+                    openCreateSheet(kind: .note)
+                }
+                Button {
+                    openFolderSummarize(name: name)
+                } label: {
+                    Label("Summarize folder…", systemImage: "sparkles")
+                }
+                Button {
+                    openExportSheet(folder: name)
+                } label: {
+                    Label("Export folder as Markdown…", systemImage: "square.and.arrow.up")
+                }
+                Divider()
+                Button {
+                    beginRenameFolder(name)
+                } label: {
+                    Label("Rename…", systemImage: "pencil")
+                }
+                Button("Delete Folder…", role: .destructive) {
+                    folderPendingDelete = name
+                    showingDeleteFolderConfirm = true
+                }
+            }
         }
         .listRowBackground(
             isDropTarget
@@ -199,45 +241,6 @@ extension MainView {
             acceptDrop(dropped, toFolder: name)
         } isTargeted: { hovering in
             folderDropTarget = hovering ? name : (folderDropTarget == name ? nil : folderDropTarget)
-        }
-        .contextMenu {
-            Button(expanded.wrappedValue ? "Collapse" : "Expand") {
-                withAnimation { expanded.wrappedValue.toggle() }
-            }
-            Button("Show only this folder") {
-                focusedFolder = name
-                expandedFolders.insert(name)
-                // Leave detail open, but list selection must match visible rows
-                // (otherwise AppKit paints a ghost selected row over empty state).
-            }
-            Button("New meeting here") {
-                focusedFolder = name
-                openCreateSheet(kind: .meeting)
-            }
-            Button("New note here") {
-                focusedFolder = name
-                openCreateSheet(kind: .note)
-            }
-            Button {
-                openFolderSummarize(name: name)
-            } label: {
-                Label("Summarize folder…", systemImage: "sparkles")
-            }
-            Button {
-                openExportSheet(folder: name)
-            } label: {
-                Label("Export folder as Markdown…", systemImage: "square.and.arrow.up")
-            }
-            Divider()
-            Button {
-                beginRenameFolder(name)
-            } label: {
-                Label("Rename…", systemImage: "pencil")
-            }
-            Button("Delete Folder…", role: .destructive) {
-                folderPendingDelete = name
-                showingDeleteFolderConfirm = true
-            }
         }
     }
 
@@ -352,9 +355,9 @@ extension MainView {
                 .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
                 Button(role: .destructive) {
                     Database.shared.softDeleteMeeting(id: meeting.id)
-                    NotificationCenter.default.post(name: .meetingDeleted, object: nil)
+                    NotificationCenter.default.post(name: .meetingDeleted, object: meeting.id)
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label(meeting.isNoteType ? "Delete Note" : "Delete Meeting", systemImage: "trash")
                 }
             }
     }
