@@ -11,6 +11,8 @@ final class RecordingStatus: ObservableObject {
     /// When a call is detected and we're waiting on the user (prompt mode).
     @Published private(set) var detectedMeetingApp: String = ""
     @Published private(set) var detectedMeetingDetail: String = ""
+    /// Rolling live ASR text while recording (cleared when UI takes the final transcript).
+    @Published private(set) var liveTranscript: String = ""
 
     private init() {}
 
@@ -28,6 +30,7 @@ final class RecordingStatus: ObservableObject {
         if isRecording {
             clearDetectedMeeting()
         }
+        // When not recording, keep last live text until UI clears / final transcript lands.
     }
 
     func setDetectedMeeting(appName: String, detail: String) {
@@ -38,6 +41,16 @@ final class RecordingStatus: ObservableObject {
     func clearDetectedMeeting() {
         detectedMeetingApp = ""
         detectedMeetingDetail = ""
+    }
+
+    func setLiveTranscript(_ text: String) {
+        if liveTranscript != text {
+            liveTranscript = text
+        }
+    }
+
+    func clearLiveTranscript() {
+        liveTranscript = ""
     }
 
     var formattedElapsed: String {

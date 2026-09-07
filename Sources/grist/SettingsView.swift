@@ -133,6 +133,7 @@ struct TabButton: View {
 struct GeneralSettingsView: View {
     @AppStorage("autoEnhance") private var autoEnhance = true
     @AppStorage("autoExtractTasks") private var autoExtractTasks = true
+    @AppStorage("liveTranscriptionEnabled") private var liveTranscriptionEnabled = true
     @AppStorage("meetingDetectEnabled") private var meetingDetectEnabled = true
     @AppStorage("meetingDetectMode") private var meetingDetectMode = "prompt"
     @AppStorage("meetingDetectZoom") private var meetingDetectZoom = true
@@ -172,6 +173,12 @@ struct GeneralSettingsView: View {
                         title: "Auto-extract tasks",
                         subtitle: "After Enhance, pull action items into the Tasks list",
                         isOn: $autoExtractTasks
+                    )
+
+                    settingsToggleRow(
+                        title: "Live transcription",
+                        subtitle: "While recording, show a rolling transcript (uses local Whisper). A final pass still runs when you stop.",
+                        isOn: $liveTranscriptionEnabled
                     )
                 }
 
