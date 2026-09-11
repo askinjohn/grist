@@ -1,4 +1,6 @@
-# Grist
+# Quern
+
+> Formerly **Grist**. Existing libraries under `~/Library/Application Support/Grist` migrate automatically to `…/Quern` on first launch.
 
 **Privacy-first AI notes and meeting assistant for macOS.**
 
@@ -14,7 +16,7 @@ Record meetings, write notes, import articles or YouTube captions, and turn them
 - **Notes** — Markdown editor with write / preview  
 - **Articles & YouTube** — Paste one or many URLs; fetch page text or captions and attach them to a note  
 
-Grist stays in the **menu bar** so you can record, stop, or act on a detected meeting without hunting for the window.
+Quern stays in the **menu bar** so you can record, stop, or act on a detected meeting without hunting for the window.
 
 ### Understand
 - **Enhance** — Structured AI summary from the original transcript and notes (handles long sources)  
@@ -34,7 +36,7 @@ Grist stays in the **menu bar** so you can record, stop, or act on a detected me
 - **Your models** — Ollama locally, or an OpenAI-compatible API per job (chat, enhance, embed, …)  
 - **MCP** — Optional tools for Claude Desktop (`list_folders`, `create_note`)  
 
-Grist also sits in the **macOS menu bar** so you can return to the app quickly while recording or after a meeting.
+Quern also sits in the **macOS menu bar** so you can return to the app quickly while recording or after a meeting.
 
 ---
 
@@ -58,19 +60,19 @@ Anyone who wants meeting notes and research in one place **without** sending eve
 ## Get started
 
 ```bash
-git clone https://github.com/askinjohn/grist.git
-cd grist
+git clone https://github.com/askinjohn/quern.git
+cd quern
 chmod +x setup.sh build_app.sh
 ./setup.sh          # local AI, Whisper, yt-dlp, optional MCP
-./build_app.sh      # builds Grist.app + Grist.dmg, installs to ~/Applications
+./build_app.sh      # builds Quern.app + Quern.dmg, installs to ~/Applications
 ```
 
-Then open **Grist** from `~/Applications/Grist.app`, Spotlight, or the Dock.
+Then open **Quern** from `~/Applications/Quern.app`, Spotlight, or the Dock.
 
 | Output | Where |
 |--------|--------|
-| App | `./Grist.app` and `~/Applications/Grist.app` |
-| Disk image | `./Grist.dmg` |
+| App | `./Quern.app` and `~/Applications/Quern.app` |
+| Disk image | `./Quern.dmg` |
 
 Rebuild after pulling updates: `./build_app.sh`  
 Useful flags: `SKIP_DMG=1` · `SKIP_INSTALL=1` · `SKIP_LAUNCH=1`
@@ -84,15 +86,15 @@ The packaged app does **not** include Ollama models. Run `./setup.sh` (or use th
 | Microphone | Your voice when recording |
 | Screen & System Audio Recording | Capture call / browser audio |
 
-After enabling Screen Recording, fully quit and reopen Grist.
+After enabling Screen Recording, fully quit and reopen Quern.
 
 ```bash
-tccutil reset ScreenCapture com.grist.meetingassistant
+tccutil reset ScreenCapture com.quern.meetingassistant
 ```
 
 ---
 
-## Using Grist
+## Using Quern
 
 1. Create a **Meeting**, **Note**, or **Article** from the sidebar.  
 2. For meetings, record (optionally start recording as soon as the meeting is created).  
@@ -106,11 +108,11 @@ tccutil reset ScreenCapture com.grist.meetingassistant
 
 ## Obsidian
 
-Grist can write Markdown files into an Obsidian vault on disk (no Grist cloud account).
+Quern can write Markdown files into an Obsidian vault on disk (no Quern cloud account).
 
 1. **Settings → Integrations → Obsidian** — enable.  
 2. Choose your **vault folder** (the directory Obsidian uses for that vault).  
-3. Optionally set a subfolder (default `Grist`) and which sections to include.  
+3. Optionally set a subfolder (default `Quern`) and which sections to include.  
 4. Open a note → **Export → Send to Obsidian**, or use the sidebar context menu.  
 
 Batch-send a folder from the folder’s context menu when you want many notes at once.
@@ -118,7 +120,7 @@ Batch-send a folder from the folder’s context menu when you want many notes at
 Config is stored at:
 
 ```text
-~/Library/Application Support/Grist/integrations.json
+~/Library/Application Support/Quern/integrations.json
 ```
 
 ---
@@ -128,7 +130,7 @@ Config is stored at:
 Edit models in **Settings → AI Models**, or in:
 
 ```text
-~/Library/Application Support/Grist/ai-config.json
+~/Library/Application Support/Quern/ai-config.json
 ```
 
 Example (local Ollama):
@@ -157,7 +159,7 @@ Example (local Ollama):
 - Default path is **local**: recordings, transcripts, SQLite library, and Ollama inference on your Mac.  
 - Obsidian export is a **local file write** into a folder you pick.  
 - Cloud AI is used only if you configure an OpenAI-compatible backend.  
-- Grist does not send telemetry.
+- Quern does not send telemetry.
 
 ---
 
@@ -165,21 +167,21 @@ Example (local Ollama):
 
 | Path | Contents |
 |------|----------|
-| `~/Library/Application Support/Grist/meetings.db` | Notes, meetings, chats, tasks, search index |
-| `~/Library/Application Support/Grist/ai-config.json` | AI backends and role → model mapping |
-| `~/Library/Application Support/Grist/integrations.json` | Obsidian and related options |
-| `~/Library/Application Support/Grist/grist.log` | Diagnostics |
+| `~/Library/Application Support/Quern/meetings.db` | Notes, meetings, chats, tasks, search index |
+| `~/Library/Application Support/Quern/ai-config.json` | AI backends and role → model mapping |
+| `~/Library/Application Support/Quern/integrations.json` | Obsidian and related options |
+| `~/Library/Application Support/Quern/quern.log` | Diagnostics |
 
 ---
 
 ## Optional: MCP for Claude Desktop
 
 ```bash
-cd grist-mcp-server && bun install
-bun build ./index.js --compile --outfile grist-mcp-server
+cd quern-mcp-server && bun install
+bun build ./index.js --compile --outfile quern-mcp-server
 ```
 
-Point Claude Desktop’s MCP config at the compiled binary under `grist/grist-mcp-server/grist-mcp-server`.
+Point Claude Desktop’s MCP config at the compiled binary under `quern/quern-mcp-server/quern-mcp-server`.
 
 | Tool | Purpose |
 |------|---------|

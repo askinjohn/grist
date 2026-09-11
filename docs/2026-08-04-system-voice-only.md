@@ -21,8 +21,8 @@ Zero extra TTS app for users; Settings usable without clipping; codebase maintai
 
 ## Key files
 
-- `Sources/grist/SpeechService.swift`, `SummarySpeechBar.swift`
-- `Sources/grist/SettingsView.swift`, `MainView.swift` (+ `MainView+*.swift`)
+- `Sources/quern/SpeechService.swift`, `SummarySpeechBar.swift`
+- `Sources/quern/SettingsView.swift`, `MainView.swift` (+ `MainView+*.swift`)
 - `README.md`
 
 ## Follow-ups

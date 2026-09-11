@@ -2,7 +2,7 @@
 
 **Status:** Planned — not implemented  
 **Priority:** After core Tasks / AI roles / RAG land on main  
-**Goal:** Optional “link and push” so users can send Grist notes, summaries, and tasks into tools they already use.
+**Goal:** Optional “link and push” so users can send Quern notes, summaries, and tasks into tools they already use.
 
 ---
 
@@ -23,7 +23,7 @@
 |--------|-----|
 | **Enable Obsidian export** | Master toggle |
 | **Vault folder path** | Absolute path to their Obsidian vault (folder picker) |
-| **Subfolder (optional)** | e.g. `Grist/` or `Meetings/` inside the vault |
+| **Subfolder (optional)** | e.g. `Quern/` or `Meetings/` inside the vault |
 | **Filename pattern** | e.g. `{date}-{title}.md` |
 | **What to export by default** | Summary only / notes / full (same section choices as Export) |
 | **After Enhance** (optional) | Auto-write Markdown into vault |
@@ -52,7 +52,7 @@ Optional later:
 ### Risks / notes
 
 - Concurrent edits if both apps rewrite the same file → prefer **new files** or **append with timestamp**, not blind overwrite.
-- Symlinked or iCloud vaults: document “vault must be a local path Grist can write”.
+- Symlinked or iCloud vaults: document “vault must be a local path Quern can write”.
 
 ---
 
@@ -72,7 +72,7 @@ User setup steps we document:
 
 1. Create a Notion integration at [notion.so/my-integrations](https://www.notion.so/my-integrations).
 2. Share the target page/database with that integration.
-3. Paste token + parent ID into Grist.
+3. Paste token + parent ID into Quern.
 
 ### How it works (v1)
 
@@ -110,7 +110,7 @@ Settings
 ### Config storage (proposed)
 
 ```text
-~/Library/Application Support/Grist/integrations.json
+~/Library/Application Support/Quern/integrations.json
 ```
 
 Example shape (illustrative):
@@ -121,7 +121,7 @@ Example shape (illustrative):
   "obsidian": {
     "enabled": false,
     "vaultPath": "",
-    "subfolder": "Grist",
+    "subfolder": "Quern",
     "filenamePattern": "{date}-{title}.md",
     "defaultSections": ["summary", "notes"],
     "autoAfterEnhance": false
@@ -155,8 +155,8 @@ Keys: prefer Keychain / env vars over committing secrets into JSON when possible
 ## Out of scope (for now)
 
 - Two-way sync / live mirror  
-- Importing entire Obsidian vault or Notion workspace into Grist  
-- Replacing Grist’s own library with a remote CMS  
+- Importing entire Obsidian vault or Notion workspace into Quern  
+- Replacing Quern’s own library with a remote CMS  
 
 ---
 
@@ -165,13 +165,13 @@ Keys: prefer Keychain / env vars over committing secrets into JSON when possible
 - User can link Obsidian with **only a folder path** and get a file in the vault.  
 - User can link Notion with **token + parent** and get a page created.  
 - Disconnect / disable removes future pushes without deleting remote content.  
-- Core Grist works fully with both integrations off.
+- Core Quern works fully with both integrations off.
 
 ---
 
 ## Open questions
 
-1. Default Obsidian subfolder name (`Grist/` vs `Inbox/`)?  
+1. Default Obsidian subfolder name (`Quern/` vs `Inbox/`)?  
 2. Notion: pages under a parent vs database rows first?  
-3. Should Tasks sync to Notion Todo / checklist or stay Grist-only until P3?  
+3. Should Tasks sync to Notion Todo / checklist or stay Quern-only until P3?  
 4. Marketing: “export” vs “sync” wording (we should say **export/push** until two-way exists).

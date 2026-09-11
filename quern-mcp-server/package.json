@@ -1,0 +1,19 @@
+{
+  "name": "quern-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP server for Quern — list/get/create/update notes and folders in the local meetings database",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "quern-mcp-server": "index.js"
+  },
+  "scripts": {
+    "build": "bun build ./index.js --compile --outfile quern-mcp-server",
+    "start": "bun run index.js"
+  },
+  "keywords": ["mcp", "quern", "meetings"],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

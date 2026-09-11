@@ -3,7 +3,7 @@ set -e
 
 # Define directories
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
-APP_DIR="$PROJECT_DIR/Grist.app"
+APP_DIR="$PROJECT_DIR/Quern.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -31,7 +31,7 @@ resolve_codesign_identity() {
     echo "-"
 }
 
-echo "🔨 Building Grist binary..."
+echo "🔨 Building Quern binary..."
 cd "$PROJECT_DIR"
 swift build -c debug
 
@@ -39,7 +39,7 @@ echo "📦 Creating macOS App Bundle structure..."
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 echo "Copying binary to App Bundle..."
-cp "$PROJECT_DIR/.build/debug/grist" "$MACOS_DIR/Grist"
+cp "$PROJECT_DIR/.build/debug/quern" "$MACOS_DIR/Quern"
 
 if [[ -f "$ICON_SRC" ]]; then
     echo "🎨 Installing app icon..."
@@ -57,11 +57,11 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>Grist</string>
+    <string>Quern</string>
     <key>CFBundleIdentifier</key>
-    <string>com.grist.meetingassistant</string>
+    <string>com.quern.meetingassistant</string>
     <key>CFBundleName</key>
-    <string>Grist</string>
+    <string>Quern</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -71,17 +71,17 @@ cat <<EOF > "$CONTENTS_DIR/Info.plist"
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>${ICON_PLIST_KEYS}
     <key>NSMicrophoneUsageDescription</key>
-    <string>Grist needs microphone access to transcribe your voice during meetings.</string>
+    <string>Quern needs microphone access to transcribe your voice during meetings.</string>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Grist needs screen recording permission to capture system audio from meeting calls.</string>
+    <string>Quern needs screen recording permission to capture system audio from meeting calls.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Grist needs speech recognition permission to natively transcribe your meetings.</string>
+    <string>Quern needs speech recognition permission to natively transcribe your meetings.</string>
 </dict>
 </plist>
 EOF
 
 # Ensure executable permissions
-chmod +x "$MACOS_DIR/Grist"
+chmod +x "$MACOS_DIR/Quern"
 
 IDENTITY="$(resolve_codesign_identity)"
 if [[ "$IDENTITY" == "-" ]]; then
@@ -102,28 +102,28 @@ echo "   Signature:"
 codesign -dv "$APP_DIR" 2>&1 | egrep 'Identifier|Authority|Signature|TeamIdentifier' || true
 
 # ---------------------------------------------------------------------------
-# DMG (shareable disk image: drag Grist.app → Applications)
+# DMG (shareable disk image: drag Quern.app → Applications)
 # SKIP_DMG=1 ./build_app.sh  — skip image
 # ---------------------------------------------------------------------------
-DMG_PATH="$PROJECT_DIR/Grist.dmg"
+DMG_PATH="$PROJECT_DIR/Quern.dmg"
 if [[ "${SKIP_DMG:-}" == "1" ]]; then
     echo "⏭  Skipping DMG (SKIP_DMG=1)"
 else
     echo "💿 Creating disk image → $DMG_PATH"
-    STAGE="$(mktemp -d "${TMPDIR:-/tmp}/grist-dmg.XXXXXX")"
+    STAGE="$(mktemp -d "${TMPDIR:-/tmp}/quern-dmg.XXXXXX")"
     cleanup_stage() { rm -rf "$STAGE"; }
     trap cleanup_stage EXIT
 
-    cp -R "$APP_DIR" "$STAGE/Grist.app"
+    cp -R "$APP_DIR" "$STAGE/Quern.app"
     # Drag-and-drop install target
     ln -s /Applications "$STAGE/Applications"
 
     # Optional readme on the volume
     cat > "$STAGE/README.txt" <<'README'
-Grist — privacy-first AI notes & meeting assistant
+Quern — privacy-first AI notes & meeting assistant
 
-1. Drag Grist.app into Applications
-2. Open Grist from Applications (or Spotlight)
+1. Drag Quern.app into Applications
+2. Open Quern from Applications (or Spotlight)
 3. Grant Microphone + Screen & System Audio Recording when prompted
 4. Fully quit and reopen after enabling Screen Recording
 
@@ -132,13 +132,13 @@ Dependencies (see project README / setup.sh):
   - Whisper / ffmpeg paths from setup
   - yt-dlp for YouTube captions (optional)
 
-https://github.com/askinjohn/grist
+https://github.com/askinjohn/quern
 README
 
     rm -f "$DMG_PATH"
     # UDZO = compressed read-only image (standard for distribution)
     hdiutil create \
-        -volname "Grist" \
+        -volname "Quern" \
         -srcfolder "$STAGE" \
         -ov \
         -format UDZO \
@@ -154,8 +154,8 @@ README
 fi
 
 # Install a stable copy under ~/Applications so TCC binds to one consistent path
-# (dev rebuilds from the repo alone often leave a stale "Grist" entry in Settings).
-STABLE_APP="$HOME/Applications/Grist.app"
+# (dev rebuilds from the repo alone often leave a stale "Quern" entry in Settings).
+STABLE_APP="$HOME/Applications/Quern.app"
 if [[ "${SKIP_INSTALL:-}" == "1" ]]; then
     echo "⏭  Skipping install to ~/Applications (SKIP_INSTALL=1)"
 else
@@ -175,7 +175,7 @@ if [[ "${SKIP_LAUNCH:-}" == "1" ]]; then
     echo "⏭  Skipping launch (SKIP_LAUNCH=1)"
 else
     echo "🛑 Terminating existing instance if running..."
-    killall "Grist" 2>/dev/null || true
+    killall "Quern" 2>/dev/null || true
     sleep 1
 
     if [[ -d "$STABLE_APP" ]]; then
@@ -194,9 +194,9 @@ echo "   App bundle:  $APP_DIR"
 [[ -d "$STABLE_APP" ]] && echo "   Installed:   $STABLE_APP"
 echo ""
 echo "   Prefer opening from: ${STABLE_APP:-$APP_DIR}"
-echo "   Screen Recording: enable Grist once, then fully Quit and reopen."
+echo "   Screen Recording: enable Quern once, then fully Quit and reopen."
 echo "   If the system keeps nagging despite the toggle, run:"
-echo "     tccutil reset ScreenCapture com.grist.meetingassistant"
-echo "   then enable Grist again and relaunch."
+echo "     tccutil reset ScreenCapture com.quern.meetingassistant"
+echo "   then enable Quern again and relaunch."
 echo ""
 echo "   Env flags: SKIP_DMG=1  SKIP_INSTALL=1  SKIP_LAUNCH=1"

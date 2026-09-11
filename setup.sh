@@ -1,15 +1,15 @@
 #!/bin/bash
-# Grist interactive setup — clone, run this once, then ./build_app.sh
+# Quern interactive setup — clone, run this once, then ./build_app.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" &> /dev/null && pwd)"
 cd "$SCRIPT_DIR"
 
-BUNDLE_ID="com.grist.meetingassistant"
-GRIST_DATA_DIR="$HOME/Library/Application Support/Grist"
+BUNDLE_ID="com.quern.meetingassistant"
+QUERN_DATA_DIR="$HOME/Library/Application Support/Quern"
 
 echo "╔══════════════════════════════════════════════╗"
-echo "║         Grist Setup Wizard (macOS)           ║"
+echo "║         Quern Setup Wizard (macOS)           ║"
 echo "║   Local AI meeting assistant — privacy first ║"
 echo "╚══════════════════════════════════════════════╝"
 echo ""
@@ -37,7 +37,7 @@ require_cmd() {
     fi
 }
 
-# Write ~/Library/Application Support/Grist/ai-config.json (roles + backends).
+# Write ~/Library/Application Support/Quern/ai-config.json (roles + backends).
 # Args: local_url, openai_url, openai_key, chat_model, enhance_model, embed_model, default_backend (local|openai)
 write_ai_config() {
     local local_url="${1:-http://127.0.0.1:11434}"
@@ -48,10 +48,10 @@ write_ai_config() {
     local embed_model="${6:-nomic-embed-text}"
     local default_backend="${7:-local}"
 
-    mkdir -p "$GRIST_DATA_DIR"
-    local config_path="$GRIST_DATA_DIR/ai-config.json"
+    mkdir -p "$QUERN_DATA_DIR"
+    local config_path="$QUERN_DATA_DIR/ai-config.json"
 
-    GRIST_DATA_DIR="$GRIST_DATA_DIR" \
+    QUERN_DATA_DIR="$QUERN_DATA_DIR" \
     LOCAL_URL="$local_url" OPENAI_URL="$openai_url" OPENAI_KEY="$openai_key" \
     CHAT_MODEL="$chat_model" ENHANCE_MODEL="$enhance_model" EMBED_MODEL="$embed_model" \
     DEFAULT_BACKEND="$default_backend" \
@@ -66,7 +66,7 @@ chat_model = os.environ["CHAT_MODEL"]
 enhance_model = os.environ["ENHANCE_MODEL"]
 embed_model = os.environ["EMBED_MODEL"]
 default_backend = os.environ["DEFAULT_BACKEND"]
-path = Path(os.environ["GRIST_DATA_DIR"]) / "ai-config.json"
+path = Path(os.environ["QUERN_DATA_DIR"]) / "ai-config.json"
 
 chat_backend = light_backend = default_backend
 embed_backend = "local"
@@ -111,7 +111,7 @@ PY
 echo "📦 Checking system prerequisites..."
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
-    echo "❌ Grist is a native macOS app (requires Apple Silicon / Intel Mac)."
+    echo "❌ Quern is a native macOS app (requires Apple Silicon / Intel Mac)."
     exit 1
 fi
 
@@ -146,14 +146,14 @@ else
     echo "⚠️ yt-dlp not found — YouTube caption import will be unavailable until you: brew install yt-dlp"
 fi
 
-mkdir -p "$GRIST_DATA_DIR"
+mkdir -p "$QUERN_DATA_DIR"
 
 # ── 1. AI provider ───────────────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════"
 echo "🤖 Step 1: AI configuration"
 echo "═══════════════════════════════════════════════"
-echo "How should Grist generate summaries and chat?"
+echo "How should Quern generate summaries and chat?"
 echo "  1) Ollama on this Mac (recommended, fully private)"
 echo "  2) Ollama on another machine (remote URL)"
 echo "  3) OpenAI-compatible API (OpenAI, SpaceXAI, LM Studio, etc.)"
@@ -272,7 +272,7 @@ if ask_yn "Do you already have whisper.cpp built on this machine?" "n"; then
     echo "✅ Custom Whisper paths saved"
 else
     echo "Building whisper.cpp with Metal (CoreML OFF — avoids missing .mlmodelc failures)..."
-    cd "$GRIST_DATA_DIR"
+    cd "$QUERN_DATA_DIR"
     if [[ ! -d whisper.cpp/.git ]]; then
         rm -rf whisper.cpp
         git clone --depth 1 https://github.com/ggml-org/whisper.cpp.git
@@ -290,7 +290,7 @@ else
 
     defaults delete "$BUNDLE_ID" whisperBinaryPath 2>/dev/null || true
     defaults delete "$BUNDLE_ID" whisperModelPath 2>/dev/null || true
-    echo "✅ Whisper ready at $GRIST_DATA_DIR/whisper.cpp"
+    echo "✅ Whisper ready at $QUERN_DATA_DIR/whisper.cpp"
     cd "$SCRIPT_DIR"
 fi
 
@@ -300,8 +300,8 @@ echo "════════════════════════�
 echo "🔌 Step 3: MCP server (Claude Desktop / agents)"
 echo "═══════════════════════════════════════════════"
 
-MCP_DIR="$SCRIPT_DIR/grist-mcp-server"
-MCP_BIN="$MCP_DIR/grist-mcp-server"
+MCP_DIR="$SCRIPT_DIR/quern-mcp-server"
+MCP_BIN="$MCP_DIR/quern-mcp-server"
 
 ensure_bun() {
     if command -v bun &>/dev/null; then
@@ -320,8 +320,8 @@ build_mcp() {
     echo "Installing MCP dependencies..."
     bun install
     echo "Compiling standalone MCP binary..."
-    bun build ./index.js --compile --outfile grist-mcp-server
-    chmod +x grist-mcp-server
+    bun build ./index.js --compile --outfile quern-mcp-server
+    chmod +x quern-mcp-server
     cd "$SCRIPT_DIR"
     echo "✅ MCP binary: $MCP_BIN"
 }
@@ -342,15 +342,15 @@ except json.JSONDecodeError:
     config = {}
 
 config.setdefault("mcpServers", {})
-config["mcpServers"]["grist"] = {"command": mcp_path, "args": []}
+config["mcpServers"]["quern"] = {"command": mcp_path, "args": []}
 os.makedirs(os.path.dirname(config_path), exist_ok=True)
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
-print(f"Wrote grist MCP entry → {config_path}")
+print(f"Wrote quern MCP entry → {config_path}")
 PY
 }
 
-if ask_yn "Build the Grist MCP server (lets Claude Desktop read/write notes)?" "y"; then
+if ask_yn "Build the Quern MCP server (lets Claude Desktop read/write notes)?" "y"; then
     build_mcp
 
     if ask_yn "Configure Claude Desktop automatically?" "y"; then
@@ -362,10 +362,10 @@ if ask_yn "Build the Grist MCP server (lets Claude Desktop read/write notes)?" "
         fi
     else
         echo "Manual Claude Desktop config snippet:"
-        echo "  \"grist\": { \"command\": \"$MCP_BIN\", \"args\": [] }"
+        echo "  \"quern\": { \"command\": \"$MCP_BIN\", \"args\": [] }"
     fi
 else
-    echo "Skipped MCP build. You can re-run setup later or: cd grist-mcp-server && bun install && bun build ./index.js --compile --outfile grist-mcp-server"
+    echo "Skipped MCP build. You can re-run setup later or: cd quern-mcp-server && bun install && bun build ./index.js --compile --outfile quern-mcp-server"
 fi
 
 # ── 4. Optional first build ──────────────────────────────────────────
@@ -374,7 +374,7 @@ echo "════════════════════════�
 echo "🚀 Step 4: Build the app"
 echo "═══════════════════════════════════════════════"
 
-if ask_yn "Build and launch Grist now?" "y"; then
+if ask_yn "Build and launch Quern now?" "y"; then
     chmod +x "$SCRIPT_DIR/build_app.sh"
     "$SCRIPT_DIR/build_app.sh"
 else
@@ -389,12 +389,12 @@ echo "╚═══════════════════════�
 echo ""
 echo "First-run permissions (required once):"
 echo "  • Microphone          — allow when prompted"
-echo "  • Screen & System Audio Recording — enable Grist, then quit & relaunch"
+echo "  • Screen & System Audio Recording — enable Quern, then quit & relaunch"
 echo "    (needed to capture Zoom/Meet/YouTube audio, not just the mic)"
 echo ""
-echo "App installs to:  ~/Applications/Grist.app"
-echo "Data directory:   $GRIST_DATA_DIR"
-echo "AI config:        $GRIST_DATA_DIR/ai-config.json"
+echo "App installs to:  ~/Applications/Quern.app"
+echo "Data directory:   $QUERN_DATA_DIR"
+echo "AI config:        $QUERN_DATA_DIR/ai-config.json"
 echo "  (Settings → AI Models — change chat vs enhance models anytime)"
 echo "Re-run setup anytime:  ./setup.sh"
 echo ""

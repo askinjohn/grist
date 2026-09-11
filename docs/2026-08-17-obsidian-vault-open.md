@@ -14,6 +14,6 @@ Choosing a **parent** folder of the real vault means files may be written outsid
 
 ## Key files
 
-- `Sources/grist/IntegrationsConfig.swift`
-- `Sources/grist/SettingsView.swift`
+- `Sources/quern/IntegrationsConfig.swift`
+- `Sources/quern/SettingsView.swift`
 - `README.md`

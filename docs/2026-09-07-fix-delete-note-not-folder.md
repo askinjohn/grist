@@ -16,6 +16,6 @@ Folder actions (including destructive Delete Folder) were attached to the whole 
 
 ## Key files
 
-- `Sources/grist/MainView+Config.swift`
-- `Sources/grist/LibrarySidebarRows.swift`
-- `Sources/grist/MainView.swift`
+- `Sources/quern/MainView+Config.swift`
+- `Sources/quern/LibrarySidebarRows.swift`
+- `Sources/quern/MainView.swift`

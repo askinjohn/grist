@@ -1,0 +1,107 @@
+import Foundation
+
+/// Shared Application Support layout for Quern, with one-time migration from Grist.
+enum QuernPaths {
+    static let folderName = "Quern"
+    /// Previous product name — data lived here before the rename.
+    static let legacyFolderName = "Grist"
+
+    /// `~/Library/Application Support/Quern` — migrates from `…/Grist` on first use when needed.
+    static var supportDirectory: URL {
+        migrateLegacyIfNeeded()
+        let url = applicationSupportRoot.appendingPathComponent(folderName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    static var meetingsDB: URL {
+        supportDirectory.appendingPathComponent("meetings.db")
+    }
+
+    static var logFile: URL {
+        supportDirectory.appendingPathComponent("quern.log")
+    }
+
+    static var whisperDirectory: URL {
+        supportDirectory.appendingPathComponent("whisper.cpp", isDirectory: true)
+    }
+
+    // MARK: - Migration
+
+    private static var applicationSupportRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+    }
+
+    /// If Quern’s folder is missing (or empty of `meetings.db`) and a Grist folder exists, move/copy it over.
+    static func migrateLegacyIfNeeded() {
+        let fm = FileManager.default
+        let root = applicationSupportRoot
+        let quern = root.appendingPathComponent(folderName, isDirectory: true)
+        let grist = root.appendingPathComponent(legacyFolderName, isDirectory: true)
+        let flag = quern.appendingPathComponent(".migrated-from-grist")
+
+        // Already migrated (or never needed).
+        if fm.fileExists(atPath: flag.path) { return }
+
+        let quernExists = fm.fileExists(atPath: quern.path)
+        let gristExists = fm.fileExists(atPath: grist.path)
+        if !gristExists {
+            if quernExists {
+                fm.createFile(atPath: flag.path, contents: nil)
+            }
+            return
+        }
+
+        let quernDB = quern.appendingPathComponent("meetings.db")
+        let gristDB = grist.appendingPathComponent("meetings.db")
+        let quernHasDB = fm.fileExists(atPath: quernDB.path)
+        let gristHasDB = fm.fileExists(atPath: gristDB.path)
+
+        // Full folder rename when Quern does not exist yet.
+        if !quernExists {
+            do {
+                try fm.moveItem(at: grist, to: quern)
+                renameLegacyLog(in: quern)
+                fm.createFile(atPath: flag.path, contents: nil)
+                print("[Quern] Migrated Application Support/Grist → Quern")
+            } catch {
+                print("[Quern] Migration move failed: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        // Quern exists but has no DB yet — copy core files from Grist.
+        if !quernHasDB, gristHasDB {
+            for name in ["meetings.db", "ai-config.json", "integrations.json", "whisper.cpp"] {
+                let src = grist.appendingPathComponent(name)
+                let dst = quern.appendingPathComponent(name)
+                guard fm.fileExists(atPath: src.path), !fm.fileExists(atPath: dst.path) else { continue }
+                do {
+                    try fm.copyItem(at: src, to: dst)
+                } catch {
+                    print("[Quern] Migration copy \(name) failed: \(error.localizedDescription)")
+                }
+            }
+            // Recordings / other loose files
+            if let kids = try? fm.contentsOfDirectory(at: grist, includingPropertiesForKeys: nil) {
+                for src in kids {
+                    let dst = quern.appendingPathComponent(src.lastPathComponent)
+                    guard !fm.fileExists(atPath: dst.path) else { continue }
+                    try? fm.copyItem(at: src, to: dst)
+                }
+            }
+            renameLegacyLog(in: quern)
+            print("[Quern] Copied library data from Application Support/Grist")
+        }
+
+        fm.createFile(atPath: flag.path, contents: nil)
+    }
+
+    private static func renameLegacyLog(in dir: URL) {
+        let fm = FileManager.default
+        let oldLog = dir.appendingPathComponent("grist.log")
+        let newLog = dir.appendingPathComponent("quern.log")
+        guard fm.fileExists(atPath: oldLog.path), !fm.fileExists(atPath: newLog.path) else { return }
+        try? fm.moveItem(at: oldLog, to: newLog)
+    }
+}
