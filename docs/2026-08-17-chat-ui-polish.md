@@ -14,4 +14,4 @@ Refreshed the Chat tab for item / library / selection scopes:
 
 ## Files
 
-- `Sources/grist/ChatView.swift`
+- `Sources/quern/ChatView.swift`

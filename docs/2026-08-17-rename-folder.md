@@ -10,7 +10,7 @@ Folders could only be created/deleted; rename was missing for reorganizing the l
 
 ## Key files
 
-- `Sources/grist/Database.swift` — `renameFolder(from:to:)`
-- `Sources/grist/MainView+Config.swift` — context menu + commit handler
-- `Sources/grist/MainView+Sidebar.swift` — rename alert
-- `Sources/grist/MainView.swift` — rename state
+- `Sources/quern/Database.swift` — `renameFolder(from:to:)`
+- `Sources/quern/MainView+Config.swift` — context menu + commit handler
+- `Sources/quern/MainView+Sidebar.swift` — rename alert
+- `Sources/quern/MainView.swift` — rename state

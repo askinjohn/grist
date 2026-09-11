@@ -2,7 +2,7 @@
 
 ## What
 
-When Grist becomes active again (e.g. after using Claude/Cursor MCP tools), re-read notes, folders, and tasks from SQLite and show a short top-of-window “Fetching latest notes…” indicator.
+When Quern becomes active again (e.g. after using Claude/Cursor MCP tools), re-read notes, folders, and tasks from SQLite and show a short top-of-window “Fetching latest notes…” indicator.
 
 ## Why
 
@@ -17,8 +17,8 @@ MCP writes directly to `meetings.db` outside the app process. The UI kept an in-
 
 ## Key files
 
-- `Sources/grist/MainView.swift` — state, overlay banner, `didBecomeActive` handler
-- `Sources/grist/MainView+Data.swift` — `refreshLibraryOnFocus()`, `libraryRefreshBanner`
+- `Sources/quern/MainView.swift` — state, overlay banner, `didBecomeActive` handler
+- `Sources/quern/MainView+Data.swift` — `refreshLibraryOnFocus()`, `libraryRefreshBanner`
 
 ## Follow-ups
 

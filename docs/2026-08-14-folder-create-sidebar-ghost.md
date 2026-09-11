@@ -17,4 +17,4 @@ Opening a meeting, then creating a folder showed **Empty folder** with a floatin
 
 ## Key files
 
-- `Sources/grist/MainView+Sidebar.swift`
+- `Sources/quern/MainView+Sidebar.swift`
