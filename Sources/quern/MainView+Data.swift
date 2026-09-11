@@ -234,6 +234,73 @@ extension MainView {
         return found
     }
 
+    /// Pick local .md / .txt / .pdf files and append their text into the open note/meeting body.
+    @MainActor
+    func attachFilesToCurrentNote() {
+        guard selectedMeeting != nil else {
+            statusMessage = "Select a note or meeting first"
+            return
+        }
+        guard !isAttachingFiles else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Attach files to note"
+        panel.message = "Choose Markdown, text, or PDF files. Their text is appended so Enhance and Chat can read it."
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = NoteFileImporter.allowedContentTypes
+        panel.canCreateDirectories = false
+
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+
+        isAttachingFiles = true
+        statusMessage = panel.urls.count == 1 ? "Attaching file…" : "Attaching \(panel.urls.count) files…"
+
+        var attached = 0
+        var failures: [String] = []
+
+        for url in panel.urls {
+            let accessed = url.startAccessingSecurityScopedResource()
+            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let body = try NoteFileImporter.extractText(from: url)
+                let block = NoteFileImporter.attachmentBlock(filename: url.lastPathComponent, body: body)
+                selectedMeeting?.manualNotes = (selectedMeeting?.manualNotes ?? "") + block
+                attached += 1
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                QuernLog.log("[Attach] failed \(url.lastPathComponent): \(error.localizedDescription)")
+            }
+        }
+
+        if attached > 0 {
+            saveMeeting()
+            selectedTab = "notes"
+            if selectedMeeting?.isNoteType == true {
+                noteShowPreview = false
+            }
+            if let m = selectedMeeting {
+                RAGEngine.shared.scheduleIndex(meeting: m)
+            }
+        }
+
+        isAttachingFiles = false
+        if attached > 0, failures.isEmpty {
+            statusMessage = attached == 1 ? "File attached" : "\(attached) files attached"
+        } else if attached > 0 {
+            statusMessage = "Attached \(attached); \(failures.count) failed"
+            importErrorMessage = failures.joined(separator: "\n")
+            importErrorOpenURL = nil
+            showingImportErrorAlert = true
+        } else {
+            statusMessage = "Attach failed"
+            importErrorMessage = failures.joined(separator: "\n")
+            importErrorOpenURL = nil
+            showingImportErrorAlert = true
+        }
+    }
+
     func importFromUrl() {
         logImport("importFromUrl called with string: '\(importUrlString)' append=\(importAppendToSelected)")
         let urls = Self.parseImportURLs(from: importUrlString)

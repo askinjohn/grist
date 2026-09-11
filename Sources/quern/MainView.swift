@@ -38,6 +38,8 @@ struct MainView: View {
     @State var importAppendToSelected = false
     @State var showingImportErrorAlert = false
     @State var importErrorMessage = ""
+    /// Local .md / .txt / .pdf attach into the open note body.
+    @State var isAttachingFiles = false
     /// When set, Import Failed alert offers “Open in Browser”.
     @State var importErrorOpenURL: String? = nil
     /// After a web article import: offer to pull linked YouTube captions.

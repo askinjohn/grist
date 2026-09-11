@@ -404,6 +404,14 @@ extension MainView {
             .disabled(isImportingUrl || selectedMeeting == nil)
 
             Button {
+                attachFilesToCurrentNote()
+            } label: {
+                Label(isAttachingFiles ? "Attaching…" : "Attach file", systemImage: "doc.badge.plus")
+            }
+            .help("Append .md, .txt, or .pdf text into this note for AI")
+            .disabled(isAttachingFiles || selectedMeeting == nil)
+
+            Button {
                 let title = selectedMeeting?.title ?? "Note"
                 startSelectionChat(text: noteSelectedText, title: title)
             } label: {
@@ -594,6 +602,15 @@ extension MainView {
                 .controlSize(.small)
                 .help("Import an article or YouTube captions into this meeting")
                 .disabled(isImportingUrl || selectedMeeting == nil)
+                Button {
+                    attachFilesToCurrentNote()
+                } label: {
+                    Label(isAttachingFiles ? "Attaching…" : "Attach file", systemImage: "doc.badge.plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .help("Append .md, .txt, or .pdf text into these notes for AI")
+                .disabled(isAttachingFiles || selectedMeeting == nil)
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -715,6 +732,15 @@ extension MainView {
             }
             .help("Append article or YouTube content to this meeting")
             .disabled(isImportingUrl || selectedMeeting == nil)
+            .controlSize(.regular)
+
+            Button {
+                attachFilesToCurrentNote()
+            } label: {
+                Label(isAttachingFiles ? "Attaching…" : "Attach file", systemImage: "doc.badge.plus")
+            }
+            .help("Append .md, .txt, or .pdf text into notes for AI")
+            .disabled(isAttachingFiles || selectedMeeting == nil)
             .controlSize(.regular)
 
             // Enhance button & Auto toggle
@@ -1064,6 +1090,19 @@ extension MainView {
         ToolbarItemGroup(placement: .primaryAction) {
             if let m = selectedMeeting {
                 Menu {
+                    Button {
+                        attachFilesToCurrentNote()
+                    } label: {
+                        Label("Attach File…", systemImage: "doc.badge.plus")
+                    }
+                    .disabled(isAttachingFiles)
+                    Button {
+                        openImportSheet(appendToCurrent: true)
+                    } label: {
+                        Label("Add URL…", systemImage: "link.badge.plus")
+                    }
+                    .disabled(isImportingUrl)
+                    Divider()
                     Button {
                         openExportSheet(meeting: m)
                     } label: {
