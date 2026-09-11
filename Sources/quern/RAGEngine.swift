@@ -10,14 +10,40 @@ class RAGEngine: @unchecked Sendable {
     private(set) var lastIndexError: String?
     private(set) var isReindexing = false
     private(set) var reindexProgress: (done: Int, total: Int) = (0, 0)
+    /// When true (Enhance in flight), skip new embed work so Ollama isn’t contended.
+    private(set) var indexingPaused = false
+    private var pausedMeetingIds: Set<String> = []
 
     private init() {}
+
+    /// Call around Enhance so local Ollama isn’t flooded with embed jobs.
+    func pauseIndexingForEnhance() {
+        indexingPaused = true
+        QuernLog.log("[RAGEngine] indexing paused (Enhance)")
+    }
+
+    func resumeIndexingAfterEnhance() {
+        indexingPaused = false
+        let pending = pausedMeetingIds
+        pausedMeetingIds.removeAll()
+        QuernLog.log("[RAGEngine] indexing resumed; deferred=\(pending.count)")
+        for id in pending {
+            if let m = Database.shared.getMeeting(id: id) {
+                scheduleIndex(meeting: m, delayNanoseconds: 2_000_000_000)
+            }
+        }
+    }
 
     // MARK: - Index one item
 
     /// Embed all useful fields for a note/meeting. Replaces previous chunks for that id.
     func indexMeeting(_ meeting: Meeting) async {
         let id = meeting.id
+        if indexingPaused {
+            pausedMeetingIds.insert(id)
+            print("[RAGEngine] Defer indexing \(id) — Enhance in progress")
+            return
+        }
         print("[RAGEngine] Indexing \(id) “\(meeting.title)”")
 
         Database.shared.deleteChunks(forMeetingId: id)
@@ -58,6 +84,10 @@ class RAGEngine: @unchecked Sendable {
     /// Debounced re-index (typing in notes shouldn't hit Ollama every keystroke).
     func scheduleIndex(meeting: Meeting, delayNanoseconds: UInt64 = 1_500_000_000) {
         let id = meeting.id
+        if indexingPaused {
+            pausedMeetingIds.insert(id)
+            return
+        }
         debounceTasks[id]?.cancel()
         debounceTasks[id] = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delayNanoseconds)
@@ -71,6 +101,10 @@ class RAGEngine: @unchecked Sendable {
 
     /// Immediate index after import / enhance / recording (no debounce).
     func indexMeetingNow(_ meeting: Meeting) {
+        if indexingPaused {
+            pausedMeetingIds.insert(meeting.id)
+            return
+        }
         Task {
             await indexMeeting(meeting)
         }
