@@ -66,7 +66,9 @@ extension MainView {
             return
         }
 
-        statusMessage = "Enhancing…"
+        statusMessage = transcriptSource.count > 12_000
+            ? "Enhancing long note (chunked)…"
+            : "Enhancing…"
         // Notes: use a readable summary style even if template is the type marker "Note"
         let templateName = (m.template == "Note" || m.template.isEmpty) ? "Standard Summary" : m.template
         let customPrompt = customTemplates.first(where: { $0.name == m.template || $0.name == templateName })?.prompt
@@ -74,10 +76,18 @@ extension MainView {
         let meetingId = m.id
         QuernLog.log("[Enhance] calling Ollama template=\(templateName) customPrompt=\(customPrompt != nil) applyTitle=\(applyTitle)")
 
+        // Free Ollama from RAG embeds while Enhance runs (large Attach files reindex heavily).
+        RAGEngine.shared.pauseIndexingForEnhance()
+
         Task {
             let t0 = Date()
+            defer {
+                Task { @MainActor in
+                    RAGEngine.shared.resumeIndexingAfterEnhance()
+                }
+            }
             do {
-                // Single model call: TITLE: … + markdown summary from original content
+                // Single model call (or map-reduce for long Attach / notes): TITLE + markdown
                 let result = try await ollama.enhance(
                     transcript: transcriptSource,
                     notes: notesSource,
@@ -135,7 +145,12 @@ extension MainView {
                 let elapsed = Date().timeIntervalSince(t0)
                 QuernLog.log("[Enhance] FAILED after \(String(format: "%.1f", elapsed))s model=\(model): \(error.localizedDescription)")
                 await MainActor.run {
-                    statusMessage = "Error: \(error.localizedDescription)"
+                    let msg = error.localizedDescription
+                    if msg.localizedCaseInsensitiveContains("timed out") {
+                        statusMessage = "Enhance timed out — large note; try again (chunked) or free Ollama"
+                    } else {
+                        statusMessage = "Error: \(msg)"
+                    }
                 }
             }
         }

@@ -280,8 +280,9 @@ extension MainView {
             if selectedMeeting?.isNoteType == true {
                 noteShowPreview = false
             }
+            // Delay reindex so an immediate Enhance isn’t starved by embed jobs.
             if let m = selectedMeeting {
-                RAGEngine.shared.scheduleIndex(meeting: m)
+                RAGEngine.shared.scheduleIndex(meeting: m, delayNanoseconds: 8_000_000_000)
             }
         }
 

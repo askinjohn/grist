@@ -332,10 +332,10 @@ class OllamaClient: @unchecked Sendable {
         }
     }
 
-    /// Soft cap so local models (8k–32k context) stay usable. Long YouTube mega-episodes
-    /// are ~200k+ chars; without this the model truncates randomly and often invents a topic.
-    private static let enhanceMaxTranscriptChars = 28_000
-    private static let enhanceMaxNotesChars = 4_000
+    /// Soft cap for a *single* enhance call. Local Ollama often runs with ~4k–8k context;
+    /// ~25k-char study notes (common after Attach file) must not go in one shot.
+    private static let enhanceMaxTranscriptChars = 12_000
+    private static let enhanceMaxNotesChars = 3_000
 
     /// Keep head + middle + tail so long podcasts still get structure + ending.
     static func truncateForEnhance(_ text: String, maxChars: Int, label: String) -> String {
@@ -411,8 +411,10 @@ class OllamaClient: @unchecked Sendable {
         return truncateForEnhance(n, maxChars: enhanceMaxNotesChars, label: "notes")
     }
 
-    private static let enhanceChunkChars = 12_000
-    private static let enhanceMapReduceThreshold = 32_000
+    /// Chunk size for map-reduce (keeps each Ollama call inside a modest context window).
+    private static let enhanceChunkChars = 8_000
+    /// Above this, enhance map-reduces instead of one giant prompt (Attach file / long notes).
+    private static let enhanceMapReduceThreshold = 12_000
 
     private static func sectionGuide(for template: String) -> String {
         switch template {
@@ -505,7 +507,7 @@ class OllamaClient: @unchecked Sendable {
             Part \(i + 1)/\(chunks.count):
             \(chunk)
             """
-            let partial = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 120)
+            let partial = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 150)
             partials.append("### Part \(i + 1)\n\(partial)")
             QuernLog.log("[OllamaClient] enhance map chunk \(i + 1)/\(chunks.count) → \(partial.count) chars")
         }
@@ -601,7 +603,9 @@ class OllamaClient: @unchecked Sendable {
         }
 
         QuernLog.log("[OllamaClient] enhance promptChars=\(prompt.count) mapReduce=\(mapReduce)")
-        let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: 180)
+        // Final reduce / single-pass: allow longer when the prompt is still large.
+        let timeout: TimeInterval = prompt.count > 16_000 ? 240 : 180
+        let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: timeout)
         let parsed = Self.parseEnhanceOutput(raw)
         QuernLog.log("[OllamaClient] enhance parsed title=\(parsed.title ?? "(none)") summaryChars=\(parsed.summary.count)")
         let sumPrev = parsed.summary.replacingOccurrences(of: "\n", with: " ")
