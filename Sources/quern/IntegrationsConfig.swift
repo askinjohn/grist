@@ -1,15 +1,41 @@
 import Foundation
 import AppKit
 
-/// User integrations (Obsidian, later Notion). Local file only.
+/// User integrations (Obsidian, companion sync, later Notion). Local file only.
 struct IntegrationsFile: Codable, Equatable {
     var version: Int
     var obsidian: ObsidianIntegrationConfig
+    var companion: CompanionSyncConfig
 
     static let `default` = IntegrationsFile(
-        version: 1,
-        obsidian: .default
+        version: 2,
+        obsidian: .default,
+        companion: .default
     )
+
+    enum CodingKeys: String, CodingKey {
+        case version, obsidian, companion
+    }
+
+    init(version: Int, obsidian: ObsidianIntegrationConfig, companion: CompanionSyncConfig) {
+        self.version = version
+        self.obsidian = obsidian
+        self.companion = companion
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        obsidian = try c.decodeIfPresent(ObsidianIntegrationConfig.self, forKey: .obsidian) ?? .default
+        companion = try c.decodeIfPresent(CompanionSyncConfig.self, forKey: .companion) ?? .default
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(obsidian, forKey: .obsidian)
+        try c.encode(companion, forKey: .companion)
+    }
 }
 
 struct ObsidianIntegrationConfig: Codable, Equatable {
@@ -191,6 +217,13 @@ final class IntegrationsConfigManager: ObservableObject {
     func updateObsidian(_ block: (inout ObsidianIntegrationConfig) -> Void) {
         var f = config
         block(&f.obsidian)
+        _ = saveConfig(f)
+    }
+
+    func updateCompanion(_ block: (inout CompanionSyncConfig) -> Void) {
+        var f = config
+        block(&f.companion)
+        f.version = max(f.version, 2)
         _ = saveConfig(f)
     }
 

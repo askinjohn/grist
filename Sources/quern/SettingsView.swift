@@ -912,8 +912,12 @@ struct TemplatesSettingsView: View {
 
 struct IntegrationsSettingsView: View {
     @ObservedObject private var integrations = IntegrationsConfigManager.shared
+    @ObservedObject private var companionSync = CompanionSyncManager.shared
     @State private var draft: ObsidianIntegrationConfig = .default
+    @State private var companionDraft: CompanionSyncConfig = .default
+    @State private var companionToken: String = ""
     @State private var status = ""
+    @State private var companionStatus = ""
 
     var body: some View {
         ScrollView {
@@ -921,10 +925,109 @@ struct IntegrationsSettingsView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Integrations")
                         .font(.title3.weight(.semibold))
-                    Text("Optional bridges to apps on your machine. Nothing leaves this Mac unless you connect a cloud service later.")
+                    Text("Optional bridges. Local by default — companion sync only runs when you enable it and point at your own server.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+
+                // Companion sync card
+                VStack(alignment: .leading, spacing: 16) {
+                    HStack(spacing: 12) {
+                        QuernIconBadge(systemName: "iphone.and.arrow.forward", tint: .blue, size: 40)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Companion sync")
+                                .font(.headline)
+                            Text("Optionally push notes & tasks to your server for a mobile reader")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Toggle("", isOn: $companionDraft.enabled)
+                            .toggleStyle(.switch)
+                            .labelsHidden()
+                    }
+
+                    Divider()
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Server base URL")
+                            .font(.callout)
+                        TextField("https://sync.example.com or http://192.168.1.10:8787", text: $companionDraft.baseURL)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("API token (Keychain)")
+                            .font(.callout)
+                        SecureField("Same value as QUERN_SYNC_TOKEN on the server", text: $companionToken)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: .infinity)
+                        Text("Stored in macOS Keychain — not written to integrations.json.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Toggle("Sync note body", isOn: $companionDraft.syncNotesBody)
+                    Toggle("Sync AI summary", isOn: $companionDraft.syncSummary)
+                    Toggle("Sync transcript", isOn: $companionDraft.syncTranscript)
+                    Toggle("Sync tasks", isOn: $companionDraft.syncTasks)
+                    Toggle(isOn: $companionDraft.autoSyncOnSave) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-sync after save")
+                            Text("Debounced push when you edit notes locally")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if !companionSync.lastStatus.isEmpty || !companionStatus.isEmpty {
+                        Text(companionStatus.isEmpty ? companionSync.lastStatus : companionStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let at = companionSync.lastSyncedAt {
+                        Text("Last sync: \(at.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    HStack {
+                        Button("Test connection") {
+                            Task {
+                                await companionSync.testConnection()
+                                companionStatus = companionSync.lastStatus
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(companionDraft.baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                        Button("Sync now") {
+                            Task {
+                                await companionSync.pushNow(reason: "manual")
+                                companionStatus = companionSync.lastStatus
+                            }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!companionDraft.enabled || companionSync.isSyncing)
+
+                        Spacer()
+                        Button("Save") {
+                            companionSync.setToken(companionToken)
+                            integrations.updateCompanion { $0 = companionDraft }
+                            companionStatus = integrations.lastMessage
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                    }
+                }
+                .padding(18)
+                .background(Color.primary.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.blue.opacity(0.2), lineWidth: 1)
+                )
 
                 // Obsidian card
                 VStack(alignment: .leading, spacing: 16) {
@@ -1071,6 +1174,8 @@ struct IntegrationsSettingsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onAppear {
             draft = integrations.config.obsidian
+            companionDraft = integrations.config.companion
+            companionToken = companionSync.token()
         }
     }
 }
