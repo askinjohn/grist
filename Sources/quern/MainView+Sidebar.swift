@@ -271,7 +271,7 @@ extension MainView {
         .safeAreaInset(edge: .bottom) {
             sidebarFooter
         }
-        .alert("Import Failed", isPresented: $showingImportErrorAlert) {
+        .alert("Quern", isPresented: $showingImportErrorAlert) {
             if let openURL = importErrorOpenURL, let url = URL(string: openURL) {
                 Button("Open in Browser") {
                     NSWorkspace.shared.open(url)

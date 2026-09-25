@@ -1048,6 +1048,25 @@ extension MainView {
     }
 
     func startRecording(meetingId: String) {
+        // Fail *before* a long meeting if Whisper can’t launch (missing model / broken dylibs).
+        statusMessage = "Checking Whisper…"
+        Task {
+            let preflight = await WhisperTranscriber.shared.preflightForRecording()
+            await MainActor.run {
+                if case .failed(let message) = preflight {
+                    statusMessage = message
+                    importErrorMessage = message
+                    importErrorOpenURL = nil
+                    showingImportErrorAlert = true
+                    QuernLog.log("[Record] blocked — Whisper preflight failed")
+                    return
+                }
+                beginRecordingAfterPreflight(meetingId: meetingId)
+            }
+        }
+    }
+
+    private func beginRecordingAfterPreflight(meetingId: String) {
         isRecording = true
         recordingSeconds = 0
         RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
