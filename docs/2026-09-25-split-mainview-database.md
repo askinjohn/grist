@@ -43,6 +43,10 @@ Hygiene: `sidebarCreateButton` → Sidebar; `folderChip` → Config.
 
 `db` and `execute` are module-internal so sibling extensions can use them.
 
+## MR
+
+- https://github.com/askinjohn/grist/pull/43
+
 ## Follow-ups
 
 - Optional: split `MainView+Config` if it keeps growing
