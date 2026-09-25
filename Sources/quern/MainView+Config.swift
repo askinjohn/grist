@@ -355,6 +355,7 @@ extension MainView {
                 .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
                 Button(role: .destructive) {
                     Database.shared.softDeleteMeeting(id: meeting.id)
+                    CompanionSyncManager.shared.pushTombstone(meetingId: meeting.id)
                     NotificationCenter.default.post(name: .meetingDeleted, object: meeting.id)
                 } label: {
                     Label(meeting.isNoteType ? "Delete Note" : "Delete Meeting", systemImage: "trash")
@@ -400,8 +401,10 @@ extension MainView {
 
     func confirmDeleteFolder(contents: Database.FolderDeleteContentsMode) {
         guard let name = folderPendingDelete else { return }
-        let count = meetings.filter { ($0.groupName ?? "") == name }.count
+        let inFolder = meetings.filter { ($0.groupName ?? "") == name }
+        let count = inFolder.count
         let selectedWasInFolder = selectedMeeting?.groupName == name
+        let tombstoneIds = contents == .softDeleteContents ? inFolder.map(\.id) : []
 
         db.deleteFolder(name, contents: contents)
 
@@ -420,6 +423,13 @@ extension MainView {
 
         folderPendingDelete = nil
         showingDeleteFolderConfirm = false
+
+        for id in tombstoneIds {
+            CompanionSyncManager.shared.pushTombstone(meetingId: id)
+        }
+        if contents == .moveToUnfiled {
+            CompanionSyncManager.shared.schedulePush(reason: "folder-unfile")
+        }
 
         switch contents {
         case .moveToUnfiled:

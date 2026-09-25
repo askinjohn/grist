@@ -106,6 +106,7 @@ struct SidebarRow: View {
             }
             Button(role: .destructive) {
                 Database.shared.softDeleteMeeting(id: meeting.id)
+                CompanionSyncManager.shared.pushTombstone(meetingId: meeting.id)
                 NotificationCenter.default.post(name: .meetingDeleted, object: meeting.id)
             } label: {
                 Label(meeting.isNoteType ? "Delete Note" : "Delete Meeting", systemImage: "trash")
