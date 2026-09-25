@@ -29,6 +29,10 @@ const dbPath = fs.existsSync(quernDB)
     : quernDB;
 fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 const db = new Database(dbPath);
+// Match the Swift app: safe concurrent access while Quern is open.
+db.exec("PRAGMA journal_mode=WAL;");
+db.exec("PRAGMA busy_timeout=5000;");
+db.exec("PRAGMA synchronous=NORMAL;");
 
 db.run(`
   CREATE TABLE IF NOT EXISTS folders (

@@ -6,9 +6,42 @@ class WhisperTranscriber: @unchecked Sendable {
     private var whisperDir: String {
         QuernPaths.whisperDirectory.path
     }
-    private let ffmpegPath = "/opt/homebrew/bin/ffmpeg"
-
     private init() {}
+
+    /// Resolve ffmpeg like yt-dlp (Homebrew Intel/Apple Silicon, PATH, UserDefaults).
+    var ffmpegPath: String {
+        Self.resolveFFmpegPath() ?? "/opt/homebrew/bin/ffmpeg"
+    }
+
+    static func resolveFFmpegPath() -> String? {
+        let candidates = [
+            UserDefaults.standard.string(forKey: "ffmpegPath"),
+            "/opt/homebrew/bin/ffmpeg",
+            "/usr/local/bin/ffmpeg",
+            (ProcessInfo.processInfo.environment["HOME"] ?? "") + "/.local/bin/ffmpeg",
+        ].compactMap { $0 }.filter { !$0.isEmpty }
+        for path in candidates {
+            if FileManager.default.isExecutableFile(atPath: path) { return path }
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/which")
+        proc.arguments = ["ffmpeg"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            if let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !path.isEmpty,
+               FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        } catch {}
+        return nil
+    }
 
     /// Full meeting transcription after Stop (existing behavior).
     func transcribe(meetingId: String) async -> String {

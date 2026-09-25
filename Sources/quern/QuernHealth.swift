@@ -125,10 +125,30 @@ enum QuernHealth {
         }
 
         let lower = models.map { $0.lowercased() }
-        let hasEmbed = lower.contains { $0.contains("nomic-embed") || $0.contains("embed") }
+        let configuredEmbed = await MainActor.run {
+            AIConfigManager.shared.modelName(for: .embed).lowercased()
+        }
+
+        // Prefer capability-aware / configured-name match; avoid classifying chat models as embed.
+        let hasEmbed = lower.contains { name in
+            if !configuredEmbed.isEmpty,
+               name == configuredEmbed
+                || name.hasPrefix(configuredEmbed + ":")
+                || configuredEmbed.hasPrefix(name.split(separator: ":").first.map(String.init) ?? configuredEmbed) {
+                return true
+            }
+            return name.contains("nomic-embed")
+                || name.contains("bge-")
+                || name.contains("mxbai-embed")
+                || name.hasSuffix("-embed")
+                || name.contains("embed-text")
+                || name.contains("embedding")
+        }
         let hasChat = models.contains { m in
             let l = m.lowercased()
-            return !l.contains("embed") && !l.contains("nomic")
+            let looksEmbed = l.contains("nomic-embed") || l.contains("embed-text")
+                || l.contains("embedding") || l.contains("bge-") || l.hasSuffix("-embed")
+            return !looksEmbed
         }
 
         let yt = YouTubeImporter.resolveYtDlpPath() != nil
@@ -143,7 +163,8 @@ enum QuernHealth {
             ollamaReachable: reachable,
             ollamaModels: models,
             hasEmbedModel: hasEmbed,
-            hasChatModel: hasChat || (!models.isEmpty && reachable),
+            // Never treat “any model exists” as chat — embed-only installs must fail this check.
+            hasChatModel: hasChat,
             ytDlpInstalled: yt,
             whisperAvailable: whisper,
             checkedAt: Date()

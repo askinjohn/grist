@@ -18,6 +18,10 @@ class Database {
             print("Error opening database meetings.db at path \(dbPath)")
         } else {
             print("Successfully opened database meetings.db at \(dbPath)")
+            // Safe for concurrent Quern app + MCP writers.
+            execute("PRAGMA journal_mode=WAL;")
+            execute("PRAGMA busy_timeout=5000;")
+            execute("PRAGMA synchronous=NORMAL;")
         }
     }
     
@@ -283,6 +287,8 @@ class Database {
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
+        // Drop RAG chunks so Ask everything doesn’t surface deleted items.
+        deleteChunks(forMeetingId: id)
     }
     
     func getMeeting(id: String) -> Meeting? {
@@ -414,34 +420,56 @@ class Database {
         }
         sqlite3_finalize(selStmt)
 
+        execute("BEGIN IMMEDIATE;")
+        var committed = false
+        defer {
+            if !committed {
+                execute("ROLLBACK;")
+            }
+        }
+
         let del = "DELETE FROM folders WHERE name = ?;"
         var delStmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, del, -1, &delStmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(delStmt, 1, (old as NSString).utf8String, -1, nil)
-            sqlite3_step(delStmt)
+        guard sqlite3_prepare_v2(db, del, -1, &delStmt, nil) == SQLITE_OK else {
+            throw FolderRenameError.sourceMissing(old)
+        }
+        sqlite3_bind_text(delStmt, 1, (old as NSString).utf8String, -1, nil)
+        if sqlite3_step(delStmt) != SQLITE_DONE {
+            sqlite3_finalize(delStmt)
+            throw FolderRenameError.sourceMissing(old)
         }
         sqlite3_finalize(delStmt)
 
         let ins = "INSERT INTO folders (name, created_at) VALUES (?, ?);"
         var insStmt: OpaquePointer?
-        if sqlite3_prepare_v2(db, ins, -1, &insStmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(insStmt, 1, (new as NSString).utf8String, -1, nil)
-            sqlite3_bind_double(insStmt, 2, createdAt)
-            sqlite3_step(insStmt)
+        guard sqlite3_prepare_v2(db, ins, -1, &insStmt, nil) == SQLITE_OK else {
+            throw FolderRenameError.targetExists(new)
+        }
+        sqlite3_bind_text(insStmt, 1, (new as NSString).utf8String, -1, nil)
+        sqlite3_bind_double(insStmt, 2, createdAt)
+        if sqlite3_step(insStmt) != SQLITE_DONE {
+            sqlite3_finalize(insStmt)
+            throw FolderRenameError.targetExists(new)
         }
         sqlite3_finalize(insStmt)
 
         let upd = "UPDATE meetings SET group_name = ? WHERE group_name = ?;"
         var updStmt: OpaquePointer?
         var changed = 0
-        if sqlite3_prepare_v2(db, upd, -1, &updStmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(updStmt, 1, (new as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(updStmt, 2, (old as NSString).utf8String, -1, nil)
-            if sqlite3_step(updStmt) == SQLITE_DONE {
-                changed = Int(sqlite3_changes(db))
-            }
+        guard sqlite3_prepare_v2(db, upd, -1, &updStmt, nil) == SQLITE_OK else {
+            throw FolderRenameError.sourceMissing(old)
+        }
+        sqlite3_bind_text(updStmt, 1, (new as NSString).utf8String, -1, nil)
+        sqlite3_bind_text(updStmt, 2, (old as NSString).utf8String, -1, nil)
+        if sqlite3_step(updStmt) == SQLITE_DONE {
+            changed = Int(sqlite3_changes(db))
+        } else {
+            sqlite3_finalize(updStmt)
+            throw FolderRenameError.sourceMissing(old)
         }
         sqlite3_finalize(updStmt)
+        execute("COMMIT;")
+        committed = true
         return changed
     }
     
@@ -464,6 +492,20 @@ class Database {
             }
             sqlite3_finalize(unfileStmt)
         case .softDeleteContents:
+            // Collect ids first so we can drop RAG chunks after soft-delete.
+            var ids: [String] = []
+            let sel = "SELECT id FROM meetings WHERE group_name = ? AND is_deleted = 0;"
+            var selStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, sel, -1, &selStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(selStmt, 1, (name as NSString).utf8String, -1, nil)
+                while sqlite3_step(selStmt) == SQLITE_ROW {
+                    if let cStr = sqlite3_column_text(selStmt, 0) {
+                        ids.append(String(cString: cStr))
+                    }
+                }
+            }
+            sqlite3_finalize(selStmt)
+
             let soft = "UPDATE meetings SET is_deleted = 1 WHERE group_name = ? AND is_deleted = 0;"
             var softStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, soft, -1, &softStmt, nil) == SQLITE_OK {
@@ -471,6 +513,10 @@ class Database {
                 sqlite3_step(softStmt)
             }
             sqlite3_finalize(softStmt)
+
+            for id in ids {
+                deleteChunks(forMeetingId: id)
+            }
         }
 
         let query = "DELETE FROM folders WHERE name = ?"

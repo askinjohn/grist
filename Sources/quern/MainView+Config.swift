@@ -697,7 +697,7 @@ extension MainView {
                             ok: report.hasEmbedModel,
                             title: "Embeddings (RAG)",
                             detail: report.hasEmbedModel
-                                ? "nomic-embed (or similar) present"
+                                ? "Embedding model present (\(report.ollamaModels.filter { $0.lowercased().contains("embed") || $0.lowercased().contains("nomic-embed") || $0.lowercased().contains("bge-") }.first ?? "ok"))"
                                 : "ollama pull nomic-embed-text"
                         )
                         healthRow(
