@@ -1,0 +1,16 @@
+{
+  "name": "quern-sync",
+  "version": "0.1.0",
+  "description": "Companion sync server for Quern — Mac pushes, mobile reads",
+  "type": "module",
+  "scripts": {
+    "start": "bun run index.ts"
+  },
+  "dependencies": {
+    "hono": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "license": "MIT"
+}
