@@ -11,6 +11,8 @@ struct QuernApp: App {
     init() {
         // Move ~/Library/Application Support/Grist → Quern when needed (library, whisper, configs).
         QuernPaths.migrateLegacyIfNeeded()
+        // Repair whisper-cli @rpath if it still points at the old Grist folder.
+        QuernPaths.fixWhisperRpathsIfNeeded()
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
             NSApplication.shared.activate(ignoringOtherApps: true)

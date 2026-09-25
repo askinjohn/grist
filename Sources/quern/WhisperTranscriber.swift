@@ -216,21 +216,92 @@ class WhisperTranscriber: @unchecked Sendable {
         resolveBinaryPath() != nil && (resolveFastModelPath() != nil || resolveModelPath() != nil)
     }
 
+    /// Result of a real launch probe (binary + dylibs + model present) before recording.
+    enum PreflightResult: Sendable {
+        case ok
+        case failed(String)
+
+        var isOK: Bool {
+            if case .ok = self { return true }
+            return false
+        }
+
+        var message: String? {
+            if case .failed(let m) = self { return m }
+            return nil
+        }
+    }
+
+    /// Actually runs `whisper-cli --help` so broken rpaths / missing dylibs fail *before* a meeting.
+    func preflightForRecording() async -> PreflightResult {
+        // After Grist→Quern folder moves, Mach-O @rpath can still point at the old path.
+        QuernPaths.fixWhisperRpathsIfNeeded()
+
+        guard let binary = resolveBinaryPath() else {
+            return .failed("Whisper is not installed. Run ./setup.sh (Step 2: Speech-to-text) before recording.")
+        }
+        guard resolveModelPath() != nil || resolveFastModelPath() != nil else {
+            return .failed("Whisper model missing (ggml-base.bin). Run ./setup.sh to download it.")
+        }
+
+        let probe = await runProcessCapturing(executable: binary, arguments: ["--help"])
+        if probe.exitCode == 0 {
+            QuernLog.log("[Whisper] preflight OK binary=\(binary)")
+            return .ok
+        }
+
+        let err = (probe.stderr + "\n" + probe.stdout)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        QuernLog.log("[Whisper] preflight FAILED binary=\(binary) exit=\(probe.exitCode) err=\(err.prefix(400))")
+
+        if err.localizedCaseInsensitiveContains("library not loaded")
+            || err.localizedCaseInsensitiveContains("libwhisper")
+            || err.localizedCaseInsensitiveContains("image not found") {
+            // One more rpath repair pass, then retry once.
+            QuernPaths.fixWhisperRpathsIfNeeded()
+            let retry = await runProcessCapturing(executable: binary, arguments: ["--help"])
+            if retry.exitCode == 0 {
+                QuernLog.log("[Whisper] preflight OK after rpath repair")
+                return .ok
+            }
+            return .failed(
+                "Whisper can’t start (broken library path after rename). Re-run ./setup.sh Step 2, or ask Quern to rebuild whisper.cpp under Application Support/Quern."
+            )
+        }
+
+        let short = err.isEmpty ? "exit \(probe.exitCode)" : String(err.prefix(180))
+        return .failed("Whisper preflight failed: \(short)")
+    }
+
     private nonisolated func runProcess(executable: String, arguments: [String]) async -> Bool {
+        let result = await runProcessCapturing(executable: executable, arguments: arguments)
+        return result.exitCode == 0
+    }
+
+    private nonisolated func runProcessCapturing(
+        executable: String,
+        arguments: [String]
+    ) async -> (exitCode: Int32, stdout: String, stderr: String) {
         await withCheckedContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = arguments
+            let outPipe = Pipe()
+            let errPipe = Pipe()
+            process.standardOutput = outPipe
+            process.standardError = errPipe
 
             process.terminationHandler = { proc in
-                continuation.resume(returning: proc.terminationStatus == 0)
+                let out = String(data: outPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+                continuation.resume(returning: (proc.terminationStatus, out, err))
             }
 
             do {
                 try process.run()
             } catch {
                 print("[WhisperTranscriber] Failed to run \(executable): \(error.localizedDescription)")
-                continuation.resume(returning: false)
+                continuation.resume(returning: (-1, "", error.localizedDescription))
             }
         }
     }

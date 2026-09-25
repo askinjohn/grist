@@ -62,6 +62,7 @@ enum QuernPaths {
             do {
                 try fm.moveItem(at: grist, to: quern)
                 renameLegacyLog(in: quern)
+                fixWhisperRpathsIfNeeded()
                 fm.createFile(atPath: flag.path, contents: nil)
                 print("[Quern] Migrated Application Support/Grist → Quern")
             } catch {
@@ -91,10 +92,13 @@ enum QuernPaths {
                 }
             }
             renameLegacyLog(in: quern)
+            fixWhisperRpathsIfNeeded()
             print("[Quern] Copied library data from Application Support/Grist")
         }
 
         fm.createFile(atPath: flag.path, contents: nil)
+        // Even if migration already ran, repair whisper @rpath once if still broken.
+        fixWhisperRpathsIfNeeded()
     }
 
     private static func renameLegacyLog(in dir: URL) {
@@ -103,5 +107,66 @@ enum QuernPaths {
         let newLog = dir.appendingPathComponent("quern.log")
         guard fm.fileExists(atPath: oldLog.path), !fm.fileExists(atPath: newLog.path) else { return }
         try? fm.moveItem(at: oldLog, to: newLog)
+    }
+
+    /// whisper-cli was built under `…/Grist/…`; after the folder rename, `@rpath` still
+    /// points at the missing Grist path and every transcription fails with “process failed”.
+    static func fixWhisperRpathsIfNeeded() {
+        let binDir = whisperDirectory.appendingPathComponent("build/bin", isDirectory: true)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: binDir.path) else { return }
+
+        let oldRpath = (applicationSupportRoot
+            .appendingPathComponent(legacyFolderName, isDirectory: true)
+            .appendingPathComponent("whisper.cpp/build/bin")).path
+        let newRpath = binDir.path
+
+        guard let items = try? fm.contentsOfDirectory(atPath: binDir.path) else { return }
+        var fixed = 0
+        for name in items {
+            let path = binDir.appendingPathComponent(name).path
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: path, isDirectory: &isDir), !isDir.boolValue else { continue }
+
+            let otool = Process()
+            otool.executableURL = URL(fileURLWithPath: "/usr/bin/otool")
+            otool.arguments = ["-l", path]
+            let pipe = Pipe()
+            otool.standardOutput = pipe
+            otool.standardError = Pipe()
+            do { try otool.run() } catch { continue }
+            otool.waitUntilExit()
+            let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            guard out.contains("Grist/whisper.cpp") else { continue }
+
+            let tool = Process()
+            tool.executableURL = URL(fileURLWithPath: "/usr/bin/install_name_tool")
+            tool.arguments = ["-rpath", oldRpath, newRpath, path]
+            tool.standardOutput = Pipe()
+            tool.standardError = Pipe()
+            do {
+                try tool.run()
+                tool.waitUntilExit()
+                if tool.terminationStatus == 0 {
+                    fixed += 1
+                } else {
+                    // Fallback: add Quern rpath if replace failed (e.g. already partially fixed).
+                    let add = Process()
+                    add.executableURL = URL(fileURLWithPath: "/usr/bin/install_name_tool")
+                    add.arguments = ["-add_rpath", newRpath, path]
+                    add.standardOutput = Pipe()
+                    add.standardError = Pipe()
+                    try? add.run()
+                    add.waitUntilExit()
+                    if add.terminationStatus == 0 { fixed += 1 }
+                }
+            } catch {
+                continue
+            }
+        }
+        if fixed > 0 {
+            print("[Quern] Fixed whisper @rpath on \(fixed) binary/dylib(s) → Quern")
+            QuernLog.log("[Quern] Fixed whisper @rpath on \(fixed) binary/dylib(s)")
+        }
     }
 }

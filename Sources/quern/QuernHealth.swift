@@ -132,7 +132,12 @@ enum QuernHealth {
         }
 
         let yt = YouTubeImporter.resolveYtDlpPath() != nil
-        let whisper = whisperBinaryAvailable()
+        // Real launch probe (not just “file exists”) — catches broken @rpath after Grist→Quern.
+        let whisper: Bool
+        switch await WhisperTranscriber.shared.preflightForRecording() {
+        case .ok: whisper = true
+        case .failed: whisper = false
+        }
 
         return QuernHealthReport(
             ollamaReachable: reachable,
@@ -143,21 +148,5 @@ enum QuernHealth {
             whisperAvailable: whisper,
             checkedAt: Date()
         )
-    }
-
-    private static func whisperBinaryAvailable() -> Bool {
-        let candidates = [
-            UserDefaults.standard.string(forKey: "whisperPath"),
-            QuernPaths.whisperDirectory.appendingPathComponent("build/bin/whisper-cli").path,
-            QuernPaths.whisperDirectory.appendingPathComponent("main").path,
-            "/opt/homebrew/bin/whisper-cli",
-            "/usr/local/bin/whisper-cli",
-        ].compactMap { $0 }.filter { !$0.isEmpty }
-        for p in candidates {
-            if FileManager.default.isExecutableFile(atPath: p) { return true }
-        }
-        // Also accept any path stored by setup
-        if FileManager.default.fileExists(atPath: QuernPaths.whisperDirectory.path) { return true }
-        return false
     }
 }
