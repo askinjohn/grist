@@ -257,48 +257,62 @@ extension MainView {
         isAttachingFiles = true
         statusMessage = panel.urls.count == 1 ? "Attaching file…" : "Attaching \(panel.urls.count) files…"
 
-        var attached = 0
-        var failures: [String] = []
+        let urls = panel.urls
+        let meetingId = selectedMeeting?.id
 
-        for url in panel.urls {
-            let accessed = url.startAccessingSecurityScopedResource()
-            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let body = try NoteFileImporter.extractText(from: url)
-                let block = NoteFileImporter.attachmentBlock(filename: url.lastPathComponent, body: body)
-                selectedMeeting?.manualNotes = (selectedMeeting?.manualNotes ?? "") + block
-                attached += 1
-            } catch {
-                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
-                QuernLog.log("[Attach] failed \(url.lastPathComponent): \(error.localizedDescription)")
-            }
-        }
+        // Extract off the main actor so large PDFs don’t freeze the UI.
+        Task.detached(priority: .userInitiated) {
+            var blocks: [(name: String, block: String)] = []
+            var failures: [String] = []
 
-        if attached > 0 {
-            saveMeeting()
-            selectedTab = "notes"
-            if selectedMeeting?.isNoteType == true {
-                noteShowPreview = false
+            for url in urls {
+                let accessed = url.startAccessingSecurityScopedResource()
+                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let body = try NoteFileImporter.extractText(from: url)
+                    let block = NoteFileImporter.attachmentBlock(filename: url.lastPathComponent, body: body)
+                    blocks.append((url.lastPathComponent, block))
+                } catch {
+                    failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                    QuernLog.log("[Attach] failed \(url.lastPathComponent): \(error.localizedDescription)")
+                }
             }
-            // Delay reindex so an immediate Enhance isn’t starved by embed jobs.
-            if let m = selectedMeeting {
-                RAGEngine.shared.scheduleIndex(meeting: m, delayNanoseconds: 8_000_000_000)
-            }
-        }
 
-        isAttachingFiles = false
-        if attached > 0, failures.isEmpty {
-            statusMessage = attached == 1 ? "File attached" : "\(attached) files attached"
-        } else if attached > 0 {
-            statusMessage = "Attached \(attached); \(failures.count) failed"
-            importErrorMessage = failures.joined(separator: "\n")
-            importErrorOpenURL = nil
-            showingImportErrorAlert = true
-        } else {
-            statusMessage = "Attach failed"
-            importErrorMessage = failures.joined(separator: "\n")
-            importErrorOpenURL = nil
-            showingImportErrorAlert = true
+            await MainActor.run {
+                guard meetingId == nil || selectedMeeting?.id == meetingId else {
+                    isAttachingFiles = false
+                    statusMessage = "Attach cancelled (note changed)"
+                    return
+                }
+                for item in blocks {
+                    selectedMeeting?.manualNotes = (selectedMeeting?.manualNotes ?? "") + item.block
+                }
+                let attached = blocks.count
+                if attached > 0 {
+                    saveMeeting()
+                    selectedTab = "notes"
+                    if selectedMeeting?.isNoteType == true {
+                        noteShowPreview = false
+                    }
+                    if let m = selectedMeeting {
+                        RAGEngine.shared.scheduleIndex(meeting: m, delayNanoseconds: 8_000_000_000)
+                    }
+                }
+                isAttachingFiles = false
+                if attached > 0, failures.isEmpty {
+                    statusMessage = attached == 1 ? "File attached" : "\(attached) files attached"
+                } else if attached > 0 {
+                    statusMessage = "Attached \(attached); \(failures.count) failed"
+                    importErrorMessage = failures.joined(separator: "\n")
+                    importErrorOpenURL = nil
+                    showingImportErrorAlert = true
+                } else {
+                    statusMessage = "Attach failed"
+                    importErrorMessage = failures.joined(separator: "\n")
+                    importErrorOpenURL = nil
+                    showingImportErrorAlert = true
+                }
+            }
         }
     }
 
@@ -755,25 +769,37 @@ extension MainView {
     func refreshLibraryOnFocus() {
         guard !isRefreshingLibrary else { return }
         // Don’t fight in-progress capture / import / AI work.
-        if isRecording || isImportingUrl || isFolderSummarizing || isOrganizing
-            || isExtractingTasks || isImportingSuggestedYouTube
-            || statusMessage == "Enhancing…" || statusMessage == "Transcribing…" {
+        if isRecording || isEnhancing || isImportingUrl || isFolderSummarizing || isOrganizing
+            || isExtractingTasks || isImportingSuggestedYouTube || isAttachingFiles
+            || statusMessage == "Transcribing…" || statusMessage.hasPrefix("Enhancing") {
             return
         }
 
         isRefreshingLibrary = true
         let previousId = selectedMeeting?.id
         let previousTaskId = selectedTask?.id
+        let prior = selectedMeeting
 
         meetings = db.fetchActiveMeetings()
         folders = db.fetchFolders()
         loadTasks()
 
         if let previousId {
-            if !meetings.contains(where: { $0.id == previousId }) {
+            if let fresh = meetings.first(where: { $0.id == previousId }) {
+                // Reload open note from DB when MCP/external writers changed it and
+                // local editor content still matches the last-known disk snapshot
+                // (autosave keeps them equal when the user typed; MCP updates diverge).
+                if let prior,
+                   prior.manualNotes != fresh.manualNotes
+                    || prior.transcript != fresh.transcript
+                    || prior.summary != fresh.summary
+                    || prior.title != fresh.title {
+                    selectedMeeting = fresh
+                    statusMessage = "Note updated from disk"
+                }
+            } else {
                 selectedMeeting = meetings.first
             }
-            // else: keep selectedMeeting as-is (already autosaved; avoids TextEditor reset)
         } else if selectedMeeting == nil {
             selectedMeeting = meetings.first
         }
@@ -1069,6 +1095,7 @@ extension MainView {
 
     private func beginRecordingAfterPreflight(meetingId: String) {
         isRecording = true
+        recordingMeetingId = meetingId
         recordingSeconds = 0
         RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
         RecordingStatus.shared.clearLiveTranscript()
@@ -1098,6 +1125,7 @@ extension MainView {
             } catch {
                 await MainActor.run {
                     isRecording = false
+                    recordingMeetingId = nil
                     recordingTimer?.invalidate()
                     RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
                     LiveTranscriptionService.shared.stop()
@@ -1108,51 +1136,67 @@ extension MainView {
     }
 
     func stopRecording() {
+        let meetingId = recordingMeetingId ?? selectedMeeting?.id
         isRecording = false
         recordingTimer?.invalidate()
         recordingTimer = nil
         let capturedDuration = recordingSeconds
         recordingSeconds = 0
+        recordingMeetingId = nil
         RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
         let liveDraft = LiveTranscriptionService.shared.liveText
         LiveTranscriptionService.shared.stop()
         statusMessage = "Transcribing…"
 
-        guard let m = selectedMeeting else { return }
-        // Show live draft immediately while final pass runs
-        if !liveDraft.isEmpty,
-           (selectedMeeting?.transcript.isEmpty ?? true)
-            || (selectedMeeting?.transcript.hasPrefix("[Error") ?? false) {
-            selectedMeeting?.transcript = liveDraft + "\n\n_Finalizing transcript…_"
-        }
-
+        // Always stop capture — even if selection is gone — so mic/SCK don’t keep running.
         Task {
             await recorder.stop()
-            let transcript = await transcriber.transcribe(meetingId: m.id)
+
+            guard let meetingId else {
+                await MainActor.run {
+                    statusMessage = "Recording stopped (no meeting selected)"
+                    RecordingStatus.shared.clearLiveTranscript()
+                }
+                return
+            }
+
+            let transcript = await transcriber.transcribe(meetingId: meetingId)
             await MainActor.run {
-                // Prefer final Whisper output; fall back to live draft if final failed
+                // Prefer the recorded meeting row (may differ from current selection).
+                var target = (selectedMeeting?.id == meetingId) ? selectedMeeting : db.getMeeting(id: meetingId)
+                if target == nil { target = db.getMeeting(id: meetingId) }
+
+                guard var m = target else {
+                    statusMessage = "Recording saved to disk; meeting row missing"
+                    RecordingStatus.shared.clearLiveTranscript()
+                    return
+                }
+
                 if transcript.hasPrefix("[Error"), !liveDraft.isEmpty {
-                    selectedMeeting?.transcript = liveDraft
+                    m.transcript = liveDraft
                 } else {
-                    selectedMeeting?.transcript = transcript
+                    m.transcript = transcript
+                }
+                if capturedDuration > 0 {
+                    m.durationSeconds = max(m.durationSeconds, capturedDuration)
+                }
+                db.saveMeeting(m)
+                if selectedMeeting?.id == meetingId {
+                    selectedMeeting = m
+                } else if let idx = meetings.firstIndex(where: { $0.id == meetingId }) {
+                    meetings[idx] = m
                 }
                 RecordingStatus.shared.clearLiveTranscript()
-                if capturedDuration > 0 {
-                    selectedMeeting?.durationSeconds = max(selectedMeeting?.durationSeconds ?? 0, capturedDuration)
-                }
-                saveMeeting()
                 statusMessage = ""
 
-                let transcriptToRAG = selectedMeeting?.transcript ?? transcript
-                if let m = selectedMeeting {
-                    RAGEngine.shared.indexMeetingNow(m)
-                }
+                RAGEngine.shared.indexMeetingNow(m)
 
-                if autoEnhance {
-                    runEnhance()
-                } else if !(transcriptToRAG.hasPrefix("[Error")) {
-                    // Still name the item even if summary is skipped
-                    generateAutoTitle(force: false)
+                if selectedMeeting?.id == meetingId {
+                    if autoEnhance {
+                        runEnhance()
+                    } else if !m.transcript.hasPrefix("[Error") {
+                        generateAutoTitle(force: false)
+                    }
                 }
             }
         }

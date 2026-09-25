@@ -102,6 +102,7 @@ final class LiveTranscriptionService: ObservableObject {
             durationSeconds: windowSeconds,
             to: chunkURL
         )
+        // Only advance the window when extract + ASR succeed — otherwise we skip audio forever.
         guard extracted else { return }
 
         let text = await transcriber.transcribeChunk(wavURL: chunkURL, preferFastModel: true)

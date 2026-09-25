@@ -451,7 +451,14 @@ class OllamaClient: @unchecked Sendable {
 
     /// One model call (or map-reduce for long sources): TITLE + markdown summary.
     /// Inputs are original transcript/captions + notes — never the previous AI summary.
-    func enhance(transcript: String, notes: String, template: String, customPrompt: String? = nil, model: String) async throws -> EnhanceResult {
+    func enhance(
+        transcript: String,
+        notes: String,
+        template: String,
+        customPrompt: String? = nil,
+        model: String,
+        onProgress: (@Sendable (String) -> Void)? = nil
+    ) async throws -> EnhanceResult {
         QuernLog.log("[OllamaClient] enhance start model=\(model) rawTranscriptChars=\(transcript.count) rawNotesChars=\(notes.count) template=\(template)")
 
         let cleanedNotes = Self.notesForEnhance(notes: notes, transcript: transcript)
@@ -466,7 +473,8 @@ class OllamaClient: @unchecked Sendable {
                 template: template,
                 sectionGuide: sectionGuide,
                 customPrompt: customPrompt,
-                model: model
+                model: model,
+                onProgress: onProgress
             )
         }
 
@@ -494,12 +502,15 @@ class OllamaClient: @unchecked Sendable {
         template: String,
         sectionGuide: String,
         customPrompt: String?,
-        model: String
+        model: String,
+        onProgress: (@Sendable (String) -> Void)?
     ) async throws -> EnhanceResult {
         let chunks = Self.chunkTextForEnhance(transcript)
         QuernLog.log("[OllamaClient] enhance map: \(chunks.count) chunks")
+        onProgress?("Enhancing chunk 1/\(chunks.count)…")
         var partials: [String] = []
         for (i, chunk) in chunks.enumerated() {
+            onProgress?("Enhancing chunk \(i + 1)/\(chunks.count)…")
             let prompt = """
             Summarize part \(i + 1) of \(chunks.count) of a long transcript into tight bullet points.
             Keep concrete facts, names, decisions, action items. No preamble. Max ~250 words.
@@ -511,6 +522,7 @@ class OllamaClient: @unchecked Sendable {
             partials.append("### Part \(i + 1)\n\(partial)")
             QuernLog.log("[OllamaClient] enhance map chunk \(i + 1)/\(chunks.count) → \(partial.count) chars")
         }
+        onProgress?("Merging summaries…")
 
         var merged = partials.joined(separator: "\n\n")
         if merged.count > 24_000 {

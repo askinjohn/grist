@@ -66,6 +66,7 @@ extension MainView {
             return
         }
 
+        isEnhancing = true
         statusMessage = transcriptSource.count > 12_000
             ? "Enhancing long note (chunked)…"
             : "Enhancing…"
@@ -83,6 +84,7 @@ extension MainView {
             let t0 = Date()
             defer {
                 Task { @MainActor in
+                    isEnhancing = false
                     RAGEngine.shared.resumeIndexingAfterEnhance()
                 }
             }
@@ -93,7 +95,12 @@ extension MainView {
                     notes: notesSource,
                     template: templateName,
                     customPrompt: customPrompt,
-                    model: model
+                    model: model,
+                    onProgress: { msg in
+                        Task { @MainActor in
+                            statusMessage = msg
+                        }
+                    }
                 )
                 let elapsed = Date().timeIntervalSince(t0)
                 await MainActor.run {

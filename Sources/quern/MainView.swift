@@ -75,8 +75,11 @@ struct MainView: View {
 
     // Recording
     @State var isRecording = false
+    /// Meeting id capture was started for — Stop always targets this, even if selection changed.
+    @State var recordingMeetingId: String? = nil
     @State var recordingSeconds = 0
     @State var statusMessage = ""
+    @State var isEnhancing = false
     @State var recordingTimer: Timer? = nil
 
     // UI
