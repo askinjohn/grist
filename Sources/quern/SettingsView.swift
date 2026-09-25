@@ -937,7 +937,7 @@ struct IntegrationsSettingsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Companion sync")
                                 .font(.headline)
-                            Text("Optionally push notes & tasks to your server for a mobile reader")
+                            Text("Optionally push notes & tasks to your server (native iOS companion later)")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
