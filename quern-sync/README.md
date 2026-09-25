@@ -1,6 +1,6 @@
 # quern-sync
 
-Companion sync server for Quern. The Mac app pushes meetings, folders, and tasks; a mobile client reads them over HTTP. Auth is a shared bearer token. Data lives in a local SQLite file.
+Companion sync server for Quern. The Mac app pushes meetings, folders, and tasks; a future **native iOS** client (or any HTTP client) can read them. Auth is a shared bearer token. Data lives in a local SQLite file.
 
 ## Requirements
 

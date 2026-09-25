@@ -2,13 +2,13 @@
 
 ## What
 
-Optional self-hosted sync so a mobile companion can read Quern notes and tasks. Mac remains source of truth; nothing leaves the machine until Companion sync is enabled.
+Optional self-hosted sync so a future **native iOS** companion can read Quern notes and tasks. Mac remains source of truth; nothing leaves the machine until Companion sync is enabled.
 
 ## Why
 
 Read notes/summaries/tasks on a phone without turning Quern into a cloud product. Same opt-in spirit as Obsidian export.
 
-## Changes
+## Changes (this MR)
 
 ### `quern-sync/` (Bun + Hono + SQLite)
 
@@ -25,7 +25,7 @@ Read notes/summaries/tasks on a phone without turning Quern into a cloud product
 
 ### Mobile
 
-- `apps/quern-mobile` — Expo reader (Phase 3)
+**Deferred.** Planned as a separate **native SwiftUI / iOS** app (not Expo/RN) against the same API. See `docs/plans/companion-sync.md`.
 
 ## Key files
 
@@ -42,6 +42,7 @@ Read notes/summaries/tasks on a phone without turning Quern into a cloud product
 
 ## Follow-ups
 
-- Offline cache on mobile
+- Native iOS SwiftUI reader (`QuernCompanion` or similar)
+- Offline cache on device
 - Mobile quick-capture → Mac pull
 - E2E encryption if desired

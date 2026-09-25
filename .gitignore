@@ -40,8 +40,7 @@ quern-mcp-server/package-lock.json
 quern-sync/node_modules/
 quern-sync/data/
 quern-sync/.env
-apps/quern-mobile/node_modules/
-apps/quern-mobile/.expo/
+
 
 # Intermediate iconset (keep AppIcon.icns + source PNG)
 Resources/AppIcon.iconset/
