@@ -825,4 +825,25 @@ extension MainView {
         return true
     }
 
+    func folderChip(title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.caption)
+                Text(title)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(selected ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.05))
+            .foregroundStyle(selected ? Color.accentColor : Color.primary.opacity(0.85))
+            .clipShape(Capsule())
+            .overlay(
+                Capsule().stroke(selected ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
 }

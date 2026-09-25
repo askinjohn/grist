@@ -633,4 +633,28 @@ extension MainView {
         }
     }
 
+    func sidebarCreateButton(kind: CreateKind) -> some View {
+        Button {
+            openCreateSheet(kind: kind)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: kind == .meeting ? "plus.circle.fill" : "square.and.pencil")
+                Text(kind.title)
+                    .lineLimit(1)
+            }
+            .font(.system(size: 13, weight: .semibold))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 9)
+            .background(kind.accent.opacity(0.12))
+            .foregroundStyle(kind.accent)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(kind.accent.opacity(0.28), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(kind.subtitle)
+    }
+
 }
