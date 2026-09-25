@@ -33,6 +33,10 @@ Review findings: Stop could early-return before `recorder.stop()` when selection
 - `Sources/quern/OllamaClient.swift`
 - `quern-mcp-server/index.js`
 
+## MR
+
+- https://github.com/askinjohn/grist/pull/42
+
 ## Follow-ups
 
 - P2: split large MainView / Database god-objects (deferred; behavior fixes only in this MR)
