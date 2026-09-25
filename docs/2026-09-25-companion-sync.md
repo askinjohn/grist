@@ -36,6 +36,10 @@ Read notes/summaries/tasks on a phone without turning Quern into a cloud product
 - `Sources/quern/SettingsView.swift`
 - `docs/plans/companion-sync.md`
 
+## MR
+
+- https://github.com/askinjohn/grist/pull/44 (stacked on #43)
+
 ## Follow-ups
 
 - Offline cache on mobile

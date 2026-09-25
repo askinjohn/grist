@@ -1,6 +1,7 @@
 # Plan: Quern Companion (optional sync server + mobile reader)
 
-**Status:** Phase 1–2 in progress  
+**Status:** Phase 1–3 shipped in PR #44 (stacked on #43)  
+
 **Goal:** Optional self-hosted mirror so a mobile app can read Quern notes/tasks. Mac remains source of truth.
 
 ## Shape (v1)
