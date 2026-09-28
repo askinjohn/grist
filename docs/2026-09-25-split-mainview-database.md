@@ -50,4 +50,4 @@ Hygiene: `sidebarCreateButton` → Sidebar; `folderChip` → Config.
 ## Follow-ups
 
 - Optional: split `MainView+Config` if it keeps growing
-- Companion sync (optional server + mobile) — see `docs/plans/companion-sync.md`
+- Companion sync (optional server + Mac push; native iOS later) — see `docs/plans/companion-sync.md`
