@@ -30,10 +30,17 @@ Grist.dmg
 *.mp3
 *.aac
 
-# MCP: dependencies + compiled standalone binary (built by setup.sh)
+# MCP / sync: dependencies + compiled binaries + local data
 grist-mcp-server/node_modules/
 grist-mcp-server/grist-mcp-server
 grist-mcp-server/package-lock.json
+quern-mcp-server/node_modules/
+quern-mcp-server/quern-mcp-server
+quern-mcp-server/package-lock.json
+quern-sync/node_modules/
+quern-sync/data/
+quern-sync/.env
+
 
 # Intermediate iconset (keep AppIcon.icns + source PNG)
 Resources/AppIcon.iconset/
