@@ -15,6 +15,10 @@ Recording chrome lives in `RecordingStatus.shared` (menu bar), while the session
 - Menu Stop fallback clears hardware + chrome if MainView didn’t
 - `AudioRecorder.isMicRecording` / `isActivelyCapturing` for truth checks
 
+## MR
+
+- https://github.com/askinjohn/grist/pull/45
+
 ## Key files
 
 - `Sources/quern/RecordingStatus.swift`
