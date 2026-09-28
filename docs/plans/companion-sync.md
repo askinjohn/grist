@@ -1,6 +1,6 @@
 # Plan: Quern Companion (optional sync server + native iOS reader)
 
-**Status:** Phase 1–2 (server + Mac push) landing on `main`. **Mobile deferred** — native SwiftUI when ready.  
+**Status:** Phase 1–2 (server + Mac push) in PR #46 onto `main`. **Mobile deferred** — native SwiftUI when ready.  
 **Goal:** Optional self-hosted mirror so an iPhone app can read Quern notes/tasks. Mac remains source of truth.
 
 ## Shape (v1 API)

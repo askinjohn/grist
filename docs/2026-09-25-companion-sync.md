@@ -38,7 +38,7 @@ Read notes/summaries/tasks on a phone without turning Quern into a cloud product
 
 ## MR
 
-- Re-lands onto `main` (PR #44 had been merged into `refactor/split-mainview-database` by mistake and never reached `main`).
+- https://github.com/askinjohn/grist/pull/46 — re-lands onto `main` (PR #44 had been merged into `refactor/split-mainview-database` by mistake and never reached `main`).
 
 ## Follow-ups
 
