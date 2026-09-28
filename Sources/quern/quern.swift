@@ -102,7 +102,17 @@ struct QuernApp: App {
             Text("Recording \(recordingStatus.formattedElapsed)")
                 .foregroundStyle(.secondary)
             Button("Stop Recording") {
+                // Always notify MainView; if `@State` was lost, also clear chrome + hardware here.
                 NotificationCenter.default.post(name: .stopRecordingRequested, object: nil)
+                if RecordingStatus.shared.isRecording {
+                    // Fallback if MainView isn’t mounted / ignored the notification.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        if RecordingStatus.shared.isRecording {
+                            QuernLog.log("[Record] menu Stop fallback — clearing stale chrome")
+                            RecordingStatus.shared.forceStopHardwareAndChrome()
+                        }
+                    }
+                }
                 NSApp.activate(ignoringOtherApps: true)
                 NotificationCenter.default.post(name: .showQuernWindowRequested, object: nil)
             }

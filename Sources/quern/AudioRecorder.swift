@@ -34,6 +34,16 @@ class AudioRecorder: NSObject, @unchecked Sendable {
     /// True after the last successful SCStream startCapture.
     private(set) var isCapturingSystemAudio = false
 
+    /// True while the mic `AVAudioRecorder` is active.
+    var isMicRecording: Bool {
+        micRecorder?.isRecording == true
+    }
+
+    /// Mic and/or system capture currently running.
+    var isActivelyCapturing: Bool {
+        isMicRecording || stream != nil
+    }
+
     /// Avoid hammering SCShareableContent (and its dialog) after a hard permission failure this launch.
     nonisolated(unsafe) private static var skipSystemAudioThisSession = false
 

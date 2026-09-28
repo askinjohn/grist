@@ -302,9 +302,13 @@ struct MainView: View {
             openCreateSheet(kind: kind)
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopRecordingRequested)) { _ in
-            if isRecording {
-                stopRecording()
-            }
+            handleStopRecordingRequest()
+        }
+        .onAppear {
+            reconcileRecordingStatusWithHardware()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            reconcileRecordingStatusWithHardware()
         }
         .onReceive(NotificationCenter.default.publisher(for: .showQuernWindowRequested)) { _ in
             NSApp.activate(ignoringOtherApps: true)
