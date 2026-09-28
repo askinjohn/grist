@@ -36,6 +36,10 @@ Read notes/summaries/tasks on a phone without turning Quern into a cloud product
 - `Sources/quern/SettingsView.swift`
 - `docs/plans/companion-sync.md`
 
+## MR
+
+- Re-lands onto `main` (PR #44 had been merged into `refactor/split-mainview-database` by mistake and never reached `main`).
+
 ## Follow-ups
 
 - Native iOS SwiftUI reader (`QuernCompanion` or similar)
