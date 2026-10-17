@@ -120,7 +120,7 @@ extension MainView {
                 case .meetings: return !m.isNoteType
                 case .notes: return m.isNoteType
                 case .unfiled, .all: return true
-                case .askEverything, .tasks: return false
+                case .today, .askEverything, .tasks: return false
                 }
             }
     }
@@ -144,29 +144,14 @@ extension MainView {
     @ViewBuilder
     func folderAccordion(_ name: String) -> some View {
         let items = meetingsInFolder(name)
-        let expanded = isFolderExpanded(name)
         let isFocused = focusedFolder == name
         let isDropTarget = folderDropTarget == name
-
-        DisclosureGroup(isExpanded: expanded) {
-            if items.isEmpty {
-                Text("Drop notes here, or right‑click a note → Move to folder")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .padding(.leading, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 6)
-                    .dropDestination(for: String.self) { dropped, _ in
-                        acceptDrop(dropped, toFolder: name)
-                    } isTargeted: { hovering in
-                        folderDropTarget = hovering ? name : (folderDropTarget == name ? nil : folderDropTarget)
-                    }
-            } else {
-                ForEach(items) { meeting in
-                    meetingSidebarRow(meeting, inFolder: name)
-                        .padding(.leading, 4)
-                }
-            }
+        Button {
+            focusedFolder = name
+            libraryFilter = .all
+            selectedMeeting = nil
+            selectedTask = nil
+            searchText = ""
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: expandedFolders.contains(name) ? "folder.fill" : "folder")
@@ -193,15 +178,6 @@ extension MainView {
             // DisclosureGroup, right‑clicking a note inside often shows
             // “Delete Folder…” and wipes the folder instead of one file.
             .contextMenu {
-                Button(expanded.wrappedValue ? "Collapse" : "Expand") {
-                    withAnimation { expanded.wrappedValue.toggle() }
-                }
-                Button("Show only this folder") {
-                    focusedFolder = name
-                    expandedFolders.insert(name)
-                    // Leave detail open, but list selection must match visible rows
-                    // (otherwise AppKit paints a ghost selected row over empty state).
-                }
                 Button("New meeting here") {
                     focusedFolder = name
                     openCreateSheet(kind: .meeting)
@@ -232,6 +208,7 @@ extension MainView {
                 }
             }
         }
+        .buttonStyle(.plain)
         .listRowBackground(
             isDropTarget
                 ? Color.accentColor.opacity(0.22)
@@ -373,6 +350,18 @@ extension MainView {
         } catch {
             statusMessage = "Obsidian: \(error.localizedDescription)"
             QuernLog.log("[Obsidian] send failed: \(error.localizedDescription)")
+        }
+    }
+
+    func sendToNotion(meeting: Meeting) {
+        statusMessage = "Sending to Notion…"
+        Task {
+            do {
+                try await NotionExporter.exportMeeting(meeting)
+                await MainActor.run { statusMessage = "Sent to Notion" }
+            } catch {
+                await MainActor.run { statusMessage = error.localizedDescription }
+            }
         }
     }
 
@@ -587,6 +576,8 @@ extension MainView {
 
     func count(for filter: LibraryFilter) -> Int {
         switch filter {
+        case .today:
+            return meetings.filter { Calendar.current.isDateInToday(Date(timeIntervalSince1970: $0.timestamp)) }.count
         case .all: return meetings.count
         case .unfiled: return meetings.filter { ($0.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty }.count
         case .meetings: return meetings.filter { !$0.isNoteType }.count
@@ -597,7 +588,19 @@ extension MainView {
     }
 
     var filteredTasks: [QuernTask] {
-        var list = tasks
+        var list = tasks.sorted { a, b in
+            switch taskSort {
+            case "priority":
+                let rank = ["none": 0, "low": 1, "medium": 2, "high": 3]
+                if rank[a.priority] != rank[b.priority] { return (rank[a.priority] ?? 0) > (rank[b.priority] ?? 0) }
+            case "completed":
+                if a.completedAt != b.completedAt { return (a.completedAt ?? 0) > (b.completedAt ?? 0) }
+            case "due":
+                if a.dueAt != b.dueAt { return (a.dueAt ?? .infinity) < (b.dueAt ?? .infinity) }
+            default: break
+            }
+            return a.createdAt > b.createdAt
+        }
         switch taskListFilter {
         case "open": list = list.filter { $0.isOpen }
         case "done": list = list.filter { $0.isDone }

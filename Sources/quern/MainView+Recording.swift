@@ -14,12 +14,15 @@ extension MainView {
     }
 
     func startRecording(meetingId: String) {
+        guard !isRecording, !isStartingRecording, !isTranscribing else { return }
+        isStartingRecording = true
         // Fail *before* a long meeting if Whisper can’t launch (missing model / broken dylibs).
         statusMessage = "Checking Whisper…"
         Task {
             let preflight = await WhisperTranscriber.shared.preflightForRecording()
             await MainActor.run {
                 if case .failed(let message) = preflight {
+                    isStartingRecording = false
                     statusMessage = message
                     importErrorMessage = message
                     importErrorOpenURL = nil
@@ -33,26 +36,32 @@ extension MainView {
     }
 
     private func beginRecordingAfterPreflight(meetingId: String) {
-        isRecording = true
-        recordingMeetingId = meetingId
-        recordingSeconds = 0
-        RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
-        RecordingStatus.shared.clearLiveTranscript()
         statusMessage = "Starting capture…"
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            Task { @MainActor in
-                recordingSeconds += 1
-                RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: recordingSeconds)
-            }
-        }
         Task {
             do {
                 try await recorder.start(meetingId: meetingId)
                 await MainActor.run {
-                    if recorder.isCapturingSystemAudio {
+                    isStartingRecording = false
+                    isRecording = true
+                    recordingMeetingId = meetingId
+                    recordingSeconds = 0
+                    RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
+                    RecordingStatus.shared.clearLiveTranscript()
+                    recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                        Task { @MainActor in
+                            recordingSeconds += 1
+                            RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: recordingSeconds)
+                        }
+                    }
+                    if recorder.isCapturingSystemAudio && recorder.isCapturingMicrophone {
                         statusMessage = "Recording mic + system audio"
+                    } else if recorder.isCapturingSystemAudio {
+                        statusMessage = "Recording system audio only (microphone unavailable)"
                     } else {
-                        statusMessage = "Recording mic only (no system audio). Toggle Quern OFF→ON in Screen Recording, quit app, relaunch."
+                        statusMessage = "Recording microphone only — meeting audio is unavailable."
+                        importErrorMessage = "System audio capture failed. This recording can only hear your microphone.\n\nQuit Quern, turn its Screen & System Audio Recording permission off and on, then reopen Quern and try a short test with audio playing.\n\nDetails: \(recorder.systemAudioFailure ?? "System audio did not start.")"
+                        importErrorOpenURL = nil
+                        showingImportErrorAlert = true
                     }
                     // Rolling live transcript (non-blocking); final Whisper pass still runs on Stop.
                     LiveTranscriptionService.shared.start(meetingId: meetingId)
@@ -63,18 +72,21 @@ extension MainView {
                 }
             } catch {
                 await MainActor.run {
+                    isStartingRecording = false
                     isRecording = false
                     recordingMeetingId = nil
                     recordingTimer?.invalidate()
                     RecordingStatus.shared.sync(isRecording: false, elapsedSeconds: 0)
                     LiveTranscriptionService.shared.stop()
-                    statusMessage = "Mic error"
+                    statusMessage = error.localizedDescription
                 }
             }
         }
     }
 
     func stopRecording() {
+        guard isRecording, !isTranscribing else { return }
+        isTranscribing = true
         let meetingId = recordingMeetingId ?? selectedMeeting?.id
         isRecording = false
         recordingTimer?.invalidate()
@@ -89,6 +101,7 @@ extension MainView {
 
         // Always stop capture — even if selection is gone — so mic/SCK don’t keep running.
         Task {
+            defer { isTranscribing = false }
             await recorder.stop()
 
             guard let meetingId else {
@@ -101,36 +114,31 @@ extension MainView {
 
             let transcript = await transcriber.transcribe(meetingId: meetingId)
             await MainActor.run {
-                // Prefer the recorded meeting row (may differ from current selection).
-                var target = (selectedMeeting?.id == meetingId) ? selectedMeeting : db.getMeeting(id: meetingId)
-                if target == nil { target = db.getMeeting(id: meetingId) }
-
-                guard var m = target else {
-                    statusMessage = "Recording saved to disk; meeting row missing"
+                let failed = transcript.hasPrefix("[Error") || transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                guard let m = db.modifyMeeting(id: meetingId, { current in
+                    if !failed {
+                        current.transcript = transcript
+                    } else if current.transcript.isEmpty, !liveDraft.isEmpty {
+                        current.transcript = liveDraft
+                    }
+                    if capturedDuration > 0 { current.durationSeconds = max(current.durationSeconds, capturedDuration) }
+                }) else {
+                    statusMessage = "Audio saved to disk; transcript could not be saved"
                     RecordingStatus.shared.markIdle()
                     return
                 }
-
-                if transcript.hasPrefix("[Error"), !liveDraft.isEmpty {
-                    m.transcript = liveDraft
-                } else {
-                    m.transcript = transcript
-                }
-                if capturedDuration > 0 {
-                    m.durationSeconds = max(m.durationSeconds, capturedDuration)
-                }
-                db.saveMeeting(m)
                 if selectedMeeting?.id == meetingId {
                     selectedMeeting = m
-                } else if let idx = meetings.firstIndex(where: { $0.id == meetingId }) {
+                }
+                if let idx = meetings.firstIndex(where: { $0.id == meetingId }) {
                     meetings[idx] = m
                 }
                 RecordingStatus.shared.markIdle()
-                statusMessage = ""
+                statusMessage = failed ? "Transcription failed. Audio saved — use Retry transcription. Previous text was preserved when available." : ""
 
                 RAGEngine.shared.indexMeetingNow(m)
 
-                if selectedMeeting?.id == meetingId {
+                if !failed, selectedMeeting?.id == meetingId {
                     if autoEnhance {
                         runEnhance()
                     } else if !m.transcript.hasPrefix("[Error") {
@@ -140,16 +148,41 @@ extension MainView {
             }
         }
     }
+    func retryTranscription() {
+        guard let id = selectedMeeting?.id, !isRecording, !isStartingRecording, !isTranscribing else { return }
+        isTranscribing = true
+        statusMessage = "Transcribing saved audio…"
+        Task {
+            defer { isTranscribing = false }
+            let transcript = await transcriber.transcribe(meetingId: id)
+            guard !transcript.hasPrefix("[Error"), !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                statusMessage = "Transcription failed. Saved audio and existing transcript were preserved."
+                return
+            }
+            guard let updated = db.modifyMeeting(id: id, { $0.transcript = transcript }) else {
+                statusMessage = "Could not save transcript"
+                return
+            }
+            if selectedMeeting?.id == id { selectedMeeting = updated }
+            if let index = meetings.firstIndex(where: { $0.id == id }) { meetings[index] = updated }
+            RAGEngine.shared.indexMeetingNow(updated)
+            statusMessage = "Transcription complete"
+        }
+    }
+
 
     /// Menu bar / MainView can disagree after a SwiftUI remount: chrome says REC, `@State` says idle.
     func handleStopRecordingRequest() {
-        if isRecording || recordingMeetingId != nil {
+        if isRecording {
             stopRecording()
             return
         }
-        if RecordingStatus.shared.isRecording || recorder.isActivelyCapturing
+        if recordingMeetingId != nil || RecordingStatus.shared.isRecording || recorder.isActivelyCapturing
             || LiveTranscriptionService.shared.isRunning {
             QuernLog.log("[Record] clearing stale recording chrome (MainView idle)")
+            recordingMeetingId = nil
+            recordingTimer?.invalidate()
+            recordingTimer = nil
             statusMessage = ""
             RecordingStatus.shared.forceStopHardwareAndChrome()
         }
@@ -157,6 +190,7 @@ extension MainView {
 
     /// Drop ghost “Recording 0:00” if chrome is on but nothing is capturing.
     func reconcileRecordingStatusWithHardware() {
+        guard !isStartingRecording, !isTranscribing else { return }
         let chromeOn = RecordingStatus.shared.isRecording
         let capturing = recorder.isActivelyCapturing
         let liveOn = LiveTranscriptionService.shared.isRunning

@@ -67,9 +67,8 @@ extension MainView {
                     .padding(.bottom, 8)
             }
 
-            // Use a filtered selection binding so List never keeps a tag that is not
-            // currently in the sidebar (macOS draws a floating “ghost” selected row).
-            List(selection: sidebarListSelection) {
+            // Navigation only; item and task rows live in the main pane.
+            List {
                 // LIBRARY
                 Section {
                     ForEach(LibraryFilter.allCases) { filter in
@@ -81,7 +80,7 @@ extension MainView {
 
                 // FOLDERS — accordion (always visible when browsing items, including Unfiled,
                 // so you can drop or “Move to…” unfiled notes into a folder).
-                if !isSearching && libraryFilter != .tasks && libraryFilter != .askEverything {
+                Group {
                     Section {
                         if folders.isEmpty {
                             Text("No folders yet — use + to create one")
@@ -110,155 +109,12 @@ extension MainView {
                     }
                 }
 
-                // ITEMS — Tasks list, search results, or unfiled (Today / Yesterday / …)
-                if libraryFilter == .tasks && focusedFolder == nil && !isSearching {
-                    Section {
-                        if filteredTasks.isEmpty {
-                            Text("No tasks yet — extract from a note or create one")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        } else {
-                            ForEach(filteredTasks) { task in
-                                TaskSidebarRow(task: task, isSelected: selectedTask?.id == task.id)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        selectedTask = task
-                                        selectedMeeting = nil
-                                    }
-                                    .contextMenu {
-                                        Button {
-                                            toggleTaskDone(task)
-                                        } label: {
-                                            Label(task.isDone ? "Mark open" : "Mark done", systemImage: task.isDone ? "circle" : "checkmark.circle")
-                                        }
-                                        Button(role: .destructive) {
-                                            db.deleteTask(id: task.id)
-                                            loadTasks()
-                                            if selectedTask?.id == task.id { selectedTask = nil }
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                    }
-                            }
-                        }
-                    } header: {
-                        HStack {
-                            Text("Tasks")
-                            Spacer()
-                            Picker("", selection: $taskListFilter) {
-                                Text("Open").tag("open")
-                                Text("Done").tag("done")
-                                Text("All").tag("all")
-                            }
-                            .labelsHidden()
-                            .frame(width: 72)
-                            .controlSize(.small)
-                            Button {
-                                newTaskTitle = ""
-                                newTaskNotes = ""
-                                newTaskLinkToOpenItem = selectedMeeting != nil
-                                showingNewTaskSheet = true
-                            } label: {
-                                Image(systemName: "plus")
-                                    .font(.caption.weight(.bold))
-                            }
-                            .buttonStyle(.plain)
-                            .help("New task")
-                        }
-                    }
-                } else if isSearching {
-                    Section {
-                        if filteredMeetings.isEmpty {
-                            Text("No matches for “\(searchText)”")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        } else {
-                            ForEach(filteredMeetings) { meeting in
-                                SidebarRow(
-                                    meeting: meeting,
-                                    isSelected: selectedMeeting?.id == meeting.id,
-                                    searchQuery: searchText
-                                )
-                                .tag(meeting)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    openSearchResult(meeting)
-                                }
-                            }
-                        }
-                    } header: {
-                        HStack {
-                            Text("Search results")
-                            Spacer()
-                            Text("\(filteredMeetings.count)")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.tertiary)
-                        }
-                    }
-                } else if libraryFilter != .askEverything && libraryFilter != .tasks {
-                    // Outside folders: only unfiled items, grouped by Today / Yesterday / …
-                    // (Unless a folder is “focused” via context menu — then show only that folder’s items.)
-                    if let folder = focusedFolder {
-                        Section {
-                            let items = meetingsInFolder(folder)
-                            if items.isEmpty {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text("Empty folder")
-                                        .font(.caption)
-                                        .foregroundStyle(.tertiary)
-                                    Text("Drop a note here, or right‑click a note → Move to folder.")
-                                        .font(.caption2)
-                                        .foregroundStyle(.quaternary)
-                                }
-                                .padding(.vertical, 4)
-                                // Avoid selection interaction on empty placeholder
-                                .selectionDisabled(true)
-                            } else {
-                                ForEach(items) { meeting in
-                                    meetingSidebarRow(meeting, inFolder: folder)
-                                }
-                            }
-                        } header: {
-                            HStack {
-                                Image(systemName: "folder.fill")
-                                    .foregroundStyle(Color.accentColor)
-                                Text(folder)
-                                Spacer()
-                                Button("Show all") {
-                                    focusedFolder = nil
-                                }
-                                .font(.caption)
-                                .buttonStyle(.plain)
-                            }
-                        }
-                    } else {
-                        let unfiledGroups = timeGrouped(unfiledMeetingsForSidebar, headerPrefix: nil)
-                        if unfiledGroups.isEmpty {
-                            Section {
-                                Text(libraryFilter == .unfiled
-                                     ? "No unfiled items"
-                                     : "No unfiled items — open a folder above")
-                                    .font(.caption)
-                                    .foregroundStyle(.tertiary)
-                            } header: {
-                                Text(libraryFilter == .unfiled ? "Unfiled" : "Unfiled")
-                            }
-                        } else {
-                            ForEach(unfiledGroups) { group in
-                                Section(group.name) {
-                                    ForEach(group.meetings) { meeting in
-                                        meetingSidebarRow(meeting, inFolder: nil)
-                                    }
-                                }
-                                .dropDestination(for: String.self) { items, _ in
-                                    // Drop onto Today/Yesterday → unfiled
-                                    moveMeetings(items, toFolder: nil)
-                                }
-                            }
-                        }
-                    }
-                }
             }
+
+            // AppKit can retain an NSOutlineView selection after a filter removes its
+            // tagged row, then render that old row over the new content. Rebuild the
+            // list whenever its structural scope changes so it cannot keep that state.
+            .id(sidebarListContentIdentity)
             .listStyle(.sidebar)
             .searchable(text: $searchText, placement: .sidebar, prompt: "Search notes & meetings")
             .onSubmit(of: .search) {
@@ -359,56 +215,7 @@ extension MainView {
         }
     }
 
-    // MARK: - Sidebar list selection (no ghost rows)
-
-    /// List selection that only reflects meetings currently tagged in the sidebar.
-    /// Keeping selection when the row is off-list makes AppKit paint a floating row.
-    var sidebarListSelection: Binding<Meeting?> {
-        Binding(
-            get: {
-                guard let m = selectedMeeting else { return nil }
-                return isMeetingVisibleInSidebar(m) ? m : nil
-            },
-            set: { newValue in
-                if let newValue {
-                    selectedMeeting = newValue
-                    selectedTask = nil
-                } else {
-                    // User cleared list selection; keep detail only if still intentional.
-                    // Deselect in list without forcing detail closed when get() returned nil.
-                    if let m = selectedMeeting, isMeetingVisibleInSidebar(m) {
-                        selectedMeeting = nil
-                    }
-                }
-            }
-        )
-    }
-
-    /// Whether `meeting` currently has a `.tag` in the sidebar List content.
-    func isMeetingVisibleInSidebar(_ meeting: Meeting) -> Bool {
-        if isSearching {
-            return filteredMeetings.contains(where: { $0.id == meeting.id })
-        }
-        if libraryFilter == .tasks && focusedFolder == nil {
-            return false
-        }
-        if libraryFilter == .askEverything && focusedFolder == nil {
-            return false
-        }
-        // Focused folder mode: only that folder’s items are listed below.
-        if let folder = focusedFolder {
-            return (meeting.groupName ?? "") == folder
-                && meetingsInFolder(folder).contains(where: { $0.id == meeting.id })
-        }
-        // Unfiled date groups
-        if (meeting.groupName ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
-            return unfiledMeetingsForSidebar.contains(where: { $0.id == meeting.id })
-        }
-        // Accordion: only when that folder is expanded
-        let folder = meeting.groupName ?? ""
-        guard expandedFolders.contains(folder) else { return false }
-        return meetingsInFolder(folder).contains(where: { $0.id == meeting.id })
-    }
+    var sidebarListContentIdentity: String { libraryFilter.rawValue + (focusedFolder ?? "") }
 
     // MARK: - Tasks UI
 
@@ -499,7 +306,11 @@ extension MainView {
 
     @ViewBuilder
     var tasksDetailView: some View {
-        if let task = selectedTask {
+        VStack(alignment: .leading, spacing: 0) {
+            taskPageHeader
+            Divider()
+
+            if let task = selectedTask {
             VStack(alignment: .leading, spacing: 0) {
                 HStack(spacing: 12) {
                     Button {
@@ -543,6 +354,41 @@ extension MainView {
                 Divider()
 
                 Form {
+                    Section("Plan") {
+                        TextField("Assignee", text: taskBinding(\.assignee, fallback: ""))
+                        Toggle("Has due date", isOn: Binding(get: { selectedTask?.dueAt != nil }, set: { enabled in
+                            updateSelectedTask { $0.dueAt = enabled ? Calendar.current.startOfDay(for: Date()).timeIntervalSince1970 : nil }
+                        }))
+                        if selectedTask?.dueAt == nil { Text("No due date").foregroundStyle(.secondary) }
+                        Picker("Priority", selection: Binding(
+                            get: { selectedTask?.priority ?? "none" },
+                            set: { value in
+                                guard var t = selectedTask else { return }
+                                t.priority = value; selectedTask = t; db.saveTask(t); loadTasks()
+                            }
+                        )) {
+                            Text("No priority").tag("none")
+                            Text("Low").tag("low")
+                            Text("Medium").tag("medium")
+                            Text("High").tag("high")
+                        }
+                        if selectedTask?.dueAt != nil {
+                        DatePicker("Due", selection: Binding(
+                            get: { Date(timeIntervalSince1970: selectedTask?.dueAt ?? Date().timeIntervalSince1970) },
+                            set: { value in
+                                guard var t = selectedTask else { return }
+                                t.dueAt = Calendar.current.startOfDay(for: value).timeIntervalSince1970
+                                selectedTask = t; db.saveTask(t); loadTasks()
+                            }
+                        ), displayedComponents: .date)
+                        }
+                        if selectedTask?.dueAt != nil {
+                            Button("Clear due date") {
+                                guard var t = selectedTask else { return }
+                                t.dueAt = nil; selectedTask = t; db.saveTask(t); loadTasks()
+                            }
+                        }
+                    }
                     Section("Notes") {
                         TextEditor(text: Binding(
                             get: { selectedTask?.notes ?? "" },
@@ -561,12 +407,20 @@ extension MainView {
                     if let src = task.sourceTitle, !src.isEmpty {
                         Section("Source") {
                             Text(src)
+                            if !task.evidence.isEmpty {
+                                Text("“\(task.evidence)”")
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                                    .textSelection(.enabled)
+                            }
                             if let mid = task.sourceMeetingId,
                                let m = meetings.first(where: { $0.id == mid }) {
-                                Button("Open source note") {
+                                Button(task.evidence.isEmpty ? "Open source note" : "Review source evidence") {
                                     libraryFilter = .all
                                     selectedMeeting = m
                                     selectedTask = nil
+                                    transcriptEvidenceQuery = task.evidence.isEmpty ? nil : task.evidence
+                                    selectedTab = m.transcript.isEmpty ? "notes" : "transcript"
                                 }
                             }
                         }
@@ -582,7 +436,31 @@ extension MainView {
                 .formStyle(.grouped)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+            } else if !filteredTasks.isEmpty {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(filteredTasks) { task in
+                            HStack(spacing: 14) {
+                                Button { toggleTaskDone(task) } label: {
+                                    Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
+                                        .font(.title3).foregroundStyle(task.isDone ? .green : .secondary)
+                                }.buttonStyle(.plain).help(task.isDone ? "Mark open" : "Mark done")
+                                Button {
+                                    selectedTask = task; selectedMeeting = nil
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 5) {
+                                        Text(task.title).strikethrough(task.isDone).foregroundStyle(.primary)
+                                        Text([task.sourceTitle, task.assignee.isEmpty ? nil : task.assignee, task.priority == "none" ? nil : task.priority.capitalized + " priority", task.dueAt.map { "Due " + Date(timeIntervalSince1970: $0).formatted(date: .abbreviated, time: .omitted) }].compactMap { $0 }.joined(separator: " · "))
+                                            .font(.caption).foregroundStyle(task.isOverdue ? .red : .secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                }.buttonStyle(.plain)
+                                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                            }.padding(14).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                    }
+                    .padding(20)
+                }
+            } else {
             VStack(spacing: 18) {
                 ZStack {
                     Circle()
@@ -593,15 +471,22 @@ extension MainView {
                         .foregroundStyle(.purple)
                 }
                 VStack(spacing: 6) {
-                    Text("No tasks yet")
+                    Text(tasks.isEmpty ? "No tasks yet" : noTasksTitle)
                         .font(.title2.weight(.semibold))
-                    Text("Extract action items after Enhance, or create one by hand.")
+                    Text(noTasksMessage)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 340)
                 }
                 HStack(spacing: 12) {
+                    if !tasks.isEmpty, taskListFilter == "open", tasks.contains(where: \.isDone) {
+                        Button("Show completed") {
+                            taskListFilter = "done"
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.large)
+                    }
                     Button {
                         newTaskTitle = ""
                         newTaskNotes = ""
@@ -630,7 +515,110 @@ extension MainView {
                 .padding(.top, 4)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
+    }
+
+    func updateSelectedTask(_ edit: (inout QuernTask) -> Void) {
+        guard var task = selectedTask else { return }; edit(&task); db.saveTask(task); loadTasks(); selectedTask = task
+    }
+
+    func taskBinding(_ key: WritableKeyPath<QuernTask, String>, fallback: String) -> Binding<String> {
+        Binding(get: { selectedTask?[keyPath: key] ?? fallback }, set: { value in updateSelectedTask { $0[keyPath: key] = value } })
+    }
+
+    var taskFilterTitle: String {
+        switch taskListFilter {
+        case "done": return "Completed"
+        case "all": return "All"
+        default: return "Open"
+        }
+    }
+
+    var noTasksTitle: String {
+        switch taskListFilter {
+        case "done": return "No completed tasks"
+        case "all": return "No matching tasks"
+        default: return "No open tasks"
+        }
+    }
+
+    var noTasksMessage: String {
+        if tasks.isEmpty {
+            return "Extract action items after Enhance, or create one by hand."
+        }
+        switch taskListFilter {
+        case "done": return "Completed tasks will appear here."
+        case "all": return "Try a different task view."
+        default: return "Your completed tasks are still available in the Completed view."
+        }
+    }
+
+    var taskFilterMenu: some View {
+        Menu {
+            Button("Open") { taskListFilter = "open" }
+            Button("Completed") { taskListFilter = "done" }
+            Button("All tasks") { taskListFilter = "all" }
+        } label: {
+            Label(taskFilterTitle, systemImage: "line.3.horizontal.decrease.circle")
+                .font(.caption.weight(.medium))
+        }
+        .menuStyle(.borderlessButton)
+        .help("Choose open, completed, or all tasks")
+    }
+
+    var taskPageHeader: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                if selectedTask != nil { Button("Back to tasks") { selectedTask = nil } }
+                Text("Tasks").font(.title2.weight(.semibold))
+                Spacer()
+                Menu {
+                    Button("Update Obsidian task list") {
+                        do {
+                            let file = try ObsidianExporter.exportTasks(tasks)
+                            statusMessage = "Tasks saved to \(file.lastPathComponent)"
+                        } catch { statusMessage = error.localizedDescription }
+                    }
+                    .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
+                    Button("Update Notion task list") {
+                        isExportingTasks = true
+                        statusMessage = "Syncing tasks to Notion…"
+                        Task {
+                            do {
+                                try await NotionExporter.exportTasks(tasks)
+                                statusMessage = "Tasks synced to Notion"
+                            } catch { statusMessage = error.localizedDescription }
+                            isExportingTasks = false
+                        }
+                    }
+                    .disabled(!IntegrationsConfigManager.shared.config.notion.isConfigured || IntegrationsConfigManager.shared.config.notion.taskPageID.isEmpty)
+                } label: { Label("Export tasks", systemImage: "square.and.arrow.up") }
+                .disabled(isExportingTasks)
+                Button {
+                    newTaskTitle = ""
+                    newTaskNotes = ""
+                    newTaskLinkToOpenItem = selectedMeeting != nil
+                    showingNewTaskSheet = true
+                } label: { Label("New task", systemImage: "plus") }
+                .buttonStyle(.borderedProminent).tint(.purple)
+            }
+            HStack {
+                Picker("Show tasks", selection: $taskListFilter) {
+                    Text("Open").tag("open")
+                    Text("Completed").tag("done")
+                    Text("All").tag("all")
+                }.pickerStyle(.segmented).frame(maxWidth: 290)
+                Spacer()
+                Picker("Sort", selection: $taskSort) {
+                    Text("Due date").tag("due")
+                    Text("Priority").tag("priority")
+                    Text("Recently completed").tag("completed")
+                    Text("Newest").tag("newest")
+                }.frame(maxWidth: 190)
+            }
+        }
+        .padding(.horizontal, 20).padding(.vertical, 14)
     }
 
     func sidebarCreateButton(kind: CreateKind) -> some View {

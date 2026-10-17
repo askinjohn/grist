@@ -6,13 +6,13 @@ class Database {
     static let shared = Database()
     var db: OpaquePointer?
     
-    private init() {
-        openDatabase()
+    init(path: String? = nil) {
+        openDatabase(path: path)
         createTables()
     }
     
-    private func openDatabase() {
-        let dbPath = QuernPaths.meetingsDB.path
+    private func openDatabase(path: String?) {
+        let dbPath = path ?? QuernPaths.meetingsDB.path
         
         if sqlite3_open(dbPath, &db) != SQLITE_OK {
             print("Error opening database meetings.db at path \(dbPath)")
@@ -98,11 +98,14 @@ class Database {
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
             notes TEXT DEFAULT '',
+            evidence TEXT DEFAULT '',
             source_meeting_id TEXT,
             source_title TEXT,
             status TEXT DEFAULT 'open',
             created_at REAL,
             completed_at REAL,
+            due_at REAL,
+            priority TEXT DEFAULT 'none',
             is_deleted INTEGER DEFAULT 0
         );
         """
@@ -114,6 +117,11 @@ class Database {
         execute("ALTER TABLE meetings ADD COLUMN duration_seconds INTEGER DEFAULT 0;")
         execute("ALTER TABLE chat_messages ADD COLUMN conversation_id TEXT;")
         execute("ALTER TABLE chat_messages ADD COLUMN sources TEXT;")
+        execute("ALTER TABLE tasks ADD COLUMN evidence TEXT DEFAULT '';")
+        execute("ALTER TABLE tasks ADD COLUMN assignee TEXT DEFAULT '';")
+        execute("ALTER TABLE chat_messages ADD COLUMN evidence TEXT DEFAULT '[]';")
+        execute("ALTER TABLE tasks ADD COLUMN due_at REAL;")
+        execute("ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'none';")
         execute("ALTER TABLE chat_conversations ADD COLUMN is_pinned INTEGER DEFAULT 0;")
         migrateLegacyChatThreads()
         migrateLegacyItemScopeKeys()

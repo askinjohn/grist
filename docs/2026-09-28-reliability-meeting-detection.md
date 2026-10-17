@@ -1,0 +1,9 @@
+# Reliability and meeting detection — 2026-09-28
+
+Google Meet detection previously relied entirely on on-screen browser window titles; the process fallback was a no-op. Detection now also reads Core Audio per-process input activity, including Chrome helpers, without capturing audio. All-window title scanning covers minimized windows and other Spaces. Browser microphone activity without a matching title always prompts, even in auto-start mode, because it may be dictation or another site.
+
+Two consecutive samples trigger one prompt per source episode. Four missing samples end the episode; title changes and short signal gaps do not repeat the prompt. Notifications read current authorization before delivery, replay a pending detection after authorization completes, and have a floating nonactivating fallback when alerts are unavailable. Settings includes a test prompt and permission links. Focus may still suppress authorized banners. Muted calls with inaccessible titles can remain undetected; this is heuristic detection, not browser integration.
+
+Recording preserves previous audio sessions before creating new files, reports startup failure when both inputs fail, and prevents overlapping start/transcription operations. Retry transcription preserves existing text on failure. Auto-organize and auto-title patch the original, current database record under a write lock. Enhance completion actions no longer depend on selection. Index replacement is transactional, rejects stale/deleted notes, and preserves previous chunks on failures. Enhance no longer logs note/summary previews.
+
+Validation: `swift test` covers archive preservation/failure, database patching/deletion, index rollback/staleness, browser/helper matching, and episode deduplication. A real Google Meet call and system-notification delivery still require manual validation in the packaged app.

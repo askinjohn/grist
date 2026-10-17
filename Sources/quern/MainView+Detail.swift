@@ -8,15 +8,57 @@ extension MainView {
 
     @ViewBuilder
     var detailContent: some View {
-        Group {
-            if selectedMeeting?.isNoteType == true {
-                noteDetailView
-            } else {
-                meetingDetailView
+        VStack(spacing: 0) {
+            if let detection = meetingDetector.pendingPrompt, !isRecording {
+                meetingDetectedBanner(detection)
+            }
+            if let quote = transcriptEvidenceQuery {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack { Text("Source passage").font(.headline); Spacer(); Button("Close") { transcriptEvidenceQuery = nil } }
+                    Text(SearchEvidence.highlight(quote, query: searchText)).textSelection(.enabled).lineLimit(8)
+                }.padding(14).background(Color.yellow.opacity(0.08))
+            }
+            Group {
+                if selectedMeeting?.isNoteType == true {
+                    noteDetailView
+                } else {
+                    meetingDetailView
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .toolbar { detailToolbar }
+    }
+
+    @ViewBuilder
+    func meetingDetectedBanner(_ detection: MeetingDetector.Detection) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "video.fill")
+                .font(.title3)
+                .foregroundStyle(.purple)
+                .frame(width: 34, height: 34)
+                .background(Color.purple.opacity(0.12), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Meeting detected in \(detection.appName)")
+                    .font(.subheadline.weight(.semibold))
+                Text(detection.requiresConfirmation
+                     ? "Your browser is using the microphone. Start a Quern meeting?"
+                     : "Start a Quern meeting and capture it now.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Not now") { MeetingDetector.shared.dismissCurrentPrompt() }
+                .buttonStyle(.bordered)
+            Button("Take notes") {
+                NotificationCenter.default.post(name: .recordDetectedMeetingRequested, object: detection.appName)
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .background(Color.purple.opacity(0.08))
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     // MARK: - Shared chrome
@@ -56,7 +98,7 @@ extension MainView {
             runEnhance()
         } label: {
             HStack(spacing: 6) {
-                if statusMessage == "Enhancing…" {
+                if isEnhancing {
                     ProgressView()
                         .controlSize(.small)
                         .tint(.white)
@@ -66,24 +108,21 @@ extension MainView {
                 }
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
             }
-            .foregroundStyle(.white)
+            .fixedSize(horizontal: true, vertical: false)
+            .foregroundStyle(disabled ? Color.secondary : Color.white)
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(
-                LinearGradient(
-                    colors: disabled
-                        ? [Color.gray.opacity(0.45), Color.gray.opacity(0.35)]
-                        : [Color.blue, Color.purple.opacity(0.9)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                in: Capsule()
+                disabled ? Color.primary.opacity(0.08) : Color.accentColor,
+                in: RoundedRectangle(cornerRadius: 7)
             )
         }
         .buttonStyle(.plain)
+        .fixedSize(horizontal: true, vertical: false)
+        .layoutPriority(1)
         .disabled(disabled)
-        .opacity(disabled ? 0.75 : 1)
         .help(help)
     }
 
@@ -195,6 +234,17 @@ extension MainView {
 
     @ToolbarContentBuilder
     var detailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button {
+                selectedMeeting = nil
+                selectedTask = nil
+                transcriptEvidenceQuery = nil
+            } label: {
+                Label("Back to list", systemImage: "chevron.left")
+            }
+            .help("Return to the current list")
+        }
+
         // Editable title in toolbar centre
         ToolbarItem(placement: .principal) {
             TextField("Title", text: Binding(
@@ -262,6 +312,12 @@ extension MainView {
                         Label("Send to Obsidian", systemImage: "book.closed")
                     }
                     .disabled(!IntegrationsConfigManager.shared.config.obsidian.isConfigured)
+                    Button {
+                        sendToNotion(meeting: m)
+                    } label: {
+                        Label("Send to Notion", systemImage: "square.inset.filled")
+                    }
+                    .disabled(!IntegrationsConfigManager.shared.config.notion.isConfigured)
                     .help(IntegrationsConfigManager.shared.config.obsidian.isConfigured
                           ? "Write Markdown into your Obsidian vault"
                           : "Enable and pick a vault in Settings → Integrations")
@@ -290,6 +346,19 @@ extension MainView {
                 .help("Export Markdown or send to Obsidian")
             }
 
+            if selectedMeeting != nil {
+                Menu {
+                    Button("Retry transcription from saved audio", action: retryTranscription)
+                        .disabled(isRecording || isStartingRecording || isTranscribing)
+                    Button("Show saved recordings") {
+                        guard let id = selectedMeeting?.id else { return }
+                        NSWorkspace.shared.open(recorder.getMeetingFolder(meetingId: id))
+                    }
+                } label: {
+                    Label("Audio", systemImage: "waveform")
+                }
+            }
+
             if selectedMeeting?.isNoteType == true {
                 // Notes: recording is optional / secondary
                 Button {
@@ -297,6 +366,7 @@ extension MainView {
                 } label: {
                     Label(isRecording ? "Stop" : "Record audio", systemImage: isRecording ? "stop.circle.fill" : "mic")
                 }
+                .disabled(isStartingRecording || isTranscribing)
                 .help(isRecording ? "Stop and attach transcript" : "Optional: record audio into this note")
             } else {
                 Button {
@@ -311,6 +381,7 @@ extension MainView {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(isRecording ? .red : .accentColor)
+                .disabled(isStartingRecording || isTranscribing)
                 .help(isRecording ? "Stop and transcribe" : "Start recording")
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             }
@@ -321,7 +392,7 @@ extension MainView {
 
     /// Default create folder: Unfiled (don't inherit sidebar focus — that mis-filed YT into Cooking).
     func preferredCreateFolder() -> String {
-        ""
+        focusedFolder ?? ""
     }
 
     /// Open create sheet; kind is owned entirely by the sheet view.

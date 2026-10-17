@@ -3,6 +3,7 @@
 /Packages
 xcuserdata/
 DerivedData/
+/Quern.xcodeproj/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
@@ -41,3 +42,15 @@ Resources/AppIcon.iconset/
 # macOS junk
 .AppleDouble
 .LSOverride
+
+# Local credentials and runtime configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.p8
+*.key
+*.log
+integrations.json
+ai-config.json

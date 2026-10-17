@@ -10,7 +10,7 @@ extension MainView {
         meetings = db.fetchActiveMeetings()
         folders = db.fetchFolders()
         loadTasks()
-        if selectedMeeting == nil { selectedMeeting = meetings.first }
+        TodayWidgetSnapshot.publish(database: db)
     }
 
     /// Re-read SQLite when the app becomes key again so MCP / external DB writes show up.
@@ -18,7 +18,7 @@ extension MainView {
     func refreshLibraryOnFocus() {
         guard !isRefreshingLibrary else { return }
         // Don’t fight in-progress capture / import / AI work.
-        if isRecording || isEnhancing || isImportingUrl || isFolderSummarizing || isOrganizing
+        if isRecording || isStartingRecording || isTranscribing || isEnhancing || isImportingUrl || isFolderSummarizing || isOrganizing
             || isExtractingTasks || isImportingSuggestedYouTube || isAttachingFiles
             || statusMessage == "Transcribing…" || statusMessage.hasPrefix("Enhancing") {
             return
@@ -47,10 +47,10 @@ extension MainView {
                     statusMessage = "Note updated from disk"
                 }
             } else {
-                selectedMeeting = meetings.first
+                selectedMeeting = nil
             }
         } else if selectedMeeting == nil {
-            selectedMeeting = meetings.first
+            selectedMeeting = nil
         }
 
         if let previousTaskId {
@@ -87,6 +87,7 @@ extension MainView {
 
     func loadTasks() {
         tasks = db.fetchTasks(includeDone: true)
+        TodayWidgetSnapshot.publish(database: db)
         if let id = selectedTask?.id {
             selectedTask = tasks.first(where: { $0.id == id })
         }
@@ -169,7 +170,8 @@ extension MainView {
                         if !force, db.hasOpenTask(title: t, sourceMeetingId: meeting.id) {
                             continue
                         }
-                        let task = QuernTask.fromExtract(title: t, notes: item.notes, source: meeting)
+                        let evidence = verifiedEvidence(item.evidence, in: meeting)
+                        let task = QuernTask.fromExtract(title: t, notes: item.notes, evidence: evidence, source: meeting)
                         db.saveTask(task)
                         added += 1
                     }
@@ -188,6 +190,23 @@ extension MainView {
                 }
             }
         }
+    }
+
+    /// Evidence is only shown as a source link when it appears in the saved material.
+    /// This prevents an AI paraphrase from being presented as a verbatim quote.
+    func verifiedEvidence(_ candidate: String, in meeting: Meeting) -> String {
+        let quote = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard quote.count >= 8 else { return "" }
+        let normalizedQuote = normalizeEvidence(quote)
+        let sources = [meeting.transcript, meeting.manualNotes, meeting.summary]
+        return sources.contains { normalizeEvidence($0).contains(normalizedQuote) } ? quote : ""
+    }
+
+    private func normalizeEvidence(_ text: String) -> String {
+        text.lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
     
     func loadTemplates() {
@@ -286,8 +305,8 @@ extension MainView {
 
     /// Create a meeting from a detected call and start recording immediately.
     func startMeetingFromDetection(appName: String?) {
-        if isRecording {
-            statusMessage = "Already recording"
+        if isRecording || isStartingRecording || isTranscribing {
+            statusMessage = "Recording or transcription is already in progress"
             return
         }
         NSApp.activate(ignoringOtherApps: true)
@@ -297,7 +316,7 @@ extension MainView {
         let df = DateFormatter()
         df.dateStyle = .medium
         df.timeStyle = .short
-        let title = "\(label) · \(df.string(from: Date()))"
+        let title = MeetingDetector.shared.pendingPrompt?.suggestedTitle ?? "\(label) · \(df.string(from: Date()))"
 
         let payload = CreateItemPayload(
             kind: .meeting,
@@ -310,7 +329,7 @@ extension MainView {
         )
         MeetingDetector.shared.clearPromptAfterRecordingStarted()
         createSession(from: payload)
-        statusMessage = "Recording \(label)"
+        statusMessage = "Preparing to record \(label)…"
         QuernLog.log("[MeetingDetect] started recording for \(label)")
     }
 }

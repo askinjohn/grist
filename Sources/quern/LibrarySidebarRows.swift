@@ -6,13 +6,18 @@ import AVFoundation
 struct TaskSidebarRow: View {
     let task: QuernTask
     let isSelected: Bool
+    let onToggleDone: () -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(task.isDone ? .green : .secondary)
-                .frame(width: 16)
+            Button(action: onToggleDone) {
+                Image(systemName: task.isDone ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(task.isDone ? .green : .secondary)
+                    .frame(width: 16)
+            }
+            .buttonStyle(.plain)
+            .help(task.isDone ? "Mark open" : "Mark done")
             VStack(alignment: .leading, spacing: 2) {
                 Text(task.title)
                     .font(.callout.weight(.medium))
@@ -153,4 +158,3 @@ struct SidebarRow: View {
 }
 
 // MARK: - Chat View (item / global / selection)
-

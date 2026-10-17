@@ -298,7 +298,7 @@ class OllamaClient: @unchecked Sendable {
             }
             guard httpResponse.statusCode == 200 else {
                 let body = String(data: data, encoding: .utf8)?.prefix(300) ?? ""
-                QuernLog.log("[OllamaClient] generate FAILED HTTP \(httpResponse.statusCode) after \(String(format: "%.1f", elapsed))s model=\(useModel) body=\(body)")
+                QuernLog.log("[OllamaClient] generate FAILED HTTP \(httpResponse.statusCode) after \(String(format: "%.1f", elapsed))s model=\(useModel)")
                 throw NSError(domain: "OllamaClient", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Ollama HTTP \(httpResponse.statusCode) for model \(useModel). \(body)"])
             }
             let text = try JSONDecoder().decode(OllamaResponse.self, from: data).response.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -619,9 +619,7 @@ class OllamaClient: @unchecked Sendable {
         let timeout: TimeInterval = prompt.count > 16_000 ? 240 : 180
         let raw = try await generateText(prompt: prompt, model: model, role: .enhance, timeout: timeout)
         let parsed = Self.parseEnhanceOutput(raw)
-        QuernLog.log("[OllamaClient] enhance parsed title=\(parsed.title ?? "(none)") summaryChars=\(parsed.summary.count)")
-        let sumPrev = parsed.summary.replacingOccurrences(of: "\n", with: " ")
-        QuernLog.log("[OllamaClient] enhance summaryPreview: \(sumPrev.prefix(200))…")
+        QuernLog.log("[OllamaClient] enhance summaryChars=\(parsed.summary.count)")
         return parsed
     }
     
@@ -676,7 +674,7 @@ class OllamaClient: @unchecked Sendable {
         notes: String,
         transcript: String,
         model: String
-    ) async throws -> [(title: String, notes: String)] {
+    ) async throws -> [(title: String, notes: String, evidence: String)] {
         let body = """
         Title: \(title)
 
@@ -699,6 +697,7 @@ class OllamaClient: @unchecked Sendable {
         - Else one task per block:
         TASK: <short action>
         NOTE: <optional owner/deadline/context — omit if empty>
+        EVIDENCE: <a short verbatim quote that supports this task — omit if unavailable>
 
         Content:
         \(body)
@@ -708,19 +707,21 @@ class OllamaClient: @unchecked Sendable {
         return Self.parseTaskExtractOutput(raw)
     }
 
-    static func parseTaskExtractOutput(_ raw: String) -> [(title: String, notes: String)] {
+    static func parseTaskExtractOutput(_ raw: String) -> [(title: String, notes: String, evidence: String)] {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.uppercased() == "NONE" || trimmed.isEmpty { return [] }
 
-        var results: [(String, String)] = []
+        var results: [(String, String, String)] = []
         var currentTitle: String?
         var currentNotes = ""
+        var currentEvidence = ""
 
         func flush() {
             guard let t = currentTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty else { return }
-            results.append((t, currentNotes.trimmingCharacters(in: .whitespacesAndNewlines)))
+            results.append((t, currentNotes.trimmingCharacters(in: .whitespacesAndNewlines), currentEvidence.trimmingCharacters(in: .whitespacesAndNewlines)))
             currentTitle = nil
             currentNotes = ""
+            currentEvidence = ""
         }
 
         for line in trimmed.components(separatedBy: .newlines) {
@@ -730,6 +731,8 @@ class OllamaClient: @unchecked Sendable {
                 currentTitle = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
             } else if t.uppercased().hasPrefix("NOTE:") {
                 currentNotes = String(t.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+            } else if t.uppercased().hasPrefix("EVIDENCE:") {
+                currentEvidence = String(t.dropFirst(9)).trimmingCharacters(in: .whitespaces)
             } else if t.hasPrefix("- ") || t.hasPrefix("* ") {
                 // Bullet fallback
                 flush()

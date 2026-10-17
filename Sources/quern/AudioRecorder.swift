@@ -34,6 +34,10 @@ class AudioRecorder: NSObject, @unchecked Sendable {
     /// True after the last successful SCStream startCapture.
     private(set) var isCapturingSystemAudio = false
 
+    private(set) var systemAudioFailure: String?
+
+    var isCapturingMicrophone: Bool { micRecorder?.isRecording == true }
+
     /// True while the mic `AVAudioRecorder` is active.
     var isMicRecording: Bool {
         micRecorder?.isRecording == true
@@ -44,24 +48,27 @@ class AudioRecorder: NSObject, @unchecked Sendable {
         isMicRecording || stream != nil
     }
 
-    /// Avoid hammering SCShareableContent (and its dialog) after a hard permission failure this launch.
-    nonisolated(unsafe) private static var skipSystemAudioThisSession = false
 
     func start(meetingId: String) async throws {
         isCapturingSystemAudio = false
+        systemAudioFailure = nil
 
         await PermissionHelper.ensureMicrophonePermission()
         if !PermissionHelper.hasMicrophoneAccess {
-            print("[AudioRecorder] ⚠️ Microphone not authorized")
+            QuernLog.log("[AudioRecorder] ⚠️ Microphone not authorized")
         }
 
         let meetingFolder = getMeetingFolder(meetingId: meetingId)
         
-        // Clean old files from previous recordings
-        for name in ["mic.m4a", "system.wav", "mono.wav", "mono.wav.txt", "raw.m4a"] {
-            try? FileManager.default.removeItem(at: meetingFolder.appendingPathComponent(name))
+        // Preserve every previous session before preparing fresh capture files.
+        try RecordingArchive.preservePreviousSession(in: meetingFolder)
+        defer {
+            // A failed mic initialization can leave an unusable file behind.
+            if !isCapturingMicrophone {
+                try? FileManager.default.removeItem(at: meetingFolder.appendingPathComponent("mic.m4a"))
+            }
         }
-        
+
         // === 1. Start Microphone Recording ===
         let micURL = meetingFolder.appendingPathComponent("mic.m4a")
         let micSettings: [String: Any] = [
@@ -76,29 +83,24 @@ class AudioRecorder: NSObject, @unchecked Sendable {
             recorder.prepareToRecord()
             if recorder.record() {
                 self.micRecorder = recorder
-                print("[AudioRecorder] ✅ Mic recording started → mic.m4a")
+                QuernLog.log("[AudioRecorder] ✅ Mic recording started → mic.m4a")
             } else {
-                print("[AudioRecorder] ⚠️ Mic recorder failed to start")
+                QuernLog.log("[AudioRecorder] ⚠️ Mic recorder failed to start")
             }
         } catch {
-            print("[AudioRecorder] ⚠️ Mic init error: \(error.localizedDescription)")
+            QuernLog.log("[AudioRecorder] ⚠️ Mic init error: \(error.localizedDescription)")
         }
         
         // === 2. Start System Audio via ScreenCaptureKit ===
-        // IMPORTANT: Do NOT hard-skip solely on CGPreflightScreenCaptureAccess().
-        // Settings can show Quern ON while preflight is still false (stale TCC /
-        // post-re-sign). Always try SCShareableContent unless we already failed
-        // this launch with a permission error.
-        if Self.skipSystemAudioThisSession {
-            print("[AudioRecorder] Skipping system audio (permission failed earlier this launch — quit & relaunch after enabling Quern)")
-            return
-        }
-
+        // Attempt capture on every recording: a previous failure must not disable
+        // system audio for the rest of the launch after permissions change.
         do {
             // Prefer on-screen content; false/false is more likely to include active displays + audio.
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let display = content.displays.first else {
-                print("[AudioRecorder] ⚠️ No display found, system audio skipped")
+                systemAudioFailure = "No display is available for system audio capture."
+                QuernLog.log("[AudioRecorder] No display available; system audio skipped")
+                try requireActiveCapture()
                 return
             }
             
@@ -127,8 +129,17 @@ class AudioRecorder: NSObject, @unchecked Sendable {
             ]
             let writerInput = AVAssetWriterInput(mediaType: .audio, outputSettings: outputSettings)
             writerInput.expectsMediaDataInRealTime = true
+            guard writer.canAdd(writerInput) else {
+                throw NSError(domain: "QuernCapture", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "System audio writer does not support the requested audio format."
+                ])
+            }
             writer.add(writerInput)
-            writer.startWriting()
+            guard writer.startWriting() else {
+                throw writer.error ?? NSError(domain: "QuernCapture", code: 3, userInfo: [
+                    NSLocalizedDescriptionKey: "System audio writer could not start."
+                ])
+            }
             // Session start is deferred to first audio sample arrival
             
             self.audioWriter = writer
@@ -140,26 +151,34 @@ class AudioRecorder: NSObject, @unchecked Sendable {
             try await scStream.startCapture()
             self.stream = scStream
             self.isCapturingSystemAudio = true
-            print("[AudioRecorder] ✅ System audio recording started via ScreenCaptureKit (display \(display.displayID))")
+            QuernLog.log("[AudioRecorder] ✅ System audio recording started via ScreenCaptureKit (display \(display.displayID))")
         } catch {
             let msg = error.localizedDescription
-            print("[AudioRecorder] ⚠️ System audio unavailable: \(msg)")
-            print("[AudioRecorder] Continuing with mic-only recording")
-            // If TCC denied, don't re-hit SCShareableContent every meeting this launch.
-            let lower = msg.lowercased()
-            if lower.contains("deny") || lower.contains("not authorized") || lower.contains("permission")
-                || lower.contains("tcc") || lower.contains("screen") {
-                Self.skipSystemAudioThisSession = true
-            }
+            QuernLog.log("[AudioRecorder] ⚠️ System audio unavailable: \(msg)")
+            QuernLog.log("[AudioRecorder] Continuing with mic-only recording")
+            systemAudioFailure = msg
+            let captureError = error as NSError
+            QuernLog.log("[AudioRecorder] System audio failure domain=\(captureError.domain) code=\(captureError.code)")
             // Clean up half-created writer
+            audioWriter?.cancelWriting()
             audioWriterInput = nil
             audioWriter = nil
             stream = nil
             sessionStarted = false
         }
+        try requireActiveCapture()
+    }
+
+    private func requireActiveCapture() throws {
+        guard isCapturingMicrophone || isCapturingSystemAudio else {
+            throw NSError(domain: "QuernCapture", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Recording could not start: microphone and system audio are unavailable. Check recording permissions and try again."
+            ])
+        }
     }
     
     func stop() async {
+        isCapturingSystemAudio = false
         // Stop mic recording
         if let rec = micRecorder {
             let url = rec.url
@@ -167,16 +186,16 @@ class AudioRecorder: NSObject, @unchecked Sendable {
             micRecorder = nil
             try? await Task.sleep(nanoseconds: 200_000_000)
             let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64 ?? 0
-            print("[AudioRecorder] Mic stopped. Size: \(size) bytes")
+            QuernLog.log("[AudioRecorder] Mic stopped. Size: \(size) bytes")
         }
         
         // Stop system audio capture
         if let scStream = stream {
             do {
                 try await scStream.stopCapture()
-                print("[AudioRecorder] System audio capture stopped")
+                QuernLog.log("[AudioRecorder] System audio capture stopped")
             } catch {
-                print("[AudioRecorder] Error stopping system audio: \(error.localizedDescription)")
+                QuernLog.log("[AudioRecorder] Error stopping system audio: \(error.localizedDescription)")
             }
             stream = nil
         }
@@ -191,13 +210,13 @@ class AudioRecorder: NSObject, @unchecked Sendable {
             }
             let outputURL = writer.outputURL
             let size = (try? FileManager.default.attributesOfItem(atPath: outputURL.path))?[.size] as? Int64 ?? 0
-            print("[AudioRecorder] System audio file finalized. Size: \(size) bytes")
+            QuernLog.log("[AudioRecorder] System audio finalized status=\(writer.status.rawValue) bytes=\(size) error=\(writer.error?.localizedDescription ?? "none")")
             self.audioWriter = nil
             self.audioWriterInput = nil
         }
         
         try? await Task.sleep(nanoseconds: 200_000_000)
-        print("[AudioRecorder] All recording stopped.")
+        QuernLog.log("[AudioRecorder] All recording stopped.")
     }
 }
 
@@ -205,7 +224,7 @@ class AudioRecorder: NSObject, @unchecked Sendable {
 
 extension AudioRecorder: SCStreamOutput {
     nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio else { return }
+        guard type == .audio, isCapturingSystemAudio else { return }
         guard sampleBuffer.isValid, CMSampleBufferGetNumSamples(sampleBuffer) > 0 else { return }
         guard let writerInput = audioWriterInput, writerInput.isReadyForMoreMediaData else { return }
         
@@ -214,7 +233,12 @@ extension AudioRecorder: SCStreamOutput {
             audioWriter?.startSession(atSourceTime: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         }
         
-        writerInput.append(sampleBuffer)
+        if !writerInput.append(sampleBuffer) {
+            // Disable further appends so one failure produces one diagnostic.
+            isCapturingSystemAudio = false
+            systemAudioFailure = audioWriter?.error?.localizedDescription ?? "System audio could not be written."
+            QuernLog.log("[AudioRecorder] System audio append failed: \(systemAudioFailure ?? "unknown")")
+        }
     }
 }
 
@@ -222,6 +246,8 @@ extension AudioRecorder: SCStreamOutput {
 
 extension AudioRecorder: SCStreamDelegate {
     nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
-        print("[AudioRecorder] ⚠️ System audio stream error: \(error.localizedDescription)")
+        isCapturingSystemAudio = false
+        systemAudioFailure = error.localizedDescription
+        QuernLog.log("[AudioRecorder] ⚠️ System audio stream error: \(error.localizedDescription)")
     }
 }

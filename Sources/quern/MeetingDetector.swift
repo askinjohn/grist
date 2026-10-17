@@ -2,7 +2,7 @@ import Foundation
 import AppKit
 import CoreGraphics
 
-/// Detects active video meetings via running apps + window titles (local only).
+/// Detects likely meetings via window titles and per-process microphone activity (local only).
 @MainActor
 final class MeetingDetector: ObservableObject {
     static let shared = MeetingDetector()
@@ -10,6 +10,20 @@ final class MeetingDetector: ObservableObject {
     struct Detection: Equatable {
         let appName: String
         let detail: String
+        var sourceID: String = ""
+        var requiresConfirmation: Bool = false
+        var suggestedTitle: String? {
+            guard !requiresConfirmation else { return nil }
+            var title = detail
+            for suffix in [" - Google Chrome", " - Google Meet", " – Google Meet", " - Meet", " – Meet"] {
+                if title.hasSuffix(suffix) { title = String(title.dropLast(suffix.count)) }
+            }
+            for prefix in ["Meet - ", "Meet – "] { if title.hasPrefix(prefix) { title = String(title.dropFirst(prefix.count)) } }
+            let clean = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !clean.isEmpty, !clean.contains("using your microphone"), clean != appName else { return nil }
+            return clean
+        }
+        var episodeKey: String { sourceID.isEmpty ? appName : sourceID }
     }
 
     @Published private(set) var current: Detection?
@@ -17,12 +31,8 @@ final class MeetingDetector: ObservableObject {
     @Published private(set) var pendingPrompt: Detection?
 
     private var timer: Timer?
-    private var hits = 0
-    private var lastFingerprint: String?
-    /// Fingerprints dismissed until the meeting episode ends.
-    private var dismissedFingerprints: Set<String> = []
+    private var episode = MeetingDetectionEpisode()
     private let pollInterval: TimeInterval = 2.5
-    private let hitsRequired = 2
 
     private init() {}
 
@@ -42,77 +52,51 @@ final class MeetingDetector: ObservableObject {
     func stop() {
         timer?.invalidate()
         timer = nil
+        episode = MeetingDetectionEpisode()
+        current = nil
+        pendingPrompt = nil
+        RecordingStatus.shared.clearDetectedMeeting()
+        MeetingPromptController.shared.clearPending()
     }
 
     func dismissCurrentPrompt() {
-        guard let d = pendingPrompt ?? current else { return }
-        let fp = fingerprint(d)
-        dismissedFingerprints.insert(fp)
+        episode.dismiss()
         pendingPrompt = nil
+        RecordingStatus.shared.clearDetectedMeeting()
         MeetingPromptController.shared.clearPending()
-        QuernLog.log("[MeetingDetect] dismissed \(fp)")
     }
 
     func clearPromptAfterRecordingStarted() {
-        pendingPrompt = nil
-        MeetingPromptController.shared.clearPending()
+        dismissCurrentPrompt()
     }
 
     private func tick() {
-        guard MeetingDetectionSettings.shared.detectEnabled else {
-            current = nil
-            pendingPrompt = nil
-            hits = 0
-            return
-        }
-        if RecordingStatus.shared.isRecording {
-            // Don't prompt while already recording
+        guard timer != nil, MeetingDetectionSettings.shared.detectEnabled else { return }
+        guard !RecordingStatus.shared.isRecording else {
             pendingPrompt = nil
             return
         }
-
         let found = scan()
+        let shouldPrompt = episode.observe(found?.episodeKey)
         if let found {
-            let fp = fingerprint(found)
-            if lastFingerprint == fp {
-                hits += 1
-            } else {
-                lastFingerprint = fp
-                hits = 1
-            }
             current = found
-
-            if hits >= hitsRequired,
-               !dismissedFingerprints.contains(fp),
-               pendingPrompt != found {
+            if shouldPrompt {
                 pendingPrompt = found
                 RecordingStatus.shared.setDetectedMeeting(appName: found.appName, detail: found.detail)
                 MeetingPromptController.shared.present(detection: found)
-                QuernLog.log("[MeetingDetect] prompt \(found.appName) — \(found.detail)")
+                QuernLog.log("[MeetingDetect] prompt source=\(found.appName)")
             }
-        } else {
-            if current != nil {
-                // Meeting ended — allow future prompts
-                if let last = lastFingerprint {
-                    dismissedFingerprints.remove(last)
-                }
-                lastFingerprint = nil
-                hits = 0
-                current = nil
-                pendingPrompt = nil
-                RecordingStatus.shared.clearDetectedMeeting()
-                MeetingPromptController.shared.clearPending()
-            }
+        } else if episode.key == nil, current != nil {
+            current = nil
+            pendingPrompt = nil
+            RecordingStatus.shared.clearDetectedMeeting()
+            MeetingPromptController.shared.clearPending()
         }
-    }
-
-    private func fingerprint(_ d: Detection) -> String {
-        "\(d.appName)|\(d.detail)"
     }
 
     private func scan() -> Detection? {
         let settings = MeetingDetectionSettings.shared
-        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
 
         for w in windows {
             let owner = (w[kCGWindowOwnerName as String] as? String) ?? ""
@@ -126,20 +110,48 @@ final class MeetingDetector: ObservableObject {
             if settings.meetEnabled, let d = matchGoogleMeet(owner: owner, title: name) { return d }
         }
 
-        // Process fallback (app open with typical meeting helper) — weaker signal
-        let apps = NSWorkspace.shared.runningApplications
-        for app in apps {
-            guard let bid = app.bundleIdentifier else { continue }
-            if settings.zoomEnabled, bid == "us.zoom.xos" || bid.hasPrefix("us.zoom.") {
-                // Only count if we also saw a Zoom window with a meeting-like title above;
-                // bare Zoom client is not enough — skip process-only for Zoom.
-                continue
-            }
-            if settings.teamsEnabled, bid.contains("teams") || bid == "com.microsoft.teams2" {
-                continue
+        // Core Audio still exposes browser input activity when window titles are
+        // unavailable (permissions, another tab, minimized window, or another Space).
+        for bundleID in MeetingAudioActivity.inputBundleIDs().sorted() {
+            if let detection = Self.audioDetection(bundleID: bundleID),
+               (detection.appName == "Zoom" && settings.zoomEnabled)
+                || (detection.appName == "Microsoft Teams" && settings.teamsEnabled)
+                || (detection.appName == "Webex" && settings.webexEnabled)
+                || (detection.requiresConfirmation && settings.meetEnabled) {
+                return detection
             }
         }
         return nil
+    }
+
+    static func browserName(_ identity: String) -> String? {
+        let value = identity.lowercased()
+        let browsers = [("chrome", "Google Chrome"), ("safari", "Safari"), ("arc", "Arc"),
+                        ("firefox", "Firefox"), ("brave", "Brave"), ("edge", "Microsoft Edge"),
+                        ("dia", "Dia"), ("comet", "Comet")]
+        return browsers.first(where: { value.contains($0.0) })?.1
+    }
+
+    static func audioDetection(bundleID: String) -> Detection? {
+        let id = bundleID.lowercased()
+        if id == "us.zoom.xos" || id.hasPrefix("us.zoom.") {
+            return Detection(appName: "Zoom", detail: "Zoom is using your microphone")
+        }
+        if id.hasPrefix("com.microsoft.teams") {
+            return Detection(appName: "Microsoft Teams", detail: "Teams is using your microphone")
+        }
+        if id.hasPrefix("com.cisco.webex") || id.hasPrefix("com.webex") {
+            return Detection(appName: "Webex", detail: "Webex is using your microphone")
+        }
+        // Browser mic use alone cannot distinguish Meet from dictation or another site.
+        let browserPrefixes = ["com.google.chrome", "com.apple.safari", "com.apple.webkit", "company.thebrowser.browser",
+                               "org.mozilla.firefox", "com.brave.browser", "com.microsoft.edgemac",
+                               "company.thebrowser.dia", "ai.perplexity.comet"]
+        guard browserPrefixes.contains(where: { id == $0 || id.hasPrefix($0 + ".") }) else { return nil }
+        let browser = id.hasPrefix("company.thebrowser.browser") ? "Arc"
+            : id.hasPrefix("com.apple.webkit") ? "Safari" : browserName(id) ?? "Browser"
+        return Detection(appName: browser, detail: "Your browser is using the microphone. In a meeting?",
+                         sourceID: browser, requiresConfirmation: true)
     }
 
     private func matchZoom(owner: String, title: String) -> Detection? {
@@ -184,7 +196,7 @@ final class MeetingDetector: ObservableObject {
         return nil
     }
 
-    private func matchGoogleMeet(owner: String, title: String) -> Detection? {
+    func matchGoogleMeet(owner: String, title: String) -> Detection? {
         let o = owner.lowercased()
         let browsers = ["chrome", "safari", "arc", "firefox", "brave", "microsoft edge", "edge", "dia", "comet"]
         guard browsers.contains(where: { o.contains($0) }) else { return nil }
@@ -193,10 +205,11 @@ final class MeetingDetector: ObservableObject {
         if t.contains("meet.google.com")
             || t.contains("meet –")
             || t.contains("meet -")
-            || (t.contains(" meet") && t.contains("-") && t.count < 80) {
+            || t.hasSuffix(" - meet") || t.hasSuffix(" – meet")
+            || t.contains(" - google meet") {
             // Exclude calendar.google.com noise
             if t.contains("calendar.google.com") { return nil }
-            return Detection(appName: "Google Meet", detail: title)
+            return Detection(appName: "Google Meet", detail: title, sourceID: Self.browserName(owner) ?? owner)
         }
         return nil
     }

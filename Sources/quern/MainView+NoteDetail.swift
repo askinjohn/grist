@@ -362,11 +362,12 @@ extension MainView {
     @ViewBuilder
     var noteAIControls: some View {
         HStack(spacing: 8) {
-            Picker("", selection: $selectedModel) {
-                ForEach(presetModels, id: \.self) { m in Text(m).tag(m) }
+            Button {
+                showingSettingsSheet = true
+            } label: {
+                Label("AI models", systemImage: "cpu")
             }
-            .labelsHidden()
-            .frame(width: 130)
+            .help("Choose models by job in Settings")
 
             Button {
                 openImportSheet(appendToCurrent: true)
@@ -411,8 +412,8 @@ extension MainView {
             .disabled(isExtractingTasks || noteBodyEmpty)
 
             enhanceToolbarButton(
-                title: statusMessage == "Enhancing…" ? "Working…" : "Enhance",
-                disabled: statusMessage == "Enhancing…" || noteBodyEmpty,
+                title: isEnhancing ? "Working…" : "Enhance",
+                disabled: isEnhancing || noteBodyEmpty,
                 help: "AI summary + title from what you wrote"
             )
         }
