@@ -38,6 +38,17 @@ class AudioRecorder: NSObject, @unchecked Sendable {
 
     var isCapturingMicrophone: Bool { micRecorder?.isRecording == true }
 
+    /// True while the mic `AVAudioRecorder` is active.
+    var isMicRecording: Bool {
+        micRecorder?.isRecording == true
+    }
+
+    /// Mic and/or system capture currently running.
+    var isActivelyCapturing: Bool {
+        isMicRecording || stream != nil
+    }
+
+
     func start(meetingId: String) async throws {
         isCapturingSystemAudio = false
         systemAudioFailure = nil

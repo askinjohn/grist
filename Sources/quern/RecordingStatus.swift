@@ -33,6 +33,23 @@ final class RecordingStatus: ObservableObject {
         // When not recording, keep last live text until UI clears / final transcript lands.
     }
 
+    /// Clear menu-bar “Recording …” chrome without touching the MainView `@State`.
+    /// Used when UI state desynced (e.g. MainView remounted) or Stop arrives with no active session.
+    func markIdle() {
+        isRecording = false
+        elapsedSeconds = 0
+        clearLiveTranscript()
+    }
+
+    /// Stop hardware + live ASR + menu chrome even if MainView’s `@State` was lost.
+    func forceStopHardwareAndChrome() {
+        markIdle()
+        LiveTranscriptionService.shared.stop()
+        Task {
+            await AudioRecorder.shared.stop()
+        }
+    }
+
     func setDetectedMeeting(appName: String, detail: String) {
         detectedMeetingApp = appName
         detectedMeetingDetail = detail

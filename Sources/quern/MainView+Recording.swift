@@ -107,7 +107,7 @@ extension MainView {
             guard let meetingId else {
                 await MainActor.run {
                     statusMessage = "Recording stopped (no meeting selected)"
-                    RecordingStatus.shared.clearLiveTranscript()
+                    RecordingStatus.shared.markIdle()
                 }
                 return
             }
@@ -124,7 +124,7 @@ extension MainView {
                     if capturedDuration > 0 { current.durationSeconds = max(current.durationSeconds, capturedDuration) }
                 }) else {
                     statusMessage = "Audio saved to disk; transcript could not be saved"
-                    RecordingStatus.shared.clearLiveTranscript()
+                    RecordingStatus.shared.markIdle()
                     return
                 }
                 if selectedMeeting?.id == meetingId {
@@ -133,7 +133,7 @@ extension MainView {
                 if let idx = meetings.firstIndex(where: { $0.id == meetingId }) {
                     meetings[idx] = m
                 }
-                RecordingStatus.shared.clearLiveTranscript()
+                RecordingStatus.shared.markIdle()
                 statusMessage = failed ? "Transcription failed. Audio saved — use Retry transcription. Previous text was preserved when available." : ""
 
                 RAGEngine.shared.indexMeetingNow(m)
@@ -170,4 +170,49 @@ extension MainView {
         }
     }
 
+
+    /// Menu bar / MainView can disagree after a SwiftUI remount: chrome says REC, `@State` says idle.
+    func handleStopRecordingRequest() {
+        if isRecording {
+            stopRecording()
+            return
+        }
+        if recordingMeetingId != nil || RecordingStatus.shared.isRecording || recorder.isActivelyCapturing
+            || LiveTranscriptionService.shared.isRunning {
+            QuernLog.log("[Record] clearing stale recording chrome (MainView idle)")
+            recordingMeetingId = nil
+            recordingTimer?.invalidate()
+            recordingTimer = nil
+            statusMessage = ""
+            RecordingStatus.shared.forceStopHardwareAndChrome()
+        }
+    }
+
+    /// Drop ghost “Recording 0:00” if chrome is on but nothing is capturing.
+    func reconcileRecordingStatusWithHardware() {
+        guard !isStartingRecording, !isTranscribing else { return }
+        let chromeOn = RecordingStatus.shared.isRecording
+        let capturing = recorder.isActivelyCapturing
+        let liveOn = LiveTranscriptionService.shared.isRunning
+
+        if chromeOn && !isRecording && !capturing {
+            QuernLog.log("[Record] reconcile: stale menu chrome → idle")
+            recordingTimer?.invalidate()
+            recordingTimer = nil
+            recordingMeetingId = nil
+            recordingSeconds = 0
+            if liveOn { LiveTranscriptionService.shared.stop() }
+            RecordingStatus.shared.markIdle()
+            return
+        }
+
+        // Hardware still running but UI lost the session — stop capture to avoid silent recording.
+        if !isRecording && capturing {
+            QuernLog.log("[Record] reconcile: orphaned capture → force stop")
+            recordingMeetingId = nil
+            recordingTimer?.invalidate()
+            recordingTimer = nil
+            RecordingStatus.shared.forceStopHardwareAndChrome()
+        }
+    }
 }
