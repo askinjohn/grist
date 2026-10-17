@@ -5,6 +5,8 @@ struct QuernTask: Identifiable, Codable, Hashable {
     var id: String
     var title: String
     var notes: String
+    /// Short verbatim source returned by task extraction. Empty for manual tasks.
+    var evidence: String
     /// Source meeting/note id (nil if manual-only).
     var sourceMeetingId: String?
     var sourceTitle: String?
@@ -12,6 +14,10 @@ struct QuernTask: Identifiable, Codable, Hashable {
     var status: String
     var createdAt: Double
     var completedAt: Double?
+    var dueAt: Double?
+    /// none | low | medium | high
+    var priority: String
+    var assignee: String = ""
     var isDeleted: Bool
 
     var isOpen: Bool { status == "open" && !isDeleted }
@@ -22,11 +28,14 @@ struct QuernTask: Identifiable, Codable, Hashable {
             id: UUID().uuidString,
             title: title,
             notes: notes,
+            evidence: "",
             sourceMeetingId: source?.id,
             sourceTitle: source?.title,
             status: "open",
             createdAt: Date().timeIntervalSince1970,
             completedAt: nil,
+            dueAt: nil,
+            priority: "none",
             isDeleted: false
         )
     }
@@ -34,18 +43,28 @@ struct QuernTask: Identifiable, Codable, Hashable {
     static func fromExtract(
         title: String,
         notes: String,
+        evidence: String,
         source: Meeting
     ) -> QuernTask {
         QuernTask(
             id: UUID().uuidString,
             title: title,
             notes: notes,
+            evidence: evidence,
             sourceMeetingId: source.id,
             sourceTitle: source.title,
             status: "open",
             createdAt: Date().timeIntervalSince1970,
             completedAt: nil,
+            dueAt: nil,
+            priority: "none",
             isDeleted: false
         )
+    }
+
+    var isOverdue: Bool { overdue(at: Date()) }
+
+    func overdue(at now: Date, calendar: Calendar = .current) -> Bool {
+        isOpen && (dueAt ?? .infinity) < calendar.startOfDay(for: now).timeIntervalSince1970
     }
 }

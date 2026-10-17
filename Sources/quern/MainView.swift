@@ -12,6 +12,8 @@ struct MainView: View {
     @State var tasks: [QuernTask] = []
     @State var selectedMeeting: Meeting? = nil
     @State var selectedTask: QuernTask? = nil
+    /// Short verbatim source selected from a task. Shown when the task opens its meeting.
+    @State var transcriptEvidenceQuery: String? = nil
     @State var searchText = ""
     @State var showingNewTaskSheet = false
     @State var newTaskTitle = ""
@@ -20,8 +22,11 @@ struct MainView: View {
     @State var newTaskLinkToOpenItem = true
     @FocusState var newTaskTitleFocused: Bool
     @State var isExtractingTasks = false
+    @State var isExportingTasks = false
     /// open | done | all
     @State var taskListFilter: String = "open"
+    @State var taskSort = "due"
+    @State var librarySort = "newest"
     @AppStorage("autoExtractTasks") var autoExtractTasks = true
     @AppStorage("healthBannerDismissedAt") var healthBannerDismissedAt: Double = 0
     @State var healthReport: QuernHealthReport? = nil
@@ -75,12 +80,15 @@ struct MainView: View {
 
     // Recording
     @State var isRecording = false
+    @State var isStartingRecording = false
+    @State var isTranscribing = false
     /// Meeting id capture was started for — Stop always targets this, even if selection changed.
     @State var recordingMeetingId: String? = nil
     @State var recordingSeconds = 0
     @State var statusMessage = ""
     @State var isEnhancing = false
     @State var recordingTimer: Timer? = nil
+    @ObservedObject var meetingDetector = MeetingDetector.shared
 
     // UI
     @State var selectedTab = "summary"
@@ -155,10 +163,16 @@ struct MainView: View {
             sidebarContent
                 .navigationSplitViewColumnWidth(min: 260, ideal: 288, max: 360)
         } detail: {
-            if libraryFilter == .tasks && focusedFolder == nil {
+            if isSearching && selectedMeeting == nil {
+                libraryBrowserView
+            } else if libraryFilter == .today && focusedFolder == nil {
+                todayDetailView
+            } else if libraryFilter == .tasks && focusedFolder == nil {
                 tasksDetailView
             } else if libraryFilter == .askEverything && focusedFolder == nil {
                 globalChatDetail
+            } else if selectedMeeting == nil {
+                libraryBrowserView
             } else if let _ = selectedMeeting {
                 detailContent
             } else {
@@ -273,6 +287,7 @@ struct MainView: View {
             guard allowFocusLibraryRefresh else { return }
             refreshLibraryOnFocus()
         }
+        .onOpenURL(perform: handleWidgetURL)
         .onReceive(NotificationCenter.default.publisher(for: .meetingDeleted)) { note in
             let deletedId = note.object as? String
             let wasSelectedId = selectedMeeting?.id
@@ -338,6 +353,20 @@ struct MainView: View {
                 }
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .libraryContentChanged)) { _ in loadMeetings() }
+        .onReceive(NotificationCenter.default.publisher(for: .revealAskEvidence)) { notification in
+            guard let evidence = notification.object as? AskEvidence,
+                  let id = evidence.meetingID,
+                  let meeting = db.getMeeting(id: id), !meeting.isDeleted else { return }
+            searchText = ""
+            focusedFolder = nil
+            libraryFilter = .all
+            selectedMeeting = meeting
+            selectedTask = nil
+            transcriptEvidenceQuery = evidence.quote
+            DispatchQueue.main.async { selectedTab = evidence.section == "title" ? "notes" : evidence.section }
+        }
+        .onChange(of: taskListFilter) { _, _ in selectedTask = nil }
         .onChange(of: searchText) { _, query in
             handleSearchQueryChange(query)
         }

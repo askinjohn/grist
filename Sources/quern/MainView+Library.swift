@@ -32,6 +32,8 @@ extension MainView {
             list = list.filter { ($0.groupName ?? "") == folder }
         } else {
             switch libraryFilter {
+            case .today:
+                list = list.filter { Calendar.current.isDateInToday(Date(timeIntervalSince1970: $0.timestamp)) }
             case .all, .askEverything, .tasks:
                 break
             case .unfiled:
@@ -57,6 +59,7 @@ extension MainView {
     /// Open a search hit in the detail pane and jump to the matching tab.
     func openSearchResult(_ meeting: Meeting) {
         pendingSearchReveal = true
+        transcriptEvidenceQuery = SearchEvidence.match(meeting, query: searchText)?.quote
         // Clear folder focus so the row stays visible under “Search results”
         focusedFolder = nil
         libraryFilter = .all
@@ -64,13 +67,9 @@ extension MainView {
     }
 
     func handleSearchQueryChange(_ query: String) {
-        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !q.isEmpty else { return }
-        let hits = filteredMeetings
-        guard !hits.isEmpty else { return }
-        // If nothing selected or selection not in results, jump to the best hit
-        if selectedMeeting == nil || !hits.contains(where: { $0.id == selectedMeeting?.id }) {
-            openSearchResult(hits[0])
+        if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            selectedMeeting = nil
+            selectedTask = nil
         }
     }
 
@@ -78,25 +77,13 @@ extension MainView {
     func revealSearchMatch(in m: Meeting) {
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
+        let section = SearchEvidence.match(m, query: q)?.section
         if m.isNoteType {
-            if m.summary.localizedCaseInsensitiveContains(q) {
-                selectedTab = "summary"
-            } else {
-                selectedTab = "notes"
-                // Preview when the hit is in a long body
-                noteShowPreview = m.manualNotes.count > 400 || m.transcript.localizedCaseInsensitiveContains(q)
-            }
-            return
-        }
-        // Meeting
-        if m.summary.localizedCaseInsensitiveContains(q) {
-            selectedTab = "summary"
-        } else if m.manualNotes.localizedCaseInsensitiveContains(q) {
-            selectedTab = "notes"
-        } else if m.transcript.localizedCaseInsensitiveContains(q) {
-            selectedTab = "transcript"
+            selectedTab = section == "summary" ? "summary" : "notes"
+            noteShowPreview = m.manualNotes.count > 400 || section == "transcript"
         } else {
-            selectedTab = m.summary.isEmpty ? "transcript" : "summary"
+            selectedTab = ["summary", "notes", "transcript"].contains(section ?? "")
+                ? section! : (m.summary.isEmpty ? "transcript" : "summary")
         }
     }
 
@@ -126,7 +113,7 @@ extension MainView {
         case .meetings, .notes:
             // Meetings/Notes filter: unfiled of that kind only (filed items under accordion)
             return timeGrouped(unfiledMeetingsForSidebar, headerPrefix: nil)
-        case .askEverything, .tasks:
+        case .today, .askEverything, .tasks:
             return []
         }
     }

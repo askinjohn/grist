@@ -7,6 +7,7 @@ extension MainView {
     // MARK: - AI
 
     func runEnhance() {
+        guard !isEnhancing else { return }
         guard let m = selectedMeeting else {
             QuernLog.log("[Enhance] abort: no selected meeting")
             return
@@ -28,7 +29,7 @@ extension MainView {
         let existingSummaryLen = m.summary.trimmingCharacters(in: .whitespacesAndNewlines).count
         let modelName = selectedModel == "custom" ? customModelName : selectedModel
         QuernLog.log("[Enhance] ========== RUN ==========")
-        QuernLog.log("[Enhance] start id=\(m.id) title=\(m.title.prefix(80))")
+        QuernLog.log("[Enhance] start id=\(m.id)")
         QuernLog.log("[Enhance] model=\(modelName) rolePicker=\(modelPickerRole.rawValue) configEnhance=\(AIConfigManager.shared.modelName(for: .enhance))")
         QuernLog.log("[Enhance] feeds ORIGINAL content only — never existing AI summary")
         QuernLog.log("[Enhance] primaryField=\(usedTranscriptField ? "transcript" : "manualNotes-as-primary")")
@@ -37,17 +38,6 @@ extension MainView {
         if transcriptSource.count > 50_000 {
             QuernLog.log("[Enhance] WARNING long source (\(transcriptSource.count) chars) — OllamaClient will truncate/de-dupe for context")
         }
-        if !transcriptSource.isEmpty {
-            let preview = transcriptSource
-                .replacingOccurrences(of: "\n", with: " ")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            QuernLog.log("[Enhance] primaryPreview: \(preview.prefix(200))…")
-        }
-        if existingSummaryLen > 0 {
-            let sp = m.summary.replacingOccurrences(of: "\n", with: " ")
-            QuernLog.log("[Enhance] OLD summary (will be replaced, not fed): \(sp.prefix(120))…")
-        }
-
         guard !transcriptSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             statusMessage = m.isNoteType ? "Write something first" : "No transcript yet"
             QuernLog.log("[Enhance] abort: empty primary source")
@@ -104,33 +94,22 @@ extension MainView {
                 )
                 let elapsed = Date().timeIntervalSince(t0)
                 await MainActor.run {
-                    // Reassign whole struct so SwiftUI + DB both see the new summary
-                    guard var updated = selectedMeeting, updated.id == meetingId else {
-                        // Selection changed mid-flight — still persist by id
-                        if var m2 = db.getMeeting(id: meetingId) {
-                            m2.summary = result.summary
-                            if applyTitle, let title = result.title, !title.isEmpty, m2.isPlaceholderTitle {
-                                m2.title = title
-                            }
-                            db.saveMeeting(m2)
-                            RAGEngine.shared.indexMeetingNow(m2)
-                            QuernLog.log("[Enhance] done (selection changed) id=\(meetingId) \(String(format: "%.1f", elapsed))s summaryChars=\(result.summary.count)")
+                    guard let updated = db.modifyMeeting(id: meetingId, { current in
+                        current.summary = result.summary
+                        if applyTitle, let title = result.title, !title.isEmpty, current.isPlaceholderTitle {
+                            current.title = title
                         }
-                        statusMessage = "Done"
+                    }) else {
+                        statusMessage = "Could not save summary; item may have been deleted"
                         return
                     }
-                    let oldSummaryChars = updated.summary.count
-                    updated.summary = result.summary
-                    if applyTitle, let title = result.title, !title.isEmpty, updated.isPlaceholderTitle {
-                        updated.title = title
-                    }
-                    selectedMeeting = updated
-                    saveMeeting()
+                    if selectedMeeting?.id == meetingId { selectedMeeting = updated }
+                    if let index = meetings.firstIndex(where: { $0.id == meetingId }) { meetings[index] = updated }
                     RAGEngine.shared.indexMeetingNow(updated)
                     if autoExtractTasks {
                         extractTasks(from: updated)
                     }
-                    // Optional: push Markdown into Obsidian vault after Enhance
+                    // Optional: push results into user-configured destinations after Enhance.
                     if IntegrationsConfigManager.shared.config.obsidian.isConfigured,
                        IntegrationsConfigManager.shared.config.obsidian.autoExportAfterEnhance {
                         do {
@@ -142,11 +121,24 @@ extension MainView {
                     } else {
                         statusMessage = "Done"
                     }
-                    selectedTab = "summary"
+                    if IntegrationsConfigManager.shared.config.notion.isConfigured,
+                       IntegrationsConfigManager.shared.config.notion.autoExportAfterEnhance {
+                        Task {
+                            do {
+                                try await NotionExporter.exportMeeting(updated)
+                                await MainActor.run {
+                                    if statusMessage == "Done" { statusMessage = "Done · Notion" }
+                                }
+                            } catch {
+                                await MainActor.run {
+                                    statusMessage = "Done · Notion failed: \(error.localizedDescription)"
+                                }
+                            }
+                        }
+                    }
+                    if selectedMeeting?.id == meetingId { selectedTab = "summary" }
                     QuernLog.log("[Enhance] done id=\(meetingId) \(String(format: "%.1f", elapsed))s model=\(model)")
-                    QuernLog.log("[Enhance] summaryChars \(oldSummaryChars) → \(result.summary.count) title=\(result.title ?? "(none)")")
-                    let sumPreview = result.summary.replacingOccurrences(of: "\n", with: " ")
-                    QuernLog.log("[Enhance] summaryPreview: \(sumPreview.prefix(160))…")
+                    QuernLog.log("[Enhance] summaryChars=\(result.summary.count)")
                 }
             } catch {
                 let elapsed = Date().timeIntervalSince(t0)
@@ -222,25 +214,27 @@ extension MainView {
                         model: model
                     )
 
-                    var updated = m
                     var parts: [String] = []
-
-                    if needsTitle, let t = result.title, !t.isEmpty {
-                        updated.title = t
-                        parts.append("titled “\(t)”")
-                    }
-                    if needsFolder, let f = result.folder, !f.isEmpty {
-                        updated.groupName = f
-                        await MainActor.run { db.saveFolder(f) }
-                        parts.append("filed in “\(f)”")
-                    }
-
-                    if parts.isEmpty {
-                        lines.append("• \(oldTitle) — no change (AI returned KEEP/NONE)")
-                    } else {
-                        await MainActor.run {
-                            db.saveMeeting(updated)
+                    guard let updated = db.modifyMeeting(id: m.id, { current in
+                        if needsTitle, current.title == m.title, let t = result.title, !t.isEmpty {
+                            current.title = t
+                            parts.append("titled “\(t)”")
                         }
+                        if needsFolder, current.groupName == m.groupName, let f = result.folder, !f.isEmpty {
+                            current.groupName = f
+                            parts.append("filed in “\(f)”")
+                        }
+                    }) else {
+                        failed += 1
+                        lines.append("• \(oldTitle) — could not save; item may have been deleted")
+                        continue
+                    }
+                    if let folder = updated.groupName { db.saveFolder(folder) }
+                    if selectedMeeting?.id == updated.id { selectedMeeting = updated }
+                    if parts.isEmpty {
+                        lines.append("• \(oldTitle) — no change")
+                    } else {
+                        RAGEngine.shared.indexMeetingNow(updated)
                         success += 1
                         let label = needsTitle ? oldTitle : updated.title
                         lines.append("• \(label) → " + parts.joined(separator: ", "))
@@ -284,9 +278,12 @@ extension MainView {
             do {
                 let title = try await ollama.suggestTitle(content: source, kind: kind, model: model)
                 await MainActor.run {
-                    if !title.isEmpty {
-                        selectedMeeting?.title = title
-                        saveMeeting()
+                    if !title.isEmpty, let updated = db.modifyMeeting(id: m.id, { current in
+                        if current.title == m.title { current.title = title }
+                    }) {
+                        if selectedMeeting?.id == m.id { selectedMeeting = updated }
+                        if let index = meetings.firstIndex(where: { $0.id == m.id }) { meetings[index] = updated }
+                        RAGEngine.shared.indexMeetingNow(updated)
                     }
                     statusMessage = ""
                 }

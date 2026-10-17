@@ -56,8 +56,12 @@ extension MainView {
                 .background(Color.purple.opacity(0.1))
             }
 
-            aiContentView
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if isRecording, selectedMeeting?.id == recordingMeetingId {
+                recordingWorkspace
+            } else {
+                aiContentView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
     }
 
@@ -169,23 +173,12 @@ extension MainView {
     @ViewBuilder
     var aiConfigControls: some View {
         HStack(spacing: 8) {
-            // Model picker
-            Picker("", selection: $selectedModel) {
-                ForEach(presetModels, id: \.self) { m in
-                    Text(m).tag(m)
-                }
-                Divider()
-                Text("Custom…").tag("custom")
+            Button {
+                showingSettingsSheet = true
+            } label: {
+                Label("AI models", systemImage: "cpu")
             }
-            .labelsHidden()
-            .frame(width: 120)
-            .help("Synced with Settings → AI Models (\(currentModelPickerRole().label))")
-
-            if selectedModel == "custom" {
-                TextField("model:tag", text: $customModelName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 100)
-            }
+            .help("Choose models by job in Settings")
 
             // Template picker
             Picker("", selection: $selectedTemplate) {
@@ -235,8 +228,8 @@ extension MainView {
             .controlSize(.regular)
 
             enhanceToolbarButton(
-                title: statusMessage == "Enhancing…" ? "Enhancing…" : "Enhance",
-                disabled: statusMessage == "Enhancing…" || !meetingHasEnhanceableContent,
+                title: isEnhancing ? "Enhancing…" : "Enhance",
+                disabled: isEnhancing || !meetingHasEnhanceableContent,
                 help: "Generate structured AI summary from transcript and notes"
             )
             .controlSize(.regular)
@@ -252,6 +245,46 @@ extension MainView {
         return !n.isEmpty
     }
 
+    var recordingWorkspace: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 12) {
+                Circle()
+                    .fill(.red)
+                    .frame(width: 10, height: 10)
+                    .overlay(Circle().stroke(.red.opacity(0.22), lineWidth: 7).scaleEffect(1.5))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Recording now")
+                        .font(.headline)
+                    Text(formattedDuration(recordingSeconds))
+                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                captureInputChip("Microphone", active: recorder.isCapturingMicrophone)
+                captureInputChip("System audio", active: recorder.isCapturingSystemAudio)
+                Button("Stop recording", action: stopRecording)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .background(.bar)
+
+            Divider()
+            liveOrSavedTranscriptView
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    func captureInputChip(_ title: String, active: Bool) -> some View {
+        Label(title, systemImage: active ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(active ? .green : .orange)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background((active ? Color.green : Color.orange).opacity(0.1), in: Capsule())
+    }
+
     @ViewBuilder
     var aiContentView: some View {
         switch selectedTab {
@@ -259,6 +292,23 @@ extension MainView {
             if let summary = selectedMeeting?.summary, !summary.isEmpty {
                 VStack(spacing: 0) {
                     summarySpeechBar(text: summary)
+                    if let meeting = selectedMeeting,
+                       !meeting.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        HStack {
+                            Label("AI summary", systemImage: "sparkles")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Review original transcript") {
+                                selectedTab = "transcript"
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(Color.primary.opacity(0.035))
+                    }
                     MarkdownView.summary(summary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -343,8 +393,26 @@ extension MainView {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if !saved.isEmpty {
-            MarkdownView(markdown: saved)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                if let evidence = transcriptEvidenceQuery, !evidence.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "quote.opening")
+                            .foregroundStyle(.purple)
+                        Text("Task evidence: \(evidence)")
+                            .font(.caption)
+                            .lineLimit(2)
+                        Spacer()
+                        Button("Clear") { transcriptEvidenceQuery = nil }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(Color.purple.opacity(0.08))
+                }
+                MarkdownView(markdown: saved)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else {
             aiEmptyState(
                 icon: "waveform",

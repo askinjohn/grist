@@ -5,11 +5,124 @@ import AppKit
 struct IntegrationsFile: Codable, Equatable {
     var version: Int
     var obsidian: ObsidianIntegrationConfig
+    var notion: NotionIntegrationConfig
 
     static let `default` = IntegrationsFile(
-        version: 1,
-        obsidian: .default
+        version: 2,
+        obsidian: .default,
+        notion: .default
     )
+
+    enum CodingKeys: String, CodingKey { case version, obsidian, notion }
+
+    init(version: Int, obsidian: ObsidianIntegrationConfig, notion: NotionIntegrationConfig) {
+        self.version = version
+        self.obsidian = obsidian
+        self.notion = notion
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        obsidian = try c.decodeIfPresent(ObsidianIntegrationConfig.self, forKey: .obsidian) ?? .default
+        notion = try c.decodeIfPresent(NotionIntegrationConfig.self, forKey: .notion) ?? .default
+    }
+}
+
+/// Notion export settings. The integration token is deliberately stored in macOS Keychain, not JSON.
+struct NotionIntegrationConfig: Codable, Equatable {
+    var enabled: Bool
+    /// Page ID from a Notion page shared with this integration.
+    var parentPageID: String
+    var destinationKind: String? = nil
+    var destinationName: String? = nil
+    /// Optional routes. Empty values keep older installations on the default destination.
+    var meetingPageID: String = ""
+    var meetingDestinationKind: String = "page"
+    var meetingDestinationName: String = ""
+    var notePageID: String = ""
+    var noteDestinationKind: String = "page"
+    var noteDestinationName: String = ""
+    var taskPageID: String = ""
+    var taskDestinationKind: String = "page"
+    var taskDestinationName: String = ""
+    var taskListPageID: String = ""
+    var taskBlockIDs: [String] = []
+    var autoExportAfterEnhance: Bool
+    var includeSummary: Bool
+    var includeNotes: Bool
+    var includeTranscript: Bool
+
+    static let `default` = NotionIntegrationConfig(
+        enabled: false,
+        parentPageID: "",
+        autoExportAfterEnhance: false,
+        includeSummary: true,
+        includeNotes: true,
+        includeTranscript: false
+    )
+
+    enum CodingKeys: String, CodingKey {
+        case enabled, parentPageID, destinationKind, destinationName, autoExportAfterEnhance
+        case includeSummary, includeNotes, includeTranscript
+        case meetingPageID, meetingDestinationKind, meetingDestinationName
+        case notePageID, noteDestinationKind, noteDestinationName
+        case taskPageID, taskDestinationKind, taskDestinationName, taskListPageID, taskBlockIDs
+    }
+
+    init(enabled: Bool, parentPageID: String, autoExportAfterEnhance: Bool,
+         includeSummary: Bool, includeNotes: Bool, includeTranscript: Bool) {
+        self.enabled = enabled
+        self.parentPageID = parentPageID
+        self.autoExportAfterEnhance = autoExportAfterEnhance
+        self.includeSummary = includeSummary
+        self.includeNotes = includeNotes
+        self.includeTranscript = includeTranscript
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        parentPageID = try c.decodeIfPresent(String.self, forKey: .parentPageID) ?? ""
+        destinationKind = try c.decodeIfPresent(String.self, forKey: .destinationKind)
+        destinationName = try c.decodeIfPresent(String.self, forKey: .destinationName)
+        autoExportAfterEnhance = try c.decodeIfPresent(Bool.self, forKey: .autoExportAfterEnhance) ?? false
+        includeSummary = try c.decodeIfPresent(Bool.self, forKey: .includeSummary) ?? true
+        includeNotes = try c.decodeIfPresent(Bool.self, forKey: .includeNotes) ?? true
+        includeTranscript = try c.decodeIfPresent(Bool.self, forKey: .includeTranscript) ?? false
+        meetingPageID = try c.decodeIfPresent(String.self, forKey: .meetingPageID) ?? ""
+        meetingDestinationKind = try c.decodeIfPresent(String.self, forKey: .meetingDestinationKind) ?? "page"
+        meetingDestinationName = try c.decodeIfPresent(String.self, forKey: .meetingDestinationName) ?? ""
+        notePageID = try c.decodeIfPresent(String.self, forKey: .notePageID) ?? ""
+        noteDestinationKind = try c.decodeIfPresent(String.self, forKey: .noteDestinationKind) ?? "page"
+        noteDestinationName = try c.decodeIfPresent(String.self, forKey: .noteDestinationName) ?? ""
+        taskPageID = try c.decodeIfPresent(String.self, forKey: .taskPageID) ?? ""
+        taskDestinationKind = try c.decodeIfPresent(String.self, forKey: .taskDestinationKind) ?? "page"
+        taskDestinationName = try c.decodeIfPresent(String.self, forKey: .taskDestinationName) ?? ""
+        taskListPageID = try c.decodeIfPresent(String.self, forKey: .taskListPageID) ?? ""
+        taskBlockIDs = try c.decodeIfPresent([String].self, forKey: .taskBlockIDs) ?? []
+    }
+
+    var isConfigured: Bool {
+        enabled
+            && [parentPageID, meetingPageID, notePageID, taskPageID].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    var exportOptions: ExportOptions {
+        ExportOptions(
+            includeMetadata: true,
+            includeSources: true,
+            includeSummary: includeSummary,
+            includeNotes: includeNotes,
+            includeTranscript: includeTranscript
+        )
+    }
+
+    func destination(for meeting: Meeting) -> (id: String, kind: String) {
+        let id = meeting.isNoteType ? notePageID : meetingPageID
+        let kind = meeting.isNoteType ? noteDestinationKind : meetingDestinationKind
+        return id.isEmpty ? (parentPageID, destinationKind ?? "page") : (id, kind)
+    }
 }
 
 struct ObsidianIntegrationConfig: Codable, Equatable {
@@ -22,6 +135,11 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
     var vaultName: String
     /// Subfolder under vault, e.g. `Quern` or `Meetings/Quern`
     var subfolder: String
+    /// Optional per-type folders, relative to the vault. Empty uses `subfolder`.
+    var meetingSubfolder: String = ""
+    var noteSubfolder: String = ""
+    /// One Markdown checklist, relative to the vault.
+    var taskFilePath: String = "Quern/Todo.md"
     /// `{date}` = yyyy-MM-dd, `{title}` = sanitized title, `{id}` = short id
     var filenamePattern: String
     /// After Enhance, write Markdown into vault automatically
@@ -52,6 +170,7 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
 
     enum CodingKeys: String, CodingKey {
         case enabled, vaultPath, vaultName, subfolder, filenamePattern
+        case meetingSubfolder, noteSubfolder, taskFilePath
         case autoExportAfterEnhance, openAfterExport
         case includeMetadata, includeSources, includeSummary, includeNotes, includeTranscript
     }
@@ -90,6 +209,9 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
         vaultPath = try c.decodeIfPresent(String.self, forKey: .vaultPath) ?? ""
         vaultName = try c.decodeIfPresent(String.self, forKey: .vaultName) ?? ""
         subfolder = try c.decodeIfPresent(String.self, forKey: .subfolder) ?? "Quern"
+        meetingSubfolder = try c.decodeIfPresent(String.self, forKey: .meetingSubfolder) ?? ""
+        noteSubfolder = try c.decodeIfPresent(String.self, forKey: .noteSubfolder) ?? ""
+        taskFilePath = try c.decodeIfPresent(String.self, forKey: .taskFilePath) ?? "Quern/Todo.md"
         filenamePattern = try c.decodeIfPresent(String.self, forKey: .filenamePattern) ?? "{date}-{title}"
         autoExportAfterEnhance = try c.decodeIfPresent(Bool.self, forKey: .autoExportAfterEnhance) ?? false
         openAfterExport = try c.decodeIfPresent(Bool.self, forKey: .openAfterExport) ?? true
@@ -106,6 +228,9 @@ struct ObsidianIntegrationConfig: Codable, Equatable {
         try c.encode(vaultPath, forKey: .vaultPath)
         try c.encode(vaultName, forKey: .vaultName)
         try c.encode(subfolder, forKey: .subfolder)
+        try c.encode(meetingSubfolder, forKey: .meetingSubfolder)
+        try c.encode(noteSubfolder, forKey: .noteSubfolder)
+        try c.encode(taskFilePath, forKey: .taskFilePath)
         try c.encode(filenamePattern, forKey: .filenamePattern)
         try c.encode(autoExportAfterEnhance, forKey: .autoExportAfterEnhance)
         try c.encode(openAfterExport, forKey: .openAfterExport)
@@ -194,6 +319,12 @@ final class IntegrationsConfigManager: ObservableObject {
         _ = saveConfig(f)
     }
 
+    func updateNotion(_ block: (inout NotionIntegrationConfig) -> Void) {
+        var f = config
+        block(&f.notion)
+        _ = saveConfig(f)
+    }
+
     var configPath: String { Self.fileURL.path }
 }
 
@@ -232,7 +363,8 @@ enum ObsidianExporter {
             throw ObsidianExportError.vaultMissing(vault.path)
         }
 
-        let destDir = destinationDirectory(vault: vault, subfolder: cfg.subfolder)
+        let route = meeting.isNoteType ? cfg.noteSubfolder : cfg.meetingSubfolder
+        let destDir = try destinationDirectory(vault: vault, subfolder: route.isEmpty ? cfg.subfolder : route)
         do {
             try FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
         } catch {
@@ -256,6 +388,37 @@ enum ObsidianExporter {
             openInObsidian(vault: vault, fileURL: fileURL, preferredVaultName: cfg.vaultName)
         }
         return fileURL
+    }
+
+    /// Replace one checklist with the current task state; repeated syncs do not create copies.
+    @MainActor
+    static func exportTasks(_ tasks: [QuernTask]) throws -> URL {
+        let cfg = IntegrationsConfigManager.shared.config.obsidian
+        guard cfg.enabled else { throw ObsidianExportError.notEnabled }
+        guard let vault = cfg.vaultURL else { throw ObsidianExportError.noVault }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: vault.path, isDirectory: &isDir), isDir.boolValue else {
+            throw ObsidianExportError.vaultMissing(vault.path)
+        }
+        let parts = try safeParts(cfg.taskFilePath)
+        guard let name = parts.last, name.lowercased().hasSuffix(".md") else {
+            throw ObsidianExportError.writeFailed("Task path must end in .md")
+        }
+        let directory = parts.dropLast().reduce(vault) { $0.appendingPathComponent($1, isDirectory: true) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let file = directory.appendingPathComponent(name)
+        let lines = tasks.filter { !$0.isDeleted }.sorted { a, b in
+            if a.isDone != b.isDone { return !a.isDone }
+            return a.createdAt < b.createdAt
+        }.map { task in
+            let title = task.title.replacingOccurrences(of: "\n", with: " ")
+            let detail = task.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "\n", with: " ")
+            return "- [\(task.isDone ? "x" : " ")] \(title)" + (detail.isEmpty ? "" : " — \(detail)")
+        }
+        try ("# Quern tasks\n\n" + lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        if cfg.openAfterExport { openInObsidian(vault: vault, fileURL: file, preferredVaultName: cfg.vaultName) }
+        return file
     }
 
     /// Walk up from `selected` until a folder containing `.obsidian` is found.
@@ -337,14 +500,18 @@ enum ObsidianExporter {
         return comps.url
     }
 
-    private static func destinationDirectory(vault: URL, subfolder: String) -> URL {
+    private static func safeParts(_ path: String) throws -> [String] {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\") && !$0.contains(":") }) else {
+            throw ObsidianExportError.writeFailed("Use a relative path inside the vault without . or ..")
+        }
+        return parts
+    }
+
+    private static func destinationDirectory(vault: URL, subfolder: String) throws -> URL {
         let sub = subfolder.trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
         if sub.isEmpty { return vault }
-        var url = vault
-        for part in sub.split(separator: "/") {
-            url = url.appendingPathComponent(String(part), isDirectory: true)
-        }
-        return url
+        return try safeParts(sub).reduce(vault) { $0.appendingPathComponent($1, isDirectory: true) }
     }
 
     static func filename(for meeting: Meeting, pattern: String) -> String {

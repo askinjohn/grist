@@ -1,0 +1,39 @@
+name: Quern
+options:
+  bundleIdPrefix: com.quern
+settings:
+  base:
+    SWIFT_VERSION: 6.0
+    MACOSX_DEPLOYMENT_TARGET: 15.0
+    ARCHS: arm64
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  Quern:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/quern
+      - path: Resources/AppIcon.icns
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quern.meetingassistant
+        INFOPLIST_FILE: Widget/Quern-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Widget/Quern.entitlements
+        PRODUCT_NAME: Quern
+    dependencies:
+      - target: QuernTodayWidget
+        embed: true
+  QuernTodayWidget:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: Widget/QuernTodayWidget.swift
+      - path: Sources/quern/TodayWidgetSnapshot.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.quern.meetingassistant.todaywidget
+        INFOPLIST_FILE: Widget/QuernWidget-Info.plist
+        CODE_SIGN_ENTITLEMENTS: Widget/QuernWidget.entitlements
+        PRODUCT_NAME: QuernTodayWidget
+        SKIP_INSTALL: YES

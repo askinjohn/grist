@@ -31,57 +31,18 @@ resolve_codesign_identity() {
     echo "-"
 }
 
-echo "🔨 Building Quern binary..."
+echo "🔨 Building Quern and Today widget..."
 cd "$PROJECT_DIR"
-swift build -c debug
+command -v xcodegen >/dev/null || { echo "xcodegen is required to build the widget" >&2; exit 1; }
+xcodegen generate
+xcodebuild -quiet -project Quern.xcodeproj -scheme Quern -configuration Debug \
+    -derivedDataPath "$PROJECT_DIR/.build/widget" CODE_SIGNING_ALLOWED=NO build
 
-echo "📦 Creating macOS App Bundle structure..."
-mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
-
-echo "Copying binary to App Bundle..."
-cp "$PROJECT_DIR/.build/debug/quern" "$MACOS_DIR/Quern"
-
-if [[ -f "$ICON_SRC" ]]; then
-    echo "🎨 Installing app icon..."
-    cp "$ICON_SRC" "$RESOURCES_DIR/AppIcon.icns"
-    ICON_PLIST_KEYS=$'\n    <key>CFBundleIconFile</key>\n    <string>AppIcon</string>\n    <key>CFBundleIconName</key>\n    <string>AppIcon</string>'
-else
-    echo "⚠️  No Resources/AppIcon.icns found — using default icon."
-    ICON_PLIST_KEYS=""
-fi
-
-echo "Writing Info.plist..."
-cat <<EOF > "$CONTENTS_DIR/Info.plist"
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>
-    <string>Quern</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.quern.meetingassistant</string>
-    <key>CFBundleName</key>
-    <string>Quern</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>${ICON_PLIST_KEYS}
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Quern needs microphone access to transcribe your voice during meetings.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>Quern needs screen recording permission to capture system audio from meeting calls.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Quern needs speech recognition permission to natively transcribe your meetings.</string>
-</dict>
-</plist>
-EOF
-
-# Ensure executable permissions
-chmod +x "$MACOS_DIR/Quern"
+echo "📦 Packaging Quern and embedded widget..."
+BUILT_APP="$PROJECT_DIR/.build/widget/Build/Products/Debug/Quern.app"
+[[ -d "$BUILT_APP/Contents/PlugIns/QuernTodayWidget.appex" ]] || { echo "Widget extension missing" >&2; exit 1; }
+rm -rf "$APP_DIR"
+cp -R "$BUILT_APP" "$APP_DIR"
 
 IDENTITY="$(resolve_codesign_identity)"
 if [[ "$IDENTITY" == "-" ]]; then
@@ -89,13 +50,40 @@ if [[ "$IDENTITY" == "-" ]]; then
     echo "   ⚠️  Rebuilds may re-prompt for Microphone / Screen Recording."
     echo "   Fix: install Xcode, sign in with your Apple ID (free), then re-run."
     echo "   Or set CODESIGN_IDENTITY=\"Apple Development: you@example.com (TEAMID)\""
-    codesign --force --deep --sign - "$APP_DIR"
 else
-    echo "🔑 Signing with stable identity (keeps Mic/Screen permissions across rebuilds):"
-    echo "   $IDENTITY"
-    # No hardened runtime: local app spawns ffmpeg/whisper and must stay simple.
-    codesign --force --deep --sign "$IDENTITY" "$APP_DIR"
+    echo "🔑 Signing with a stable development identity."
 fi
+
+# Derive the team locally rather than committing a developer's team identifier.
+# Xcode normally expands TeamIdentifierPrefix; manual signing needs the same
+# expansion in generated (git-ignored) entitlement files.
+codesign --force --sign "$IDENTITY" "$APP_DIR"
+SIGNING_TEAM="$(codesign -dv "$APP_DIR" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+if [[ "$IDENTITY" == "-" ]]; then
+    APP_GROUP_PREFIX="group."
+else
+    [[ -n "$SIGNING_TEAM" && "$SIGNING_TEAM" != "not set" ]] || { echo "Could not resolve signing team" >&2; exit 1; }
+    APP_GROUP_PREFIX="$SIGNING_TEAM."
+fi
+SIGNING_DIR="$PROJECT_DIR/.build/signing"
+mkdir -p "$SIGNING_DIR"
+python3 - "$PROJECT_DIR/Widget" "$SIGNING_DIR" "$APP_GROUP_PREFIX" <<'PYTHON'
+import pathlib
+import plistlib
+import sys
+source, destination = map(pathlib.Path, sys.argv[1:3])
+for name in ("Quern.entitlements", "QuernWidget.entitlements"):
+    with (source / name).open("rb") as stream:
+        content = plistlib.load(stream)
+    content["com.apple.security.application-groups"] = [
+        group.replace("$(TeamIdentifierPrefix)", sys.argv[3])
+        for group in content["com.apple.security.application-groups"]
+    ]
+    with (destination / name).open("wb") as stream:
+        plistlib.dump(content, stream)
+PYTHON
+codesign --force --sign "$IDENTITY" --entitlements "$SIGNING_DIR/QuernWidget.entitlements" "$APP_DIR/Contents/PlugIns/QuernTodayWidget.appex"
+codesign --force --sign "$IDENTITY" --entitlements "$SIGNING_DIR/Quern.entitlements" "$APP_DIR"
 
 echo "✅ App successfully packaged at: $APP_DIR"
 echo "   Signature:"
@@ -163,12 +151,7 @@ else
     echo "📥 Installing stable copy → $STABLE_APP"
     rm -rf "$STABLE_APP"
     cp -R "$APP_DIR" "$STABLE_APP"
-    # Re-sign the installed copy (copy can break signature seals)
-    if [[ "$IDENTITY" == "-" ]]; then
-        codesign --force --deep --sign - "$STABLE_APP"
-    else
-        codesign --force --deep --sign "$IDENTITY" "$STABLE_APP"
-    fi
+    codesign --verify --deep --strict "$STABLE_APP"
 fi
 
 if [[ "${SKIP_LAUNCH:-}" == "1" ]]; then

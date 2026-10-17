@@ -5,7 +5,7 @@ struct VisualEffectView: NSViewRepresentable {
     var material: NSVisualEffectView.Material
     var blendingMode: NSVisualEffectView.BlendingMode
     var state: NSVisualEffectView.State = .active
-    
+
     func makeNSView(context: Context) -> NSVisualEffectView {
         let view = NSVisualEffectView()
         view.material = material
@@ -13,7 +13,7 @@ struct VisualEffectView: NSViewRepresentable {
         view.state = state
         return view
     }
-    
+
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {
         nsView.material = material
         nsView.blendingMode = blendingMode
@@ -22,82 +22,51 @@ struct VisualEffectView: NSViewRepresentable {
 }
 
 struct SettingsView: View {
-    /// Sheet chrome — fixed so content always scrolls inside, never grows off-screen.
-    static let sheetWidth: CGFloat = 720
-    static let sheetHeight: CGFloat = 560
-
+    static let sheetWidth: CGFloat = 900
+    static let sheetHeight: CGFloat = 640
     @State private var selectedTab = 0
-
-    private let tabs: [(title: String, icon: String)] = [
-        ("General", "gearshape.fill"),
-        ("AI Models", "cpu"),
-        ("AI Templates", "sparkles.rectangle.stack.fill"),
-        ("Integrations", "link"),
+    private let tabs: [(String, String, String)] = [
+        ("Workflow", "gearshape", "Recording, detection, and automatic processing"),
+        ("AI models", "cpu", "Choose where each AI task runs and which model it uses"),
+        ("Templates", "doc.text", "Customize the structure of generated summaries"),
+        ("Integrations", "link", "Connect Obsidian and Notion"),
+        ("Search & data", "magnifyingglass", "Index health and calendar access"),
+        ("Voice", "speaker.wave.2", "Read answers aloud using macOS voices")
     ]
-
     var body: some View {
-        ZStack {
-            VisualEffectView(material: .popover, blendingMode: .behindWindow)
-                .ignoresSafeArea()
-
-            VStack(spacing: 0) {
-                // ── Fixed header ───────────────────────────────────────
-                HStack(alignment: .center, spacing: 12) {
-                    QuernIconBadge(systemName: "gearshape.2.fill", tint: .accent, size: 36)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Settings")
-                            .font(.title3.weight(.semibold))
-                        Text("Workflow, models, search index, integrations")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 32)
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Settings").font(.title2.weight(.semibold)).padding(.bottom, 16)
+                ForEach(tabs.indices, id: \.self) { index in
+                    Button { selectedTab = index } label: {
+                        Label(tabs[index].0, systemImage: tabs[index].1)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                            .background(selectedTab == index ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 18)
-                .padding(.bottom, 10)
-
-                // ── Fixed tab bar (all four always visible) ───────────
-                HStack(spacing: 6) {
-                    ForEach(Array(tabs.enumerated()), id: \.offset) { index, tab in
-                        TabButton(
-                            title: tab.title,
-                            icon: tab.icon,
-                            isSelected: selectedTab == index
-                        ) {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                selectedTab = index
-                            }
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-
-                Rectangle()
-                    .fill(Color.primary.opacity(0.08))
-                    .frame(height: 1)
-
-                // ── Scrollable content (fills remaining height) ───────
+                Spacer()
+                Text("Workflow changes save automatically. Models and integrations have explicit Save buttons.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(16).frame(width: 190).background(.bar)
+            Divider()
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(tabs[selectedTab].0).font(.title2.weight(.semibold))
+                    Text(tabs[selectedTab].2).font(.callout).foregroundStyle(.secondary)
+                }.padding(20).padding(.trailing, 30)
+                Divider()
                 Group {
                     switch selectedTab {
-                    case 0:
-                        GeneralSettingsView()
-                    case 1:
-                        AIModelsSettingsView()
-                    case 2:
-                        TemplatesSettingsView()
-                    default:
-                        IntegrationsSettingsView()
+                    case 0: GeneralSettingsView()
+                    case 1: AIModelsSettingsView()
+                    case 2: TemplatesSettingsView()
+                    case 3: IntegrationsSettingsView()
+                    case 4: SearchDataSettings()
+                    default: ScrollView { VoiceSettingsCard().padding(20) }
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .clipped()
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
-        }
-        .frame(width: Self.sheetWidth, height: Self.sheetHeight)
+        }.frame(width: Self.sheetWidth, height: Self.sheetHeight)
     }
 }
 
@@ -131,6 +100,7 @@ struct TabButton: View {
 }
 
 struct GeneralSettingsView: View {
+    @ObservedObject private var meetingPrompt = MeetingPromptController.shared
     @AppStorage("autoEnhance") private var autoEnhance = true
     @AppStorage("autoExtractTasks") private var autoExtractTasks = true
     @AppStorage("liveTranscriptionEnabled") private var liveTranscriptionEnabled = true
@@ -142,7 +112,7 @@ struct GeneralSettingsView: View {
     @AppStorage("meetingDetectWebex") private var meetingDetectWebex = true
     @AppStorage("aiProviderType") private var aiProviderType: String = "Ollama"
     @AppStorage("OllamaURL") private var ollamaURL: String = "http://127.0.0.1:11434"
-    
+
     @AppStorage("openAIBaseURL") private var openAIBaseURL: String = "https://api.openai.com/v1"
     @AppStorage("openAIAPIKey") private var openAIAPIKey: String = ""
     @AppStorage("openAIModel") private var openAIModel: String = "gpt-4o"
@@ -151,18 +121,18 @@ struct GeneralSettingsView: View {
     @State private var isReindexing = false
     @State private var reindexStatus = ""
     @State private var reindexProgress: (done: Int, total: Int) = (0, 0)
-    
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                
+
                 // Section 1: Workflow
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Workflow")
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
-                    
+
                     settingsToggleRow(
                         title: "Auto-Enhance Meetings",
                         subtitle: "Generate AI summaries automatically when recording stops",
@@ -209,116 +179,30 @@ struct GeneralSettingsView: View {
                         Toggle("Microsoft Teams", isOn: $meetingDetectTeams)
                         Toggle("Google Meet (browser)", isOn: $meetingDetectMeet)
                         Toggle("Webex", isOn: $meetingDetectWebex)
+                        Text("Detects meeting windows and microphone activity. Browser microphone activity always asks first, since it may be another site or dictation.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(meetingPrompt.notificationStatus)
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("Test meeting prompt") { meetingPrompt.testPrompt() }
+                            Button("Notification settings") {
+                                if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
+                                    NSWorkspace.shared.open(url)
+                                }
+                            }
+                            Button("Screen recording settings") { PermissionHelper.openScreenRecordingSettings() }
+                        }
+                        Text("Screen Recording access helps identify Google Meet by its window title. Keep Quern running in the menu bar to detect calls.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .onAppear { meetingPrompt.refreshAuthorization() }
+
                     }
                 }
 
                 // Library search / RAG
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Library search (RAG)")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
 
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Search index")
-                                    .font(.system(size: 16, weight: .medium, design: .rounded))
-                                Text(chunkCount == 0
-                                     ? "Empty — Ask everything will use keywords only until you rebuild."
-                                     : "\(chunkCount) chunks indexed for semantic search.")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                                if !reindexStatus.isEmpty {
-                                    Text(reindexStatus)
-                                        .font(.system(size: 12))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Button {
-                                rebuildIndex()
-                            } label: {
-                                if isReindexing {
-                                    HStack(spacing: 8) {
-                                        ProgressView().controlSize(.small)
-                                        if reindexProgress.total > 0 {
-                                            Text("\(reindexProgress.done)/\(reindexProgress.total)")
-                                                .font(.caption.monospacedDigit())
-                                        }
-                                    }
-                                } else {
-                                    Text("Rebuild search index")
-                                }
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(isReindexing)
-                        }
 
-                        Text("Requires local embeddings: `ollama pull nomic-embed-text`. New imports and saves re-index automatically.")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.tertiary)
-                    }
-                    .padding(16)
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
-                }
-                .onAppear { chunkCount = Database.shared.chunkCount() }
-                
-                // Section 2: AI Engine
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("AI Engine Configuration")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .foregroundStyle(.secondary)
-                        .textCase(.uppercase)
-                    
-                    VStack(spacing: 0) {
-                        settingsFieldRow(label: "Provider") {
-                            Picker("", selection: $aiProviderType) {
-                                Text("Ollama (Local)").tag("Ollama")
-                                Text("OpenAI Compatible").tag("OpenAI Compatible")
-                            }
-                            .labelsHidden()
-                            .frame(maxWidth: .infinity, alignment: .trailing)
-                        }
 
-                        Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-
-                        if aiProviderType == "Ollama" {
-                            settingsFieldRow(label: "Local URL") {
-                                TextField("http://127.0.0.1:11434", text: $ollamaURL)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                        } else {
-                            settingsFieldRow(label: "API URL") {
-                                TextField("https://api.openai.com/v1", text: $openAIBaseURL)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-
-                            Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-
-                            settingsFieldRow(label: "API Key") {
-                                SecureField("sk-...", text: $openAIAPIKey)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-
-                            Rectangle().fill(Color.white.opacity(0.1)).frame(height: 1)
-
-                            settingsFieldRow(label: "Model") {
-                                TextField("gpt-4o", text: $openAIModel)
-                                    .textFieldStyle(.roundedBorder)
-                            }
-                        }
-                    }
-                    .background(Color.white.opacity(0.05))
-                    .cornerRadius(12)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
-                    )
-                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -367,10 +251,10 @@ struct GeneralSettingsView: View {
                 .labelsHidden()
         }
         .padding(16)
-        .background(Color.white.opacity(0.05))
+        .background(Color.primary.opacity(0.04))
         .cornerRadius(12)
         .overlay(
-            RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 1)
         )
     }
 
@@ -442,11 +326,16 @@ struct AIModelsSettingsView: View {
                             }
                         }
                     }
-                    .background(Color.white.opacity(0.05))
+                    .background(Color.primary.opacity(0.04))
                     .cornerRadius(12)
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 1))
 
                     HStack {
+                        Button("Recommended local setup") {
+                            applyRecommendedLocalPreset()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .help("Use Qwen 2.5 7B for summaries, folder synthesis, and task extraction; Gemma 2B for titles and filing")
                         Button("Apply role table") {
                             applyRoleTable()
                         }
@@ -459,6 +348,9 @@ struct AIModelsSettingsView: View {
                         .buttonStyle(.bordered)
                         Spacer()
                     }
+                    Text("Recommended local setup requires qwen2.5:7b and nomic-embed-text. It keeps gemma2:2b for fast titles and folder naming.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 // Backends (compact)
@@ -584,6 +476,24 @@ struct AIModelsSettingsView: View {
             loadDrafts()
         } else {
             statusNote = ai.lastError ?? "Save failed"
+        }
+    }
+
+    private func applyRecommendedLocalPreset() {
+        var c = ai.config
+        let qwenRoles: [AIRole] = [.chat, .askEverything, .enhance, .folderSummarize, .taskExtract]
+        for role in qwenRoles {
+            c.roles[role.rawValue] = AIRoleConfig(backend: "local", model: "qwen2.5:7b")
+        }
+        for role in [AIRole.title, .organize] {
+            c.roles[role.rawValue] = AIRoleConfig(backend: "local", model: "gemma2:2b")
+        }
+        c.roles[AIRole.embed.rawValue] = AIRoleConfig(backend: "local", model: "nomic-embed-text")
+        if ai.saveConfig(c) {
+            statusNote = "Recommended roles saved"
+            loadDrafts()
+        } else {
+            statusNote = ai.lastError ?? "Could not save model roles"
         }
     }
 
@@ -728,9 +638,9 @@ struct AIModelsSettingsView: View {
             }
         }
         .padding(14)
-        .background(Color.white.opacity(0.05))
+        .background(Color.primary.opacity(0.04))
         .cornerRadius(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.1), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 1))
     }
 }
 
@@ -880,11 +790,11 @@ struct TemplatesSettingsView: View {
             }
         }
     }
-    
+
     private func loadTemplates() {
         templates = Database.shared.fetchTemplates()
     }
-    
+
     private func createNewTemplate() {
         let newId = UUID().uuidString
         let newTemplate = AITemplate(id: newId, name: "New Template", prompt: "Summarize this meeting...")
@@ -892,186 +802,19 @@ struct TemplatesSettingsView: View {
         loadTemplates()
         selectedTemplateId = newId
     }
-    
+
     private func deleteSelected() {
         guard let id = selectedTemplateId else { return }
         Database.shared.deleteTemplate(id: id)
         selectedTemplateId = nil
         loadTemplates()
     }
-    
+
     private func saveChanges() {
         guard let id = selectedTemplateId else { return }
         let updated = AITemplate(id: id, name: editingName, prompt: editingPrompt)
         Database.shared.saveTemplate(updated)
         loadTemplates()
-    }
-}
-
-// MARK: - Integrations (Obsidian)
-
-struct IntegrationsSettingsView: View {
-    @ObservedObject private var integrations = IntegrationsConfigManager.shared
-    @State private var draft: ObsidianIntegrationConfig = .default
-    @State private var status = ""
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Integrations")
-                        .font(.title3.weight(.semibold))
-                    Text("Optional bridges to apps on your machine. Nothing leaves this Mac unless you connect a cloud service later.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                // Obsidian card
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(spacing: 12) {
-                        QuernIconBadge(systemName: "book.closed.fill", tint: .purple, size: 40)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Obsidian")
-                                .font(.headline)
-                            Text("Write Quern notes as Markdown into your vault")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Toggle("", isOn: $draft.enabled)
-                            .toggleStyle(.switch)
-                            .labelsHidden()
-                    }
-
-                    Divider()
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Vault folder")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                        HStack(spacing: 10) {
-                            Text(draft.vaultPath.isEmpty ? "No vault selected" : draft.vaultPath)
-                                .font(.system(size: 12, design: .monospaced))
-                                .foregroundStyle(draft.vaultPath.isEmpty ? .tertiary : .secondary)
-                                .lineLimit(2)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Button("Choose…") {
-                                if let url = ObsidianExporter.pickVaultFolder() {
-                                    draft.vaultPath = url.path
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            if !draft.vaultPath.isEmpty {
-                                Button("Reveal") {
-                                    NSWorkspace.shared.activateFileViewerSelecting(
-                                        [URL(fileURLWithPath: draft.vaultPath)]
-                                    )
-                                }
-                                .buttonStyle(.bordered)
-                            }
-                        }
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Vault name in Obsidian (optional)")
-                            .font(.callout)
-                        TextField("Leave blank to use folder name", text: $draft.vaultName)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-                        Text("Must match the name in Obsidian’s vault switcher if “Open after send” fails with “Vault not found”. Prefer choosing the folder that contains `.obsidian`.")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Subfolder")
-                            .font(.callout)
-                        TextField("Quern", text: $draft.subfolder)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Filename pattern")
-                            .font(.callout)
-                        TextField("{date}-{title}", text: $draft.filenamePattern)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: .infinity)
-                    }
-                    Text("{date} = yyyy-MM-dd · {title} = note title · {id} = short id")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-
-                    Divider()
-
-                    Text("Default sections")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Toggle("Metadata", isOn: $draft.includeMetadata)
-                    Toggle("Sources / links", isOn: $draft.includeSources)
-                    Toggle("AI Summary", isOn: $draft.includeSummary)
-                    Toggle("Notes body", isOn: $draft.includeNotes)
-                    Toggle("Transcript / captions", isOn: $draft.includeTranscript)
-
-                    Divider()
-
-                    Toggle(isOn: $draft.autoExportAfterEnhance) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("After Enhance, send to Obsidian")
-                            Text("Writes a new Markdown file when Enhance finishes")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Toggle(isOn: $draft.openAfterExport) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Open in Obsidian after send")
-                            Text("Opens the new note via obsidian:// (falls back to Finder if vault name doesn’t match)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-
-                    HStack {
-                        if !status.isEmpty {
-                            Text(status)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("Save") {
-                            integrations.updateObsidian { $0 = draft }
-                            status = integrations.lastMessage
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.purple)
-                    }
-                }
-                .padding(18)
-                .background(Color.primary.opacity(0.04))
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(Color.purple.opacity(0.2), lineWidth: 1)
-                )
-
-                Text("Config file: \(integrations.configPath)")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-
-                // Voice / TTS (local)
-                VoiceSettingsCard()
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onAppear {
-            draft = integrations.config.obsidian
-        }
     }
 }
 

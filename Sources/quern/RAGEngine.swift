@@ -46,10 +46,11 @@ class RAGEngine: @unchecked Sendable {
         }
         print("[RAGEngine] Indexing \(id) “\(meeting.title)”")
 
-        Database.shared.deleteChunks(forMeetingId: id)
+        var replacement: [TranscriptChunk] = []
 
         let sections = buildSections(for: meeting)
         guard !sections.isEmpty else {
+            _ = Database.shared.replaceChunks([], for: meeting)
             print("[RAGEngine] Nothing to index for \(id)")
             return
         }
@@ -65,7 +66,8 @@ class RAGEngine: @unchecked Sendable {
                     let embedding = try await OllamaClient.shared.getEmbedding(text: text)
                     let chunkId = "\(id)_c\(chunkIndex)"
                     chunkIndex += 1
-                    Database.shared.saveChunk(
+                    try Task.checkCancellation()
+                    replacement.append(
                         TranscriptChunk(id: chunkId, meetingId: id, text: text, embedding: embedding)
                     )
                 } catch {
@@ -77,7 +79,12 @@ class RAGEngine: @unchecked Sendable {
                 }
             }
         }
-        if failures == 0 { lastIndexError = nil }
+        guard failures == 0, !Task.isCancelled else { return }
+        guard Database.shared.replaceChunks(replacement, for: meeting) else {
+            lastIndexError = "Index update deferred: note changed or database write failed."
+            return
+        }
+        lastIndexError = nil
         print("[RAGEngine] Indexed \(chunkIndex) chunks for \(id)")
     }
 
@@ -112,6 +119,7 @@ class RAGEngine: @unchecked Sendable {
 
     /// Rebuild the whole library index. Returns (itemsIndexed, chunkCount, errorMessage?).
     func reindexAll(meetings: [Meeting]) async -> (items: Int, chunks: Int, error: String?) {
+        guard !isReindexing, !indexingPaused else { return (0, Database.shared.chunkCount(), "Indexing is already running or paused for Enhance.") }
         isReindexing = true
         reindexProgress = (0, meetings.count)
         lastIndexError = nil
@@ -120,31 +128,33 @@ class RAGEngine: @unchecked Sendable {
         }
 
         var indexed = 0
+        var errors: [String] = []
         for (i, m) in meetings.enumerated() {
             guard !Task.isCancelled else { break }
             await indexMeeting(m)
-            indexed += 1
+            if let error = lastIndexError { errors.append(error) } else { indexed += 1 }
             reindexProgress = (i + 1, meetings.count)
         }
         let totalChunks = Database.shared.chunkCount()
-        return (indexed, totalChunks, lastIndexError)
+        return (indexed, totalChunks, errors.isEmpty ? nil : errors.joined(separator: "; "))
     }
 
     // MARK: - Search
 
     /// Vector search over stored chunks. Diversifies across meetings so one huge article can't own all top-K.
     func search(query: String, meetingIds: [String], topK: Int = 10, maxPerMeeting: Int = 3) async throws -> [TranscriptChunk] {
-        print("[RAGEngine] Search '\(query.prefix(80))' across \(meetingIds.count) meetings")
-        let queryEmbedding = try await OllamaClient.shared.getEmbedding(text: query)
+        print("[RAGEngine] Search across \(meetingIds.count) meetings")
         let allChunks = Database.shared.fetchChunks(forMeetingIds: meetingIds)
         guard !allChunks.isEmpty else {
             print("[RAGEngine] No chunks in index")
             return []
         }
 
+        let queryEmbedding = try await OllamaClient.shared.getEmbedding(text: query)
         let scored = allChunks.map { chunk -> (TranscriptChunk, Double) in
             (chunk, cosineSimilarity(a: queryEmbedding, b: chunk.embedding))
         }
+        .filter { $0.1.isFinite && $0.1 >= 0.25 }
         .sorted { $0.1 > $1.1 }
 
         var perMeeting: [String: Int] = [:]
@@ -224,7 +234,7 @@ class RAGEngine: @unchecked Sendable {
             }
     }
 
-    /// Keyword rank meetings. `minScoreRatio` drops weak hits (e.g. Cooking when top is FinancialPlanning).
+    /// Keyword rank meetings. `minScoreRatio` drops weak hits relative to the best match.
     func rankMeetingsByKeywords(
         _ meetings: [Meeting],
         query: String,
@@ -241,6 +251,60 @@ class RAGEngine: @unchecked Sendable {
             .filter { $0.score >= floor }
             .prefix(topK)
             .map(\.meeting)
+    }
+
+    /// Merge exact-term and semantic retrieval with reciprocal-rank fusion.
+    /// This keeps names/dates strong while allowing paraphrases to surface.
+    func hybridRankMeetings(_ meetings: [Meeting], query: String, topK: Int = 8) async -> [Meeting] {
+        let keyword = rankMeetingsByKeywords(meetings, query: query, topK: topK * 2)
+        var semantic: [Meeting] = []
+        if let chunks = try? await search(query: query, meetingIds: meetings.map(\.id), topK: topK * 3, maxPerMeeting: 1) {
+            let ids = chunks.map(\.meetingId)
+            semantic = ids.compactMap { id in meetings.first(where: { $0.id == id }) }
+        }
+        return Self.mergeMeetings(keyword: keyword, semantic: semantic, topK: topK)
+    }
+
+    static func mergeMeetings(keyword: [Meeting], semantic: [Meeting], topK: Int) -> [Meeting] {
+        let lookup = Dictionary((keyword + semantic).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return EvidenceRanking.fuse([keyword.map(\.id), semantic.map(\.id)], limit: topK).compactMap { lookup[$0] }
+    }
+
+    /// Passage evidence from independent lexical and semantic paths, bounded to 12k characters.
+    func retrieveEvidence(_ meetings: [Meeting], query: String) async -> (evidence: [AskEvidence], warning: String?) {
+        var candidates: [AskEvidence] = []
+        for m in meetings {
+            for (section, body) in [("notes", m.manualNotes), ("transcript", m.transcript), ("summary", m.summary)] {
+                for (i, quote) in EvidenceRanking.passages(body).enumerated() {
+                    candidates.append(AskEvidence(id: "\(m.id):\(section):\(i)", meetingID: m.id, title: m.title, timestamp: m.timestamp, section: section, quote: quote))
+                }
+            }
+        }
+        let lexical = EvidenceRanking.lexical(candidates, query: query).prefix(40).map(\.id)
+        var semantic: [String] = []
+        var warning: String?
+        do {
+            let chunks = try await search(query: query, meetingIds: meetings.map(\.id), topK: 24, maxPerMeeting: 4)
+            for chunk in chunks {
+                // Map indexed text back to current, verbatim source passages; never cite stale index text.
+                let matches = candidates.filter { $0.meetingID == chunk.meetingId }.map { e in
+                    (e, EvidenceRanking.terms(e.quote).intersection(EvidenceRanking.terms(chunk.text)).count)
+                }.sorted { $0.1 > $1.1 }
+                if let best = matches.first, best.1 > 0 { semantic.append(best.0.id) }
+            }
+        } catch { warning = "Semantic search unavailable; using keyword matches. \(error.localizedDescription)" }
+        let ids = EvidenceRanking.fuse([Array(lexical), semantic], limit: 40)
+        let lookup = Dictionary(candidates.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var evidence: [AskEvidence] = [], perItem: [String: Int] = [:], characters = 0
+        for id in ids {
+            guard var e = lookup[id], perItem[e.meetingID ?? "", default: 0] < 3 else { continue }
+            guard characters + e.quote.count <= 12000 else { continue }
+            perItem[e.meetingID ?? "", default: 0] += 1
+            characters += e.quote.count
+            e.id = "S\(evidence.count + 1)"; evidence.append(e)
+            if evidence.count == 10 { break }
+        }
+        return (evidence, warning)
     }
 
     /// Catalog line for library-wide questions (“what do I have?”).

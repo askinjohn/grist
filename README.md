@@ -12,7 +12,7 @@ Record meetings, write notes, import articles or YouTube captions, and turn them
 
 ### Capture
 - **Meetings** — Microphone + system audio (calls, browsers, video apps), transcribed with Whisper  
-- **Meeting detection** — Notices Zoom / Teams / Google Meet / Webex and asks whether to record (optional auto-start)  
+- **Meeting detection** — Uses meeting window titles and microphone activity to notice Zoom / Teams / Google Meet / Webex and ask whether to record. Unconfirmed browser activity always asks first.
 - **Notes** — Markdown editor with write / preview  
 - **Attach files** — Drop in `.md`, `.txt`, or `.pdf`; text is appended into the note so Enhance / Chat can read it  
 - **Articles & YouTube** — Paste one or many URLs; fetch page text or captions and attach them to a note  
@@ -24,6 +24,7 @@ Quern stays in the **menu bar** so you can record, stop, or act on a detected me
 - **Live transcription** — While recording, a rolling transcript appears in the Transcript tab (local Whisper); a final pass still runs when you stop  
 - **Chat** — Ask about the open item, or **Ask everything** across your library with sources  
 - **Tasks** — Extract action items after Enhance, or create them manually  
+- **Today** — A daily dashboard for open tasks, today’s meetings, and today’s notes
 - **Read aloud** — Listen to summaries with macOS system voices (on-device)  
 
 ### Organize
@@ -34,6 +35,7 @@ Quern stays in the **menu bar** so you can record, stop, or act on a detected me
 ### Connect
 - **Export Markdown** — Pick sections (summary, notes, transcript, sources)  
 - **Obsidian** — Write notes into a local vault folder you choose  
+- **Notion** — Append notes and meetings directly to a Notion page shared with your integration
 - **Your models** — Ollama locally, or an OpenAI-compatible API per job (chat, enhance, embed, …)  
 - **MCP** — Optional tools for Claude Desktop (`list_folders`, `create_note`)  
 
@@ -68,6 +70,12 @@ chmod +x setup.sh build_app.sh
 ./build_app.sh      # builds Quern.app + Quern.dmg, installs to ~/Applications
 ```
 
+The macOS Today widget is included in the app. The build needs Xcode and
+`xcodegen` (`brew install xcodegen`). After opening Quern, use macOS **Edit Widgets**
+and search for **Quern Today**. The widget shows open tasks, upcoming Calendar
+meetings when Calendar is connected, and recent notes. Click a row to open it
+in Quern. Calendar access can be enabled in Quern’s Today page or Settings.
+
 Then open **Quern** from `~/Applications/Quern.app`, Spotlight, or the Dock.
 
 | Output | Where |
@@ -77,6 +85,9 @@ Then open **Quern** from `~/Applications/Quern.app`, Spotlight, or the Dock.
 
 Rebuild after pulling updates: `./build_app.sh`  
 Useful flags: `SKIP_DMG=1` · `SKIP_INSTALL=1` · `SKIP_LAUNCH=1`
+
+Run `swift test` for regression checks. `python3 Scripts/eval_ask.py qwen2.5:7b`
+runs a small synthetic Ask check against a locally running Ollama model.
 
 The packaged app does **not** include Ollama models. Run `./setup.sh` (or use the in-app setup checklist) for a full AI setup.
 
@@ -105,6 +116,14 @@ tccutil reset ScreenCapture com.quern.meetingassistant
 
 **Settings** covers workflow toggles, per-role AI models, enhance templates, Obsidian, and read-aloud voice preferences.
 
+The **Today** library view is the daily home for tasks and material created today. During recording, Quern switches to a focused capture view with live transcript, elapsed time, and independent microphone/system-audio status.
+
+For Google Meet in Chrome, keep Quern running and enable **Settings → General → Meeting detection → Google Meet (browser)**. Use **Test meeting prompt** to check delivery without starting a recording. When system alerts are disabled, Quern shows a floating prompt. macOS Focus can still silence enabled notification banners.
+
+Window titles help identify Google Meet; Screen Recording permission may be needed to read them. If Chrome is using the microphone but the meeting title is unavailable, Quern asks whether this is a meeting. Browser dictation or other audio sites can also trigger this fallback, and a muted call with no visible meeting title may not be detected.
+
+Use the item's **Audio → Retry transcription from saved audio** after a transcription failure. **Show saved recordings** opens its audio folder; previous sessions are preserved in the `recordings` subfolder before new capture begins.
+
 ---
 
 ## Obsidian
@@ -123,6 +142,14 @@ Config is stored at:
 ```text
 ~/Library/Application Support/Quern/integrations.json
 ```
+
+## Notion
+
+Quern can append a note or meeting to a Notion page. In **Settings → Integrations → Notion**, create or copy an internal-integration token, enter it, and paste the destination page ID from its Notion URL. Share that destination page with the integration in Notion. The token stays in macOS Keychain; `integrations.json` stores only the destination and export preferences.
+
+Use **Export → Send to Notion** on an open item, or enable **Export after Enhance**. Quern writes headings, paragraphs, and bullets beneath the destination page. It does not create a Notion database schema or import content back from Notion.
+
+Automatic exports read the saved token without opening a Keychain password or permission dialog. If access is unavailable, the export stops with an error instead of prompting. Open **Settings → Integrations → Notion → Repair saved access** to authorize this signed Quern installation to use the existing token. macOS may ask for approval once during repair; subsequent exports use the saved access. The token remains in Keychain, with access restricted to Quern.
 
 ---
 
@@ -156,6 +183,8 @@ Example (local Ollama):
 ---
 
 ## Privacy
+
+Builds derive the widget App Group from the local signing identity; developer team identifiers are not hardcoded in source. Generated signing files stay under the ignored `.build/` directory.
 
 - Default path is **local**: recordings, transcripts, SQLite library, and Ollama inference on your Mac.  
 - Obsidian export is a **local file write** into a folder you pick.  
@@ -205,7 +234,8 @@ Point Claude Desktop’s MCP config at the compiled binary under `quern/quern-mc
 
 | Issue | What to try |
 |-------|-------------|
-| Transcript is mic-only | Grant Screen & System Audio Recording, then quit and relaunch |
+| Transcript is mic-only | Check the capture warning and `quern.log`. Quit Quern, toggle its Screen & System Audio Recording permission off and on, reopen, then test with speech playing. Confirm “Recording mic + system audio”. |
+| Notion export reports saved access needs attention | Open Settings → Integrations → Notion → Repair saved access. macOS may ask once during repair; automatic exports do not open password prompts. |
 | YouTube import fails | Install `yt-dlp`; ensure the video has captions |
 | Ask everything is weak | Pull an embedding model and rebuild the search index in Settings |
 | No AI responses | Confirm Ollama is running and models are pulled; use the setup checklist |
@@ -224,4 +254,4 @@ MIT licensed — see [LICENSE](LICENSE).
 clone → ./setup.sh → ./build_app.sh
 ```
 
-Ideas under consideration (not shipped): Notion export, notarized GitHub Releases — see `docs/plans/`.
+Ideas under consideration (not shipped): notarized GitHub Releases — see `docs/plans/`.
