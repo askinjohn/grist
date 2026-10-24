@@ -84,7 +84,7 @@ extension MainView {
         }
     }
 
-    func stopRecording() {
+    func stopRecording(afterMeetingEndPrompt: Bool = false) {
         guard isRecording, !isTranscribing else { return }
         isTranscribing = true
         let meetingId = recordingMeetingId ?? selectedMeeting?.id
@@ -134,7 +134,9 @@ extension MainView {
                     meetings[idx] = m
                 }
                 RecordingStatus.shared.markIdle()
-                statusMessage = failed ? "Transcription failed. Audio saved — use Retry transcription. Previous text was preserved when available." : ""
+                statusMessage = failed
+                    ? "Transcription failed. Audio saved — use Retry transcription. Previous text was preserved when available."
+                    : (afterMeetingEndPrompt ? "Recording stopped at your request after meeting activity ended. Audio saved and transcribed." : "")
 
                 RAGEngine.shared.indexMeetingNow(m)
 
@@ -172,9 +174,9 @@ extension MainView {
 
 
     /// Menu bar / MainView can disagree after a SwiftUI remount: chrome says REC, `@State` says idle.
-    func handleStopRecordingRequest() {
+    func handleStopRecordingRequest(afterMeetingEndPrompt: Bool = false) {
         if isRecording {
-            stopRecording()
+            stopRecording(afterMeetingEndPrompt: afterMeetingEndPrompt)
             return
         }
         if recordingMeetingId != nil || RecordingStatus.shared.isRecording || recorder.isActivelyCapturing

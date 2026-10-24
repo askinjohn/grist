@@ -110,6 +110,7 @@ struct GeneralSettingsView: View {
     @AppStorage("meetingDetectTeams") private var meetingDetectTeams = true
     @AppStorage("meetingDetectMeet") private var meetingDetectMeet = true
     @AppStorage("meetingDetectWebex") private var meetingDetectWebex = true
+    @AppStorage("autoStopAfterMeetingEnd") private var askToStopAfterMeetingEnd = true
     @AppStorage("aiProviderType") private var aiProviderType: String = "Ollama"
     @AppStorage("OllamaURL") private var ollamaURL: String = "http://127.0.0.1:11434"
 
@@ -165,9 +166,16 @@ struct GeneralSettingsView: View {
                         isOn: $meetingDetectEnabled
                     )
                     .onChange(of: meetingDetectEnabled) { _, on in
-                        if on { MeetingDetector.shared.start() }
-                        else { MeetingDetector.shared.stop(); RecordingStatus.shared.clearDetectedMeeting() }
+                        MeetingDetector.shared.start()
+                        if !on { RecordingStatus.shared.clearDetectedMeeting() }
                     }
+
+                    settingsToggleRow(
+                        title: "Ask when meeting activity ends",
+                        subtitle: "After 3 minutes without meeting microphone activity, ask whether to stop. Ignoring the prompt keeps recording.",
+                        isOn: $askToStopAfterMeetingEnd
+                    )
+                    .onChange(of: askToStopAfterMeetingEnd) { _, _ in MeetingDetector.shared.start() }
 
                     if meetingDetectEnabled {
                         Picker("When detected", selection: $meetingDetectMode) {

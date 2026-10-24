@@ -33,12 +33,17 @@ final class MeetingDetector: ObservableObject {
     private var timer: Timer?
     private var episode = MeetingDetectionEpisode()
     private let pollInterval: TimeInterval = 2.5
+    private let meetingEndGrace: TimeInterval = 3 * 60
+    private var sawMeetingActivityDuringRecording = false
+    private var meetingActivityMissingSince: Date?
+    private var isMeetingEndPromptPresented = false
+    private var promptSnoozedUntil: Date?
 
     private init() {}
 
     func start() {
         stop()
-        guard MeetingDetectionSettings.shared.detectEnabled else { return }
+        guard MeetingDetectionSettings.shared.detectEnabled || MeetingDetectionSettings.shared.askToStopAfterMeetingEnd else { return }
         timer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -53,6 +58,8 @@ final class MeetingDetector: ObservableObject {
         timer?.invalidate()
         timer = nil
         episode = MeetingDetectionEpisode()
+        resetRecordingMonitor()
+        MeetingPromptController.shared.clearMeetingEndedPrompt()
         current = nil
         pendingPrompt = nil
         RecordingStatus.shared.clearDetectedMeeting()
@@ -71,11 +78,14 @@ final class MeetingDetector: ObservableObject {
     }
 
     private func tick() {
-        guard timer != nil, MeetingDetectionSettings.shared.detectEnabled else { return }
-        guard !RecordingStatus.shared.isRecording else {
+        guard timer != nil else { return }
+        if RecordingStatus.shared.isRecording {
+            monitorRecordingForMeetingEnd()
             pendingPrompt = nil
             return
         }
+        resetRecordingMonitor()
+        guard MeetingDetectionSettings.shared.detectEnabled else { return }
         let found = scan()
         let shouldPrompt = episode.observe(found?.episodeKey)
         if let found {
@@ -92,6 +102,54 @@ final class MeetingDetector: ObservableObject {
             RecordingStatus.shared.clearDetectedMeeting()
             MeetingPromptController.shared.clearPending()
         }
+    }
+
+    private func monitorRecordingForMeetingEnd() {
+        if hasMeetingMicrophoneActivity() {
+            if isMeetingEndPromptPresented { MeetingPromptController.shared.clearMeetingEndedPrompt() }
+            sawMeetingActivityDuringRecording = true
+            meetingActivityMissingSince = nil
+            isMeetingEndPromptPresented = false
+            promptSnoozedUntil = nil
+            return
+        }
+        guard MeetingDetectionSettings.shared.askToStopAfterMeetingEnd,
+              !isMeetingEndPromptPresented,
+              sawMeetingActivityDuringRecording else { return }
+        let missingSince = meetingActivityMissingSince ?? Date()
+        meetingActivityMissingSince = missingSince
+        guard Date().timeIntervalSince(missingSince) >= meetingEndGrace,
+              promptSnoozedUntil.map({ Date() >= $0 }) ?? true else { return }
+
+        isMeetingEndPromptPresented = true
+        QuernLog.log("[MeetingDetect] asking whether to stop after meeting activity was absent for 3 minutes")
+        MeetingPromptController.shared.presentMeetingEndedPrompt()
+    }
+
+    func keepRecordingAfterMeetingEndPrompt() {
+        isMeetingEndPromptPresented = false
+        promptSnoozedUntil = Date().addingTimeInterval(15 * 60)
+        QuernLog.log("[MeetingDetect] recording kept; meeting-end prompt snoozed for 15 minutes")
+    }
+
+    private func hasMeetingMicrophoneActivity() -> Bool {
+        let settings = MeetingDetectionSettings.shared
+        return MeetingAudioActivity.inputBundleIDs().contains { bundleID in
+            guard let detection = Self.audioDetection(bundleID: bundleID) else { return false }
+            switch detection.appName {
+            case "Zoom": return settings.zoomEnabled
+            case "Microsoft Teams": return settings.teamsEnabled
+            case "Webex": return settings.webexEnabled
+            default: return detection.requiresConfirmation && settings.meetEnabled
+            }
+        }
+    }
+
+    private func resetRecordingMonitor() {
+        sawMeetingActivityDuringRecording = false
+        meetingActivityMissingSince = nil
+        isMeetingEndPromptPresented = false
+        promptSnoozedUntil = nil
     }
 
     private func scan() -> Detection? {
@@ -251,12 +309,22 @@ final class MeetingDetectionSettings: ObservableObject {
         set { d.set(newValue, forKey: "meetingDetectWebex"); objectWillChange.send() }
     }
 
+    /// Requires supported meeting-app microphone activity during the session.
+    var askToStopAfterMeetingEnd: Bool {
+        get { d.object(forKey: "autoStopAfterMeetingEnd") as? Bool ?? true }
+        set {
+            d.set(newValue, forKey: "autoStopAfterMeetingEnd")
+            objectWillChange.send()
+            applyRunningState()
+        }
+    }
+
     var isAutoStart: Bool { detectMode == "auto" }
 
     private init() {}
 
     private func applyRunningState() {
-        if detectEnabled {
+        if detectEnabled || askToStopAfterMeetingEnd {
             MeetingDetector.shared.start()
         } else {
             MeetingDetector.shared.stop()

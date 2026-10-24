@@ -262,7 +262,7 @@ extension MainView {
                 Spacer()
                 captureInputChip("Microphone", active: recorder.isCapturingMicrophone)
                 captureInputChip("System audio", active: recorder.isCapturingSystemAudio)
-                Button("Stop recording", action: stopRecording)
+                Button("Stop recording") { stopRecording() }
                     .buttonStyle(.borderedProminent)
                     .tint(.red)
             }
