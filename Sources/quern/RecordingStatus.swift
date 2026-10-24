@@ -21,6 +21,7 @@ final class RecordingStatus: ObservableObject {
     }
 
     func sync(isRecording: Bool, elapsedSeconds: Int) {
+        let recordingChanged = self.isRecording != isRecording
         if self.isRecording != isRecording {
             self.isRecording = isRecording
         }
@@ -29,6 +30,9 @@ final class RecordingStatus: ObservableObject {
         }
         if isRecording {
             clearDetectedMeeting()
+            if recordingChanged { MeetingPromptController.shared.startRecordingReminders() }
+        } else if recordingChanged {
+            MeetingPromptController.shared.stopRecordingReminders()
         }
         // When not recording, keep last live text until UI clears / final transcript lands.
     }
@@ -39,6 +43,7 @@ final class RecordingStatus: ObservableObject {
         isRecording = false
         elapsedSeconds = 0
         clearLiveTranscript()
+        MeetingPromptController.shared.stopRecordingReminders()
     }
 
     /// Stop hardware + live ASR + menu chrome even if MainView’s `@State` was lost.

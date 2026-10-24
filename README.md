@@ -120,6 +120,8 @@ The **Today** library view is the daily home for tasks and material created toda
 
 For Google Meet in Chrome, keep Quern running and enable **Settings → General → Meeting detection → Google Meet (browser)**. Use **Test meeting prompt** to check delivery without starting a recording. When system alerts are disabled, Quern shows a floating prompt. macOS Focus can still silence enabled notification banners.
 
+While recording, Quern can ask whether to stop after supported meeting-app microphone activity has been absent for 3 minutes. Choose **Stop Recording** to save and transcribe, or **Keep Recording** to snooze that question for 15 minutes. Ignoring the prompt leaves recording active.
+
 Window titles help identify Google Meet; Screen Recording permission may be needed to read them. If Chrome is using the microphone but the meeting title is unavailable, Quern asks whether this is a meeting. Browser dictation or other audio sites can also trigger this fallback, and a muted call with no visible meeting title may not be detected.
 
 Use the item's **Audio → Retry transcription from saved audio** after a transcription failure. **Show saved recordings** opens its audio folder; previous sessions are preserved in the `recordings` subfolder before new capture begins.

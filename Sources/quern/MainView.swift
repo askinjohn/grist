@@ -316,8 +316,8 @@ struct MainView: View {
             }
             openCreateSheet(kind: kind)
         }
-        .onReceive(NotificationCenter.default.publisher(for: .stopRecordingRequested)) { _ in
-            handleStopRecordingRequest()
+        .onReceive(NotificationCenter.default.publisher(for: .stopRecordingRequested)) { notification in
+            handleStopRecordingRequest(afterMeetingEndPrompt: notification.object as? String == "meetingEnded")
         }
         .onAppear {
             reconcileRecordingStatusWithHardware()
