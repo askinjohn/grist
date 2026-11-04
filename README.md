@@ -22,7 +22,7 @@ Quern stays in the **menu bar** so you can record, stop, or act on a detected me
 ### Understand
 - **Enhance** — Structured AI summary from the original transcript and notes (handles long sources)  
 - **Live transcription** — While recording, a rolling transcript appears in the Transcript tab (local Whisper); a final pass still runs when you stop  
-- **Chat** — Ask about the open item, or **Ask everything** across your library with sources  
+- **Chat** — Ask about the open item, or **Ask everything** across your library with sources. A bounded agent can search and read more passages when needed; choose a model that supports tool calling for Chat and Ask everything
 - **Tasks** — Extract action items after Enhance, or create them manually  
 - **Today** — A daily dashboard for open tasks, today’s meetings, and today’s notes
 - **Read aloud** — Listen to summaries with macOS system voices (on-device)  
@@ -88,6 +88,10 @@ Useful flags: `SKIP_DMG=1` · `SKIP_INSTALL=1` · `SKIP_LAUNCH=1`
 
 Run `swift test` for regression checks. `python3 Scripts/eval_ask.py qwen2.5:7b`
 runs a small synthetic Ask check against a locally running Ollama model.
+For agent search, select a tool-capable local model such as `qwen2.5:7b` for
+Chat and Ask everything. Quern reports an error if the selected endpoint rejects
+tool calls and no evidence is available; when passages are already found, it
+falls back to an evidence-only answer without tools.
 
 The packaged app does **not** include Ollama models. Run `./setup.sh` (or use the in-app setup checklist) for a full AI setup.
 

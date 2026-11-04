@@ -35,6 +35,8 @@ Grist.dmg
 grist-mcp-server/node_modules/
 grist-mcp-server/grist-mcp-server
 grist-mcp-server/package-lock.json
+quern-mcp-server/node_modules/
+quern-mcp-server/quern-mcp-server
 
 # Intermediate iconset (keep AppIcon.icns + source PNG)
 Resources/AppIcon.iconset/
