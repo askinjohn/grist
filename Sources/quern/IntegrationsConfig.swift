@@ -1,24 +1,27 @@
 import Foundation
 import AppKit
 
-/// User integrations (Obsidian, later Notion). Local file only.
+/// User integrations. Local file only; tokens live in Keychain.
 struct IntegrationsFile: Codable, Equatable {
     var version: Int
     var obsidian: ObsidianIntegrationConfig
     var notion: NotionIntegrationConfig
+    var companion: CompanionSyncConfig
 
     static let `default` = IntegrationsFile(
         version: 2,
         obsidian: .default,
-        notion: .default
+        notion: .default,
+        companion: .default
     )
 
-    enum CodingKeys: String, CodingKey { case version, obsidian, notion }
+    enum CodingKeys: String, CodingKey { case version, obsidian, notion, companion }
 
-    init(version: Int, obsidian: ObsidianIntegrationConfig, notion: NotionIntegrationConfig) {
+    init(version: Int, obsidian: ObsidianIntegrationConfig, notion: NotionIntegrationConfig, companion: CompanionSyncConfig) {
         self.version = version
         self.obsidian = obsidian
         self.notion = notion
+        self.companion = companion
     }
 
     init(from decoder: Decoder) throws {
@@ -26,6 +29,15 @@ struct IntegrationsFile: Codable, Equatable {
         version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
         obsidian = try c.decodeIfPresent(ObsidianIntegrationConfig.self, forKey: .obsidian) ?? .default
         notion = try c.decodeIfPresent(NotionIntegrationConfig.self, forKey: .notion) ?? .default
+        companion = try c.decodeIfPresent(CompanionSyncConfig.self, forKey: .companion) ?? .default
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        try c.encode(obsidian, forKey: .obsidian)
+        try c.encode(notion, forKey: .notion)
+        try c.encode(companion, forKey: .companion)
     }
 }
 
@@ -322,6 +334,12 @@ final class IntegrationsConfigManager: ObservableObject {
     func updateNotion(_ block: (inout NotionIntegrationConfig) -> Void) {
         var f = config
         block(&f.notion)
+        _ = saveConfig(f)
+    }
+
+    func updateCompanion(_ block: (inout CompanionSyncConfig) -> Void) {
+        var f = config
+        block(&f.companion)
         _ = saveConfig(f)
     }
 

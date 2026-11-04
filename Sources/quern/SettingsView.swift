@@ -29,7 +29,7 @@ struct SettingsView: View {
         ("Workflow", "gearshape", "Recording, detection, and automatic processing"),
         ("AI models", "cpu", "Choose where each AI task runs and which model it uses"),
         ("Templates", "doc.text", "Customize the structure of generated summaries"),
-        ("Integrations", "link", "Connect Obsidian and Notion"),
+        ("Integrations", "link", "Connect Obsidian, Notion, and Companion sync"),
         ("Search & data", "magnifyingglass", "Index health and calendar access"),
         ("Voice", "speaker.wave.2", "Read answers aloud using macOS voices")
     ]

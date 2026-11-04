@@ -228,6 +228,7 @@ extension MainView {
         }
         // Debounced RAG index so Ask everything sees notes/summaries
         RAGEngine.shared.scheduleIndex(meeting: m)
+        CompanionSyncManager.shared.schedulePush(reason: "save")
     }
 
     /// Persist + index immediately (imports, enhance, folder summary).
@@ -239,6 +240,7 @@ extension MainView {
             selectedMeeting = m
         }
         RAGEngine.shared.indexMeetingNow(m)
+        CompanionSyncManager.shared.schedulePush(reason: "save")
     }
 
     func createSession(from payload: CreateItemPayload) {

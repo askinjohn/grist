@@ -2,26 +2,50 @@ import SwiftUI
 import AppKit
 
 private enum IntegrationChoice: String, CaseIterable {
-    case obsidian, notion
+    case obsidian, notion, companion
 
-    var title: String { rawValue.capitalized }
-    var icon: String { self == .obsidian ? "book.closed.fill" : "square.inset.filled" }
-    var detail: String { self == .obsidian ? "Local Markdown vault" : "Pages and databases" }
-    var tint: Color { self == .obsidian ? .purple : .accentColor }
+    var title: String { self == .companion ? "Companion sync" : rawValue.capitalized }
+    var icon: String {
+        switch self {
+        case .obsidian: "book.closed.fill"
+        case .notion: "square.inset.filled"
+        case .companion: "iphone.and.arrow.forward"
+        }
+    }
+    var detail: String {
+        switch self {
+        case .obsidian: "Local Markdown vault"
+        case .notion: "Pages and databases"
+        case .companion: "Your sync server"
+        }
+    }
+    var tint: Color {
+        switch self {
+        case .obsidian: .purple
+        case .notion: .accentColor
+        case .companion: .blue
+        }
+    }
 }
 
 struct IntegrationsSettingsView: View {
     @ObservedObject private var integrations = IntegrationsConfigManager.shared
+    @ObservedObject private var companionSync = CompanionSyncManager.shared
     @State private var selected: IntegrationChoice = .obsidian
     @State private var obsidian: ObsidianIntegrationConfig = .default
     @State private var notion: NotionIntegrationConfig = .default
     @State private var notionToken = ""
+    @State private var companion: CompanionSyncConfig = .default
+    @State private var companionToken = ""
+    @State private var hasCompanionToken = false
     @State private var message = ""
 
     private var hasChanges: Bool {
-        selected == .obsidian
-            ? obsidian != integrations.config.obsidian
-            : notion != integrations.config.notion || !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        switch selected {
+        case .obsidian: obsidian != integrations.config.obsidian
+        case .notion: notion != integrations.config.notion || !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .companion: companion != integrations.config.companion || !companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
     }
 
     var body: some View {
@@ -34,7 +58,8 @@ struct IntegrationsSettingsView: View {
                         }
                     }
                     if selected == .obsidian { obsidianContent }
-                    else { notionContent }
+                    else if selected == .notion { notionContent }
+                    else { companionContent }
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -62,21 +87,36 @@ struct IntegrationsSettingsView: View {
             obsidian = integrations.config.obsidian
             notion = integrations.config.notion
             notionToken = ""
+            companion = integrations.config.companion
+            companionToken = ""
+            hasCompanionToken = !companionSync.token().isEmpty
         }
         .onChange(of: obsidian) { _, _ in message = "" }
         .onChange(of: notion) { _, _ in message = "" }
         .onChange(of: notionToken) { _, _ in message = "" }
+        .onChange(of: companion) { _, _ in message = "" }
+        .onChange(of: companionToken) { _, _ in message = "" }
     }
 
     private func integrationChoice(_ choice: IntegrationChoice) -> some View {
         let active = selected == choice
-        let enabled = choice == .obsidian ? obsidian.enabled : notion.enabled
-        let ready = choice == .obsidian
-            ? !obsidian.vaultPath.isEmpty
-            : [notion.parentPageID, notion.meetingPageID, notion.notePageID, notion.taskPageID].contains { !$0.isEmpty }
-        let changed = choice == .obsidian
-            ? obsidian != integrations.config.obsidian
-            : notion != integrations.config.notion || !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let enabled: Bool
+        let ready: Bool
+        let changed: Bool
+        switch choice {
+        case .obsidian:
+            enabled = obsidian.enabled
+            ready = !obsidian.vaultPath.isEmpty
+            changed = obsidian != integrations.config.obsidian
+        case .notion:
+            enabled = notion.enabled
+            ready = [notion.parentPageID, notion.meetingPageID, notion.notePageID, notion.taskPageID].contains { !$0.isEmpty }
+            changed = notion != integrations.config.notion || !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .companion:
+            enabled = companion.enabled
+            ready = !companion.normalizedBaseURL.isEmpty && (hasCompanionToken || !companionToken.isEmpty)
+            changed = companion != integrations.config.companion || !companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
         return Button {
             selected = choice
             message = ""
@@ -201,6 +241,57 @@ struct IntegrationsSettingsView: View {
         }
     }
 
+    private var companionContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            integrationSection("1", "Connection", subtitle: "Sync to a server you control.") {
+                Toggle("Enable Companion sync", isOn: $companion.enabled)
+                labeledField("Server URL", text: $companion.baseURL, placeholder: "https://sync.example.com")
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("API token").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    SecureField(hasCompanionToken ? "Replace saved token" : "Enter server token", text: $companionToken)
+                        .textFieldStyle(.roundedBorder)
+                    if hasCompanionToken {
+                        HStack {
+                            Text("Saved in Keychain").font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Remove token", role: .destructive) {
+                                companionSync.setToken("")
+                                companionToken = ""
+                                hasCompanionToken = false
+                                message = "Companion token removed"
+                            }
+                        }
+                    }
+                }
+                HStack {
+                    Button("Test connection") {
+                        Task { await companionSync.testConnection() }
+                    }
+                    Button("Sync now") {
+                        Task { await companionSync.pushNow(reason: "manual") }
+                    }
+                    .disabled(!companion.isConfigured || !hasCompanionToken || companionSync.isSyncing)
+                }
+                .disabled(hasChanges || companion.normalizedBaseURL.isEmpty)
+                if !companionSync.lastStatus.isEmpty {
+                    Text(companionSync.lastStatus).font(.caption).foregroundStyle(.secondary)
+                }
+                if let date = companionSync.lastSyncedAt {
+                    Text("Last sync: \(date.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+
+            integrationSection("2", "Content", subtitle: "Choose what leaves this Mac.") {
+                Toggle("Notes body", isOn: $companion.syncNotesBody)
+                Toggle("AI summary", isOn: $companion.syncSummary)
+                Toggle("Transcript", isOn: $companion.syncTranscript)
+                Toggle("Tasks", isOn: $companion.syncTasks)
+                Toggle("Sync after save", isOn: $companion.autoSyncOnSave)
+            }
+        }
+    }
+
     private func integrationSection<Content: View>(_ number: String, _ title: String,
                                                    subtitle: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -246,10 +337,11 @@ struct IntegrationsSettingsView: View {
     }
 
     private func saveSelected() {
-        if selected == .obsidian {
+        switch selected {
+        case .obsidian:
             integrations.updateObsidian { $0 = obsidian }
             message = integrations.lastMessage == "Saved" ? "Obsidian settings saved" : integrations.lastMessage
-        } else {
+        case .notion:
             do {
                 if !notionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     try NotionSecretStore.save(token: notionToken)
@@ -258,6 +350,14 @@ struct IntegrationsSettingsView: View {
                 notionToken = ""
                 message = integrations.lastMessage == "Saved" ? "Notion settings saved" : integrations.lastMessage
             } catch { message = error.localizedDescription }
+        case .companion:
+            if !companionToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                companionSync.setToken(companionToken)
+                companionToken = ""
+                hasCompanionToken = !companionSync.token().isEmpty
+            }
+            integrations.updateCompanion { $0 = companion }
+            message = integrations.lastMessage == "Saved" ? "Companion settings saved" : integrations.lastMessage
         }
     }
 }

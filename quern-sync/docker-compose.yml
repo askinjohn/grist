@@ -1,0 +1,16 @@
+services:
+  quern-sync:
+    build: .
+    ports:
+      - "${PORT:-8787}:8787"
+    environment:
+      QUERN_SYNC_TOKEN: ${QUERN_SYNC_TOKEN:?set QUERN_SYNC_TOKEN}
+      PORT: "8787"
+      HOST: "0.0.0.0"
+      DB_PATH: /data/quern-sync.db
+    volumes:
+      - quern-sync-data:/data
+    restart: unless-stopped
+
+volumes:
+  quern-sync-data:
