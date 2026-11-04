@@ -46,6 +46,109 @@ class OllamaClient: @unchecked Sendable {
     struct OllamaChatMessage: Codable {
         let role: String
         let content: String
+        var toolCalls: [AgentToolCall]?
+        var toolCallID: String?
+        var name: String?
+
+        init(role: String, content: String, toolCalls: [AgentToolCall]? = nil, toolCallID: String? = nil, name: String? = nil) {
+            self.role = role
+            self.content = content
+            self.toolCalls = toolCalls
+            self.toolCallID = toolCallID
+            self.name = name
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case role, content, name
+            case toolCalls = "tool_calls"
+            case toolCallID = "tool_call_id"
+        }
+    }
+
+    struct AgentToolCall: Codable {
+        struct Function: Codable {
+            let name: String
+            let arguments: JSONValue
+        }
+        let id: String?
+        let type: String?
+        let function: Function
+    }
+
+    enum JSONValue: Codable {
+        case object([String: JSONValue]), array([JSONValue]), string(String), number(Double), bool(Bool), null
+        init(from decoder: Decoder) throws {
+            let c = try decoder.singleValueContainer()
+            if c.decodeNil() { self = .null }
+            else if let v = try? c.decode(Bool.self) { self = .bool(v) }
+            else if let v = try? c.decode(Double.self) { self = .number(v) }
+            else if let v = try? c.decode(String.self) { self = .string(v) }
+            else if let v = try? c.decode([String: JSONValue].self) { self = .object(v) }
+            else { self = .array(try c.decode([JSONValue].self)) }
+        }
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.singleValueContainer()
+            switch self {
+            case .object(let v): try c.encode(v)
+            case .array(let v): try c.encode(v)
+            case .string(let v): try c.encode(v)
+            case .number(let v): try c.encode(v)
+            case .bool(let v): try c.encode(v)
+            case .null: try c.encodeNil()
+            }
+        }
+        var dictionary: [String: JSONValue]? {
+            if case .object(let value) = self { return value }
+            if case .string(let text) = self, let data = text.data(using: .utf8),
+               let value = try? JSONDecoder().decode(JSONValue.self, from: data), case .object(let dict) = value { return dict }
+            return nil
+        }
+        var stringValue: String? { if case .string(let value) = self { return value }; return nil }
+    }
+
+    struct AgentTool: Encodable {
+        struct Function: Encodable {
+            let name: String
+            let description: String
+            let parameters: JSONValue
+        }
+        let type = "function"
+        let function: Function
+    }
+
+    private struct AgentChatRequest: Encodable {
+        let model: String
+        let messages: [OllamaAgentMessage]
+        let tools: [AgentTool]
+        let stream = false
+    }
+
+    /// Ollama uses `tool_name` for tool replies; OpenAI uses `name` and `tool_call_id`.
+    struct OllamaAgentMessage: Encodable {
+        let role: String
+        let content: String
+        let toolCalls: [AgentToolCall]?
+        let toolName: String?
+        enum CodingKeys: String, CodingKey {
+            case role, content
+            case toolCalls = "tool_calls"
+            case toolName = "tool_name"
+        }
+        init(_ message: OllamaChatMessage) {
+            role = message.role
+            content = message.content
+            toolCalls = message.toolCalls
+            toolName = message.role == "tool" ? message.name : nil
+        }
+    }
+
+    private struct OpenAIAgentChatRequest: Encodable {
+        let model: String
+        let messages: [OllamaChatMessage]
+        let tools: [AgentTool]
+        let toolChoice = "auto"
+        let stream = false
+        enum CodingKeys: String, CodingKey { case model, messages, tools, stream; case toolChoice = "tool_choice" }
     }
     
     // MARK: - Ollama Structs
@@ -791,6 +894,38 @@ class OllamaClient: @unchecked Sendable {
             let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
             return decoded.choices.first?.message ?? OllamaChatMessage(role: "assistant", content: "")
         }
+    }
+
+    /// One agent turn. Tool execution remains in Quern; this method only returns model requests.
+    func agentChat(messages: [OllamaChatMessage], tools: [AgentTool], model: String, role: AIRole) async throws -> OllamaChatMessage {
+        let ep = endpointSync(for: role, modelOverride: model)
+        let url = URL(string: ep.isOllama ? "\(ep.backend.baseURL)/api/chat" : "\(ep.backend.baseURL)/chat/completions")!
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if ep.isOllama {
+            request.httpBody = try JSONEncoder().encode(AgentChatRequest(model: ep.model, messages: messages.map(OllamaAgentMessage.init), tools: tools))
+        } else {
+            let key = ep.backend.resolvedAPIKey()
+            if !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+            request.httpBody = try JSONEncoder().encode(OpenAIAgentChatRequest(model: ep.model, messages: messages, tools: tools))
+        }
+        request.timeoutInterval = 120
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let detail = (try? JSONDecoder().decode(AgentErrorResponse.self, from: data).error)?.message
+                ?? String(data: data, encoding: .utf8).map { String($0.prefix(200)) }
+                ?? "Unknown model error"
+            throw NSError(domain: "OllamaClient", code: 4, userInfo: [NSLocalizedDescriptionKey: "The selected model could not use tools (HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)): \(detail). Choose a tool-capable model for Chat or Ask everything."])
+        }
+        if ep.isOllama { return try JSONDecoder().decode(OllamaChatResponse.self, from: data).message }
+        return try JSONDecoder().decode(OpenAIChatResponse.self, from: data).choices.first?.message
+            ?? OllamaChatMessage(role: "assistant", content: "")
+    }
+
+    private struct AgentErrorResponse: Decodable {
+        struct Detail: Decodable { let message: String }
+        let error: Detail
     }
 
     func getEmbedding(text: String, model: String = "nomic-embed-text") async throws -> [Double] {

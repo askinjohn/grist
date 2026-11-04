@@ -608,7 +608,10 @@ extension MainView {
                     Text("Open").tag("open")
                     Text("Completed").tag("done")
                     Text("All").tag("all")
-                }.pickerStyle(.segmented).frame(maxWidth: 290)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(maxWidth: 290)
                 Spacer()
                 Picker("Sort", selection: $taskSort) {
                     Text("Due date").tag("due")
