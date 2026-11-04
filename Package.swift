@@ -12,5 +12,6 @@ let package = Package(
         .executableTarget(
             name: "quern"
         ),
+        .testTarget(name: "QuernTests", dependencies: ["quern"]),
     ]
 )

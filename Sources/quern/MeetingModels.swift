@@ -121,6 +121,7 @@ struct CreateItemPayload {
 
 /// Sidebar library scope (fills the lower-left with real navigation).
 enum LibraryFilter: String, CaseIterable, Identifiable {
+    case today
     case all
     case unfiled
     case meetings
@@ -132,6 +133,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
+        case .today: return "Today"
         case .all: return "All"
         case .unfiled: return "Unfiled"
         case .meetings: return "Meetings"
@@ -143,6 +145,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .today: return "sun.max"
         case .all: return "square.stack.3d.up"
         case .unfiled: return "tray"
         case .meetings: return "waveform"
@@ -207,4 +210,3 @@ enum FolderSummarizePreset: String, CaseIterable, Identifiable {
 }
 
 // MARK: - Root View (Handles Sheet + Keyboard)
-

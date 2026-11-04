@@ -10,13 +10,15 @@ struct TranscriptChunk: Identifiable {
 }
 
 extension Database {
-    func saveChunk(_ chunk: TranscriptChunk) {
+    @discardableResult
+    func saveChunk(_ chunk: TranscriptChunk) -> Bool {
+        var saved = false
         let query = "INSERT OR REPLACE INTO chunks (id, meeting_id, text_chunk, embedding) VALUES (?, ?, ?, ?);"
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt, 1, (chunk.id as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 2, (chunk.meetingId as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(stmt, 3, (chunk.text as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (chunk.id as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 2, (chunk.meetingId as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 3, (chunk.text as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
 
             // Copy embedding bytes with SQLITE_TRANSIENT so SQLite owns the data
             let data = chunk.embedding.withUnsafeBufferPointer { Data(buffer: $0) }
@@ -25,18 +27,39 @@ extension Database {
                 sqlite3_bind_blob(stmt, 4, base, Int32(data.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             }
 
-            if sqlite3_step(stmt) != SQLITE_DONE {
+            saved = sqlite3_step(stmt) == SQLITE_DONE
+            if !saved {
                 print("[Database] saveChunk failed: \(String(cString: sqlite3_errmsg(db)))")
             }
         }
         sqlite3_finalize(stmt)
+        return saved
+    }
+
+    /// Keep the previous index on any failure, including a failed INSERT or COMMIT.
+    func replaceChunks(_ chunks: [TranscriptChunk], for meeting: Meeting) -> Bool {
+        guard execute("BEGIN IMMEDIATE;") else { return false }
+        var committed = false
+        defer { if !committed { _ = execute("ROLLBACK;") } }
+        guard let current = getMeeting(id: meeting.id), !current.isDeleted,
+              current == meeting else { return false }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "DELETE FROM chunks WHERE meeting_id = ?;", -1, &stmt, nil) == SQLITE_OK else { return false }
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, (meeting.id as NSString).utf8String, -1, transient)
+        let deleted = sqlite3_step(stmt) == SQLITE_DONE
+        sqlite3_finalize(stmt)
+        guard deleted, chunks.allSatisfy({ $0.meetingId == meeting.id && saveChunk($0) }),
+              execute("COMMIT;") else { return false }
+        committed = true
+        return true
     }
 
     func deleteChunks(forMeetingId meetingId: String) {
         let query = "DELETE FROM chunks WHERE meeting_id = ?;"
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt, 1, (meetingId as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (meetingId as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
@@ -65,7 +88,7 @@ extension Database {
         var results: [TranscriptChunk] = []
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
             for (index, id) in meetingIds.enumerated() {
-                sqlite3_bind_text(stmt, Int32(index + 1), (id as NSString).utf8String, -1, nil)
+                sqlite3_bind_text(stmt, Int32(index + 1), (id as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             }
             
             while sqlite3_step(stmt) == SQLITE_ROW {

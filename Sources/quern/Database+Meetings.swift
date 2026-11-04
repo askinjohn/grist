@@ -2,7 +2,9 @@ import Foundation
 import SQLite3
 
 extension Database {
-    func saveMeeting(_ meeting: Meeting) {
+    @discardableResult
+    func saveMeeting(_ meeting: Meeting) -> Bool {
+        var saved = false
         let insertStatementString = """
         INSERT OR REPLACE INTO meetings (id, title, timestamp, manual_notes, transcript, summary, template, group_name, is_deleted, duration_seconds)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -10,29 +12,44 @@ extension Database {
         
         var insertStatement: OpaquePointer?
         if sqlite3_prepare_v2(db, insertStatementString, -1, &insertStatement, nil) == SQLITE_OK {
-            sqlite3_bind_text(insertStatement, 1, (meeting.id as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(insertStatement, 2, (meeting.title as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(insertStatement, 1, (meeting.id as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(insertStatement, 2, (meeting.title as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             sqlite3_bind_double(insertStatement, 3, meeting.timestamp)
-            sqlite3_bind_text(insertStatement, 4, (meeting.manualNotes as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(insertStatement, 5, (meeting.transcript as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(insertStatement, 6, (meeting.summary as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(insertStatement, 7, (meeting.template as NSString).utf8String, -1, nil)
-            sqlite3_bind_text(insertStatement, 8, ((meeting.groupName ?? "") as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(insertStatement, 4, (meeting.manualNotes as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(insertStatement, 5, (meeting.transcript as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(insertStatement, 6, (meeting.summary as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(insertStatement, 7, (meeting.template as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(insertStatement, 8, ((meeting.groupName ?? "") as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             sqlite3_bind_int(insertStatement, 9, meeting.isDeleted ? 1 : 0)
             sqlite3_bind_int(insertStatement, 10, Int32(meeting.durationSeconds))
             
-            if sqlite3_step(insertStatement) != SQLITE_DONE {
+            saved = sqlite3_step(insertStatement) == SQLITE_DONE
+            if !saved {
                 print("Could not insert/replace meeting row.")
             }
         }
         sqlite3_finalize(insertStatement)
+        return saved
     }
     
+    /// Read and patch the latest row under a write lock, including against MCP writers.
+    @discardableResult
+    func modifyMeeting(id: String, _ update: (inout Meeting) -> Void) -> Meeting? {
+        guard execute("BEGIN IMMEDIATE;") else { return nil }
+        var committed = false
+        defer { if !committed { _ = execute("ROLLBACK;") } }
+        guard var meeting = getMeeting(id: id), !meeting.isDeleted else { return nil }
+        update(&meeting)
+        guard saveMeeting(meeting), execute("COMMIT;") else { return nil }
+        committed = true
+        return meeting
+    }
+
     func softDeleteMeeting(id: String) {
         let query = "UPDATE meetings SET is_deleted = 1 WHERE id = ?;"
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(stmt, 1, (id as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
@@ -46,7 +63,7 @@ extension Database {
         var meeting: Meeting? = nil
         
         if sqlite3_prepare_v2(db, queryStatementString, -1, &queryStatement, nil) == SQLITE_OK {
-            sqlite3_bind_text(queryStatement, 1, (id as NSString).utf8String, -1, nil)
+            sqlite3_bind_text(queryStatement, 1, (id as NSString).utf8String, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
             
             if sqlite3_step(queryStatement) == SQLITE_ROW {
                 meeting = meetingFromRow(queryStatement)

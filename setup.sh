@@ -128,6 +128,11 @@ fi
 
 require_cmd swift "Install Xcode Command Line Tools: xcode-select --install"
 require_cmd git "Install git via Homebrew: brew install git"
+require_cmd xcodebuild "Install full Xcode and select it with: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer"
+if ! command -v xcodegen &>/dev/null; then
+    echo "Installing xcodegen (needed for the Today widget)..."
+    brew install xcodegen
+fi
 
 if ! command -v cmake &>/dev/null; then
     echo "Installing cmake (needed for whisper.cpp)..."

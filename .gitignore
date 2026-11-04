@@ -3,6 +3,7 @@
 /Packages
 xcuserdata/
 DerivedData/
+/Quern.xcodeproj/
 .swiftpm/configuration/registries.json
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .netrc
@@ -30,7 +31,7 @@ Grist.dmg
 *.mp3
 *.aac
 
-# MCP / sync: dependencies + compiled binaries + local data
+# MCP: dependencies + compiled standalone binary (built by setup.sh)
 grist-mcp-server/node_modules/
 grist-mcp-server/grist-mcp-server
 grist-mcp-server/package-lock.json
@@ -41,10 +42,21 @@ quern-sync/node_modules/
 quern-sync/data/
 quern-sync/.env
 
-
 # Intermediate iconset (keep AppIcon.icns + source PNG)
 Resources/AppIcon.iconset/
 
 # macOS junk
 .AppleDouble
 .LSOverride
+
+# Local credentials and runtime configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.p8
+*.key
+*.log
+integrations.json
+ai-config.json

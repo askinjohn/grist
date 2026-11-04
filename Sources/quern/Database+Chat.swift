@@ -32,6 +32,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
     var conversationId: String
     /// Note/meeting titles used as RAG/document sources (assistant messages).
     var sources: [String]
+    var evidence: [AskEvidence] = []
 
     init(
         id: String,
@@ -40,7 +41,8 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         content: String,
         timestamp: Double,
         conversationId: String = "",
-        sources: [String] = []
+        sources: [String] = [],
+        evidence: [AskEvidence] = []
     ) {
         self.id = id
         self.groupName = groupName
@@ -49,6 +51,7 @@ struct ChatMessage: Identifiable, Codable, Hashable {
         self.timestamp = timestamp
         self.conversationId = conversationId
         self.sources = sources
+        self.evidence = evidence
     }
 }
 
@@ -234,8 +237,8 @@ extension Database {
             return s
         }()
         let query = """
-        INSERT OR REPLACE INTO chat_messages (id, group_name, role, content, timestamp, conversation_id, sources)
-        VALUES (?, ?, ?, ?, ?, ?, ?);
+        INSERT OR REPLACE INTO chat_messages (id, group_name, role, content, timestamp, conversation_id, sources, evidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         """
         var stmt: OpaquePointer?
         if sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK {
@@ -246,12 +249,19 @@ extension Database {
             sqlite3_bind_double(stmt, 5, message.timestamp)
             sqlite3_bind_text(stmt, 6, (convId as NSString).utf8String, -1, nil)
             sqlite3_bind_text(stmt, 7, (sourcesJSON as NSString).utf8String, -1, nil)
+            let evidenceJSON = String(data: (try? JSONEncoder().encode(message.evidence)) ?? Data(), encoding: .utf8) ?? "[]"
+            sqlite3_bind_text(stmt, 8, (evidenceJSON as NSString).utf8String, -1, nil)
             sqlite3_step(stmt)
         }
         sqlite3_finalize(stmt)
         if !convId.isEmpty {
             touchConversation(id: convId)
         }
+    }
+
+    private func decodeEvidence(_ raw: UnsafePointer<UInt8>?) -> [AskEvidence] {
+        guard let raw, let data = String(cString: raw).data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([AskEvidence].self, from: data)) ?? []
     }
 
     private func decodeSources(_ raw: UnsafePointer<UInt8>?) -> [String] {
@@ -264,7 +274,7 @@ extension Database {
 
     func fetchChatMessages(conversationId: String) -> [ChatMessage] {
         let query = """
-        SELECT id, group_name, role, content, timestamp, conversation_id, sources
+        SELECT id, group_name, role, content, timestamp, conversation_id, sources, evidence
         FROM chat_messages
         WHERE conversation_id = ?
         ORDER BY timestamp ASC;
@@ -283,7 +293,8 @@ extension Database {
                     content: String(cString: sqlite3_column_text(stmt, 3)),
                     timestamp: sqlite3_column_double(stmt, 4),
                     conversationId: cid,
-                    sources: decodeSources(sqlite3_column_text(stmt, 6))
+                    sources: decodeSources(sqlite3_column_text(stmt, 6)),
+                    evidence: decodeEvidence(sqlite3_column_text(stmt, 7))
                 ))
             }
         }
@@ -294,7 +305,7 @@ extension Database {
     /// Legacy API — all messages for a scope (any thread). Prefer conversationId APIs.
     func fetchChatMessages(forGroup groupName: String) -> [ChatMessage] {
         let query = """
-        SELECT id, group_name, role, content, timestamp, conversation_id, sources
+        SELECT id, group_name, role, content, timestamp, conversation_id, sources, evidence
         FROM chat_messages WHERE group_name = ? ORDER BY timestamp ASC;
         """
         var stmt: OpaquePointer?
@@ -310,7 +321,8 @@ extension Database {
                     content: String(cString: sqlite3_column_text(stmt, 3)),
                     timestamp: sqlite3_column_double(stmt, 4),
                     conversationId: cid,
-                    sources: decodeSources(sqlite3_column_text(stmt, 6))
+                    sources: decodeSources(sqlite3_column_text(stmt, 6)),
+                    evidence: decodeEvidence(sqlite3_column_text(stmt, 7))
                 ))
             }
         }

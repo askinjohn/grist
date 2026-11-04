@@ -588,11 +588,12 @@ extension MainView {
         let selected = focusedFolder == nil && libraryFilter == filter
         let count = count(for: filter)
         return Button {
+            searchText = ""
+            transcriptEvidenceQuery = nil
             focusedFolder = nil
             libraryFilter = filter
-            if filter == .askEverything || filter == .tasks {
-                selectedMeeting = nil
-            }
+            selectedMeeting = nil
+            selectedTask = nil
             if filter == .tasks {
                 loadTasks()
             }
@@ -629,7 +630,7 @@ extension MainView {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Ask everything")
                         .font(.headline)
-                    Text("Answers use all notes and meetings in your library")
+                    Text("Answers grounded in passages retrieved from your library")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -643,6 +644,8 @@ extension MainView {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            .frame(maxWidth: 1000)
+            .frame(maxWidth: .infinity)
             .background(.bar)
 
             Divider()
