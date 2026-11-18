@@ -154,7 +154,7 @@ extension MainView {
                     MarkdownView(markdown: display, bodyFontSize: 16, contentPadding: 24)
                         .frame(width: geo.size.width, height: max(200, geo.size.height - 160), alignment: .topLeading)
                 } else {
-                    Text("Nothing to preview yet — switch to edit and write.")
+                    Text("Nothing to preview")
                         .foregroundStyle(.secondary)
                         .padding(24)
                         .frame(width: geo.size.width, alignment: .topLeading)

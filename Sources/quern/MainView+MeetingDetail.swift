@@ -70,14 +70,9 @@ extension MainView {
         // Meeting detail “Notes” tab — write freely; Add URL appends articles/YouTube into this same item
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Notes for this meeting")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text("Your thoughts, follow-ups, and anything you paste here are included when you Enhance.")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
+                Text("Notes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 Spacer()
                 if !noteSelectedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Button {
@@ -362,10 +357,6 @@ extension MainView {
                         ProgressView()
                             .controlSize(.mini)
                     }
-                    Text("Updates every few seconds · final pass on Stop")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
                     Spacer()
                 }
                 .padding(.horizontal, 16)
@@ -375,7 +366,7 @@ extension MainView {
                 ScrollViewReader { proxy in
                     ScrollView {
                         Text(liveText.isEmpty
-                             ? "Listening… speak or play audio. Text will appear here shortly."
+                             ? "Listening…"
                              : liveText)
                             .font(.body)
                             .foregroundStyle(liveText.isEmpty ? .secondary : .primary)

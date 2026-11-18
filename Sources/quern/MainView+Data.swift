@@ -311,9 +311,6 @@ extension MainView {
             statusMessage = "Recording or transcription is already in progress"
             return
         }
-        NSApp.activate(ignoringOtherApps: true)
-        NotificationCenter.default.post(name: .showQuernWindowRequested, object: nil)
-
         let label = appName ?? MeetingDetector.shared.pendingPrompt?.appName ?? "Meeting"
         let df = DateFormatter()
         df.dateStyle = .medium

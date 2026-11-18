@@ -46,6 +46,7 @@ extension MainView {
                     recordingMeetingId = meetingId
                     recordingSeconds = 0
                     RecordingStatus.shared.sync(isRecording: true, elapsedSeconds: 0)
+                    MeetingDetector.shared.beginRecordingMonitor()
                     RecordingStatus.shared.clearLiveTranscript()
                     recordingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
                         Task { @MainActor in

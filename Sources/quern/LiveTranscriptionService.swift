@@ -22,6 +22,7 @@ final class LiveTranscriptionService: ObservableObject {
     private var timer: Timer?
     private var nextStart: Double = 0
     private var busy = false
+    private var consecutiveExtractionFailures = 0
     private let transcriber = WhisperTranscriber.shared
 
     private init() {}
@@ -42,6 +43,7 @@ final class LiveTranscriptionService: ObservableObject {
         liveText = ""
         lastError = ""
         nextStart = 0
+        consecutiveExtractionFailures = 0
         isRunning = true
         RecordingStatus.shared.setLiveTranscript("")
 
@@ -83,33 +85,43 @@ final class LiveTranscriptionService: ObservableObject {
         let micURL = folder.appendingPathComponent("mic.m4a")
         let systemURL = folder.appendingPathComponent("system.wav")
 
-        // Prefer mic; fall back to system if mic missing
-        let sourceURL: URL
-        if FileManager.default.fileExists(atPath: micURL.path) {
-            sourceURL = micURL
-        } else if FileManager.default.fileExists(atPath: systemURL.path) {
-            sourceURL = systemURL
-        } else {
+        let sources = [micURL, systemURL].filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !sources.isEmpty else {
+            lastError = "Waiting for audio…"
             return
         }
 
         let start = max(0, nextStart - overlapSeconds)
         let chunkURL = folder.appendingPathComponent("live-chunk.wav")
 
-        let extracted = await transcriber.extractChunkWAV(
-            from: sourceURL,
-            startSeconds: start,
-            durationSeconds: windowSeconds,
-            to: chunkURL
-        )
-        // Only advance the window when extract + ASR succeed — otherwise we skip audio forever.
-        guard extracted else { return }
-
-        let text = await transcriber.transcribeChunk(wavURL: chunkURL, preferFastModel: true)
+        var didExtract = false
+        var recognizedText: String?
+        for source in sources {
+            let extracted = await transcriber.extractChunkWAV(
+                from: source,
+                startSeconds: start,
+                durationSeconds: windowSeconds,
+                to: chunkURL
+            )
+            guard extracted else { continue }
+            didExtract = true
+            recognizedText = await transcriber.transcribeChunk(wavURL: chunkURL, preferFastModel: true)
+            if recognizedText != nil { break }
+        }
         try? FileManager.default.removeItem(at: chunkURL)
-        guard let text else { return }
+        guard didExtract else {
+            consecutiveExtractionFailures += 1
+            lastError = "Live transcript is waiting for audio…"
+            if consecutiveExtractionFailures == 1 || consecutiveExtractionFailures.isMultiple(of: 15) {
+                QuernLog.log("[LiveTranscript] audio chunk extraction failed (attempt \(consecutiveExtractionFailures))")
+            }
+            return
+        }
 
-        appendDeduped(text)
+        consecutiveExtractionFailures = 0
+        lastError = ""
+        if let recognizedText { appendDeduped(recognizedText) }
+        // Silence is a valid chunk: move forward so later speech is reached.
         nextStart = start + windowSeconds - overlapSeconds
         if nextStart < 0 { nextStart = 0 }
     }

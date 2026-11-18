@@ -26,22 +26,6 @@ enum ChatScope: Equatable {
         }
     }
 
-    var emptySubtitle: String {
-        switch self {
-        case .item(let m):
-            let name = m.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            if name.isEmpty {
-                return "Answers use this item’s AI summary, written notes, and transcript."
-            }
-            return "Answers use “\(name)” — AI summary, notes, and transcript."
-        case .global:
-            return "Semantic search + keywords across your library. Use Clear chat if a previous topic sticks."
-        case .selection(_, let title, let text):
-            let preview = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let short = preview.count > 120 ? String(preview.prefix(120)) + "…" : preview
-            return "Only the selected text from “\(title)” is used:\n\(short)"
-        }
-    }
 }
 
 struct ChatView: View {
@@ -310,19 +294,10 @@ struct ChatView: View {
             QuernEmptyState(
                 systemImage: "bubble.left.and.bubble.right",
                 title: scope.emptyTitle,
-                message: scope.emptySubtitle,
                 tint: .purple,
                 badgeSize: 56
             )
-            Text("History keeps past threads. New chat starts fresh.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-
-            // One-tap starters so the pane doesn’t feel empty
             VStack(alignment: .leading, spacing: 8) {
-                Text("Try asking")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
                 FlowLayoutChips(items: suggestionPrompts) { prompt in
                     inputText = prompt
                     sendMessage()

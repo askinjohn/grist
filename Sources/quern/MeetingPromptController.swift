@@ -27,16 +27,17 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
     private var recordingReminderTimer: Timer?
     private var recordingReminderSequence = 0
     private var recordingPanel: NSPanel?
+    private var livePanel: NSPanel?
 
     private override init() { super.init() }
 
     func configure() {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
-        let record = UNNotificationAction(identifier: Self.actionRecord, title: "Take notes in Quern", options: [.foreground])
+        let record = UNNotificationAction(identifier: Self.actionRecord, title: "Take notes", options: [])
         let dismiss = UNNotificationAction(identifier: Self.actionDismiss, title: "Not now", options: [])
-        let stopRecording = UNNotificationAction(identifier: Self.actionStopRecording, title: "Stop Recording", options: [.foreground])
-        let keepRecording = UNNotificationAction(identifier: Self.actionKeepRecording, title: "Keep Recording", options: [.foreground])
+        let stopRecording = UNNotificationAction(identifier: Self.actionStopRecording, title: "Stop Recording", options: [])
+        let keepRecording = UNNotificationAction(identifier: Self.actionKeepRecording, title: "Keep Recording", options: [])
         center.setNotificationCategories([
             UNNotificationCategory(identifier: Self.categoryId, actions: [record, dismiss], intentIdentifiers: [], options: [.customDismissAction]),
             UNNotificationCategory(identifier: Self.recordingCategoryId, actions: [stopRecording], intentIdentifiers: [], options: []),
@@ -111,6 +112,7 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
     /// Remind during unattended sessions, even when macOS alerts are disabled.
     func startRecordingReminders() {
         stopRecordingReminders()
+        showLivePanel()
         recordingReminderTimer = Timer.scheduledTimer(withTimeInterval: Self.recordingReminderInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.presentRecordingReminder() }
         }
@@ -122,6 +124,8 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
         recordingReminderSequence = 0
         recordingPanel?.orderOut(nil)
         recordingPanel = nil
+        livePanel?.orderOut(nil)
+        livePanel = nil
         clearMeetingEndedPrompt()
         UNUserNotificationCenter.current().getDeliveredNotifications { notifications in
             let ids = notifications.map(\.request.identifier).filter { $0.hasPrefix(Self.recordingReminderPrefix) }
@@ -133,16 +137,40 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
         }
     }
 
+    func showLivePanel() {
+        guard RecordingStatus.shared.isRecording else { return }
+        let panel: NSPanel
+        if let livePanel {
+            panel = livePanel
+        } else {
+            panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 290),
+                            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView], backing: .buffered, defer: false)
+            panel.titleVisibility = .hidden
+            panel.titlebarAppearsTransparent = true
+            panel.isReleasedWhenClosed = false
+            panel.hidesOnDeactivate = false
+            panel.level = .floating
+            panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            panel.contentView = NSHostingView(rootView: LiveRecordingCard(
+                hide: { [weak self] in self?.livePanel?.orderOut(nil) },
+                stop: { NotificationCenter.default.post(name: .stopRecordingRequested, object: nil) }
+            ))
+            if let screen = NSScreen.main {
+                panel.setFrameTopLeftPoint(NSPoint(x: screen.visibleFrame.maxX - 380, y: screen.visibleFrame.maxY - 20))
+            }
+            livePanel = panel
+        }
+        panel.orderFrontRegardless()
+    }
+
     func presentMeetingEndedPrompt() {
         guard RecordingStatus.shared.isRecording else { return }
+        showMeetingEndedPanel()
         Task {
             let center = UNUserNotificationCenter.current()
             let settings = await center.notificationSettings()
             guard RecordingStatus.shared.isRecording else { return }
-            guard settings.alertSetting == .enabled else {
-                showMeetingEndedPanel()
-                return
-            }
+            guard settings.alertSetting == .enabled else { return }
             let content = UNMutableNotificationContent()
             content.title = "Has your meeting ended?"
             content.body = "Quern hasn’t detected meeting microphone activity for 3 minutes. Stop this recording or keep it going?"
@@ -168,6 +196,7 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
     private func keepRecording() {
         clearMeetingEndedPrompt()
         MeetingDetector.shared.keepRecordingAfterMeetingEndPrompt()
+        showLivePanel()
     }
 
     private func confirmStopAfterMeetingEnd() {
@@ -176,6 +205,7 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
     }
 
     private func showMeetingEndedPanel() {
+        livePanel?.orderOut(nil)
         let panel: NSPanel
         if let existing = recordingPanel {
             panel = existing
@@ -366,6 +396,49 @@ private struct MeetingPromptCard: View {
                 Button(isTest ? "Looks good" : "Take notes", action: record).buttonStyle(.borderedProminent)
             }
         }.padding(20).frame(width: 360, height: 170)
+    }
+}
+
+private struct LiveRecordingCard: View {
+    @ObservedObject private var status = RecordingStatus.shared
+    @ObservedObject private var transcription = LiveTranscriptionService.shared
+    let hide: () -> Void
+    let stop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Recording · \(status.formattedElapsed)", systemImage: "record.circle.fill")
+                    .foregroundStyle(.red)
+                    .font(.headline)
+                Spacer()
+                Button("Hide", action: hide)
+                    .buttonStyle(.plain)
+            }
+            Divider()
+            ScrollView {
+                Text(transcription.liveText.isEmpty
+                     ? (transcription.lastError.isEmpty ? "Listening…" : transcription.lastError)
+                     : transcription.liveText)
+                    .font(.callout)
+                    .foregroundStyle(transcription.liveText.isEmpty ? .secondary : .primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 0)
+            HStack {
+                Button("Open Quern") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    NotificationCenter.default.post(name: .showQuernWindowRequested, object: nil)
+                }
+                Spacer()
+                Button("Stop", action: stop)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+            }
+        }
+        .padding(16)
+        .frame(width: 360, height: 290)
     }
 }
 
