@@ -34,7 +34,6 @@ final class MeetingDetector: ObservableObject {
     private var episode = MeetingDetectionEpisode()
     private let pollInterval: TimeInterval = 2.5
     private let meetingEndGrace: TimeInterval = 3 * 60
-    private var sawMeetingActivityDuringRecording = false
     private var meetingActivityMissingSince: Date?
     private var isMeetingEndPromptPresented = false
     private var promptSnoozedUntil: Date?
@@ -77,6 +76,12 @@ final class MeetingDetector: ObservableObject {
         dismissCurrentPrompt()
     }
 
+    func beginRecordingMonitor() {
+        meetingActivityMissingSince = Date()
+        isMeetingEndPromptPresented = false
+        promptSnoozedUntil = nil
+    }
+
     private func tick() {
         guard timer != nil else { return }
         if RecordingStatus.shared.isRecording {
@@ -106,16 +111,17 @@ final class MeetingDetector: ObservableObject {
 
     private func monitorRecordingForMeetingEnd() {
         if hasMeetingMicrophoneActivity() {
-            if isMeetingEndPromptPresented { MeetingPromptController.shared.clearMeetingEndedPrompt() }
-            sawMeetingActivityDuringRecording = true
+            if isMeetingEndPromptPresented {
+                MeetingPromptController.shared.clearMeetingEndedPrompt()
+                MeetingPromptController.shared.showLivePanel()
+            }
             meetingActivityMissingSince = nil
             isMeetingEndPromptPresented = false
             promptSnoozedUntil = nil
             return
         }
         guard MeetingDetectionSettings.shared.askToStopAfterMeetingEnd,
-              !isMeetingEndPromptPresented,
-              sawMeetingActivityDuringRecording else { return }
+              !isMeetingEndPromptPresented else { return }
         let missingSince = meetingActivityMissingSince ?? Date()
         meetingActivityMissingSince = missingSince
         guard Date().timeIntervalSince(missingSince) >= meetingEndGrace,
@@ -146,7 +152,6 @@ final class MeetingDetector: ObservableObject {
     }
 
     private func resetRecordingMonitor() {
-        sawMeetingActivityDuringRecording = false
         meetingActivityMissingSince = nil
         isMeetingEndPromptPresented = false
         promptSnoozedUntil = nil

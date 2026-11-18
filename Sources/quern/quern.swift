@@ -113,10 +113,11 @@ struct QuernApp: App {
                         }
                     }
                 }
-                NSApp.activate(ignoringOtherApps: true)
-                NotificationCenter.default.post(name: .showQuernWindowRequested, object: nil)
             }
             .keyboardShortcut(".", modifiers: [.command, .shift])
+            Button("Show Recording Panel") {
+                MeetingPromptController.shared.showLivePanel()
+            }
             Button("Show Quern") {
                 NSApp.activate(ignoringOtherApps: true)
                 NotificationCenter.default.post(name: .showQuernWindowRequested, object: nil)

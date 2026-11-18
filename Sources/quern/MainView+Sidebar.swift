@@ -473,11 +473,6 @@ extension MainView {
                 VStack(spacing: 6) {
                     Text(tasks.isEmpty ? "No tasks yet" : noTasksTitle)
                         .font(.title2.weight(.semibold))
-                    Text(noTasksMessage)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 340)
                 }
                 HStack(spacing: 12) {
                     if !tasks.isEmpty, taskListFilter == "open", tasks.contains(where: \.isDone) {
@@ -487,18 +482,6 @@ extension MainView {
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                     }
-                    Button {
-                        newTaskTitle = ""
-                        newTaskNotes = ""
-                        newTaskLinkToOpenItem = selectedMeeting != nil
-                        showingNewTaskSheet = true
-                    } label: {
-                        Label("New task", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.purple)
-                    .controlSize(.large)
-
                     if selectedMeeting != nil {
                         Button {
                             extractTasksFromCurrent()
@@ -540,17 +523,6 @@ extension MainView {
         case "done": return "No completed tasks"
         case "all": return "No matching tasks"
         default: return "No open tasks"
-        }
-    }
-
-    var noTasksMessage: String {
-        if tasks.isEmpty {
-            return "Extract action items after Enhance, or create one by hand."
-        }
-        switch taskListFilter {
-        case "done": return "Completed tasks will appear here."
-        case "all": return "Try a different task view."
-        default: return "Your completed tasks are still available in the Completed view."
         }
     }
 

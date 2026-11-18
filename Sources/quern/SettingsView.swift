@@ -25,13 +25,13 @@ struct SettingsView: View {
     static let sheetWidth: CGFloat = 900
     static let sheetHeight: CGFloat = 640
     @State private var selectedTab = 0
-    private let tabs: [(String, String, String)] = [
-        ("Workflow", "gearshape", "Recording, detection, and automatic processing"),
-        ("AI models", "cpu", "Choose where each AI task runs and which model it uses"),
-        ("Templates", "doc.text", "Customize the structure of generated summaries"),
-        ("Integrations", "link", "Connect Obsidian, Notion, and Companion sync"),
-        ("Search & data", "magnifyingglass", "Index health and calendar access"),
-        ("Voice", "speaker.wave.2", "Read answers aloud using macOS voices")
+    private let tabs: [(String, String)] = [
+        ("Workflow", "gearshape"),
+        ("AI models", "cpu"),
+        ("Templates", "doc.text"),
+        ("Integrations", "link"),
+        ("Search & data", "magnifyingglass"),
+        ("Voice", "speaker.wave.2")
     ]
     var body: some View {
         HStack(spacing: 0) {
@@ -45,15 +45,11 @@ struct SettingsView: View {
                     }.buttonStyle(.plain)
                 }
                 Spacer()
-                Text("Workflow changes save automatically. Models and integrations have explicit Save buttons.")
-                    .font(.caption).foregroundStyle(.secondary)
             }.padding(16).frame(width: 190).background(.bar)
             Divider()
             VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(tabs[selectedTab].0).font(.title2.weight(.semibold))
-                    Text(tabs[selectedTab].2).font(.callout).foregroundStyle(.secondary)
-                }.padding(20).padding(.trailing, 30)
+                Text(tabs[selectedTab].0).font(.title2.weight(.semibold))
+                    .padding(20).padding(.trailing, 30)
                 Divider()
                 Group {
                     switch selectedTab {
@@ -101,6 +97,7 @@ struct TabButton: View {
 
 struct GeneralSettingsView: View {
     @ObservedObject private var meetingPrompt = MeetingPromptController.shared
+    @StateObject private var launchAtLogin = LaunchAtLogin()
     @AppStorage("autoEnhance") private var autoEnhance = true
     @AppStorage("autoExtractTasks") private var autoExtractTasks = true
     @AppStorage("liveTranscriptionEnabled") private var liveTranscriptionEnabled = true
@@ -125,17 +122,35 @@ struct GeneralSettingsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 24) {
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Startup")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Toggle("Open Quern at login", isOn: Binding(
+                        get: { launchAtLogin.isEnabled },
+                        set: { launchAtLogin.setEnabled($0) }
+                    ))
+                    .help("Start Quern automatically when you sign in to this Mac.")
+                    if !launchAtLogin.message.isEmpty {
+                        HStack {
+                            Text(launchAtLogin.message).font(.caption).foregroundStyle(.secondary)
+                            if launchAtLogin.needsApproval {
+                                Button("Open Login Items") { launchAtLogin.openLoginItemsSettings() }
+                            }
+                        }
+                    }
+                }
 
                 // Section 1: Workflow
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Workflow")
+                    Text("After recording")
                         .font(.system(size: 13, weight: .bold, design: .rounded))
                         .foregroundStyle(.secondary)
                         .textCase(.uppercase)
 
                     settingsToggleRow(
-                        title: "Auto-Enhance Meetings",
+                        title: "Summarize meetings automatically",
                         subtitle: "Generate AI summaries automatically when recording stops",
                         isOn: $autoEnhance
                     )
@@ -171,7 +186,7 @@ struct GeneralSettingsView: View {
                     }
 
                     settingsToggleRow(
-                        title: "Ask when meeting activity ends",
+                        title: "Ask to stop after 3 minutes of inactivity",
                         subtitle: "After 3 minutes without meeting microphone activity, ask whether to stop. Ignoring the prompt keeps recording.",
                         isOn: $askToStopAfterMeetingEnd
                     )
@@ -187,8 +202,6 @@ struct GeneralSettingsView: View {
                         Toggle("Microsoft Teams", isOn: $meetingDetectTeams)
                         Toggle("Google Meet (browser)", isOn: $meetingDetectMeet)
                         Toggle("Webex", isOn: $meetingDetectWebex)
-                        Text("Detects meeting windows and microphone activity. Browser microphone activity always asks first, since it may be another site or dictation.")
-                            .font(.caption).foregroundStyle(.secondary)
                         Text(meetingPrompt.notificationStatus)
                             .font(.caption).foregroundStyle(.secondary)
                         HStack {
@@ -200,10 +213,7 @@ struct GeneralSettingsView: View {
                             }
                             Button("Screen recording settings") { PermissionHelper.openScreenRecordingSettings() }
                         }
-                        Text("Screen Recording access helps identify Google Meet by its window title. Keep Quern running in the menu bar to detect calls.")
-                            .font(.caption).foregroundStyle(.secondary)
-                            .onAppear { meetingPrompt.refreshAuthorization() }
-
+                        .onAppear { meetingPrompt.refreshAuthorization() }
                     }
                 }
 
@@ -217,6 +227,7 @@ struct GeneralSettingsView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear { launchAtLogin.refresh() }
     }
 
     /// Label + control that wraps on narrow sheets (no fixed control widths).
@@ -244,26 +255,9 @@ struct GeneralSettingsView: View {
 
     @ViewBuilder
     private func settingsToggleRow(title: String, subtitle: String, isOn: Binding<Bool>) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.system(size: 16, weight: .medium, design: .rounded))
-                Text(subtitle)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Toggle("", isOn: isOn)
-                .toggleStyle(.switch)
-                .labelsHidden()
-        }
-        .padding(16)
-        .background(Color.primary.opacity(0.04))
-        .cornerRadius(12)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.1), lineWidth: 1)
-        )
+        Toggle(title, isOn: isOn)
+            .help(subtitle)
+            .padding(.vertical, 6)
     }
 
     private func rebuildIndex() {
