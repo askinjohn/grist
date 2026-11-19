@@ -23,6 +23,7 @@ final class LiveTranscriptionService: ObservableObject {
     private var nextStart: Double = 0
     private var busy = false
     private var consecutiveExtractionFailures = 0
+    private var silentChunkCount = 0
     private let transcriber = WhisperTranscriber.shared
 
     private init() {}
@@ -44,6 +45,7 @@ final class LiveTranscriptionService: ObservableObject {
         lastError = ""
         nextStart = 0
         consecutiveExtractionFailures = 0
+        silentChunkCount = 0
         isRunning = true
         RecordingStatus.shared.setLiveTranscript("")
 
@@ -94,20 +96,15 @@ final class LiveTranscriptionService: ObservableObject {
         let start = max(0, nextStart - overlapSeconds)
         let chunkURL = folder.appendingPathComponent("live-chunk.wav")
 
-        var didExtract = false
-        var recognizedText: String?
-        for source in sources {
-            let extracted = await transcriber.extractChunkWAV(
-                from: source,
-                startSeconds: start,
-                durationSeconds: windowSeconds,
-                to: chunkURL
-            )
-            guard extracted else { continue }
-            didExtract = true
-            recognizedText = await transcriber.transcribeChunk(wavURL: chunkURL, preferFastModel: true)
-            if recognizedText != nil { break }
-        }
+        let didExtract = await transcriber.extractChunkWAV(
+            from: sources,
+            startSeconds: start,
+            durationSeconds: windowSeconds,
+            to: chunkURL
+        )
+        let recognizedText = didExtract
+            ? await transcriber.transcribeChunk(wavURL: chunkURL, preferFastModel: true)
+            : nil
         try? FileManager.default.removeItem(at: chunkURL)
         guard didExtract else {
             consecutiveExtractionFailures += 1
@@ -120,7 +117,16 @@ final class LiveTranscriptionService: ObservableObject {
 
         consecutiveExtractionFailures = 0
         lastError = ""
-        if let recognizedText { appendDeduped(recognizedText) }
+        if let recognizedText {
+            silentChunkCount = 0
+            appendDeduped(recognizedText)
+            QuernLog.log("[LiveTranscript] speech recognized in live chunk")
+        } else {
+            silentChunkCount += 1
+            if silentChunkCount == 1 || silentChunkCount.isMultiple(of: 15) {
+                QuernLog.log("[LiveTranscript] no speech recognized in extracted audio (chunks=\(silentChunkCount))")
+            }
+        }
         // Silence is a valid chunk: move forward so later speech is reached.
         nextStart = start + windowSeconds - overlapSeconds
         if nextStart < 0 { nextStart = 0 }

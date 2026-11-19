@@ -210,6 +210,29 @@ class WhisperTranscriber: @unchecked Sendable {
         return await runProcess(executable: ffmpegPath, arguments: args)
     }
 
+    /// Extract and mix microphone + system audio for the same live window, matching final transcription.
+    func extractChunkWAV(
+        from sourceURLs: [URL],
+        startSeconds: Double,
+        durationSeconds: Double,
+        to outputURL: URL
+    ) async -> Bool {
+        let sources = sourceURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !sources.isEmpty else { return false }
+        guard sources.count > 1 else {
+            return await extractChunkWAV(from: sources[0], startSeconds: startSeconds,
+                                         durationSeconds: durationSeconds, to: outputURL)
+        }
+
+        try? FileManager.default.removeItem(at: outputURL)
+        let start = max(0, startSeconds)
+        let duration = max(0.5, durationSeconds)
+        var args = ["-y", "-nostdin", "-ss", String(format: "%.2f", start), "-t", String(format: "%.2f", duration)]
+        for source in sources { args += ["-i", source.path] }
+        args += ["-filter_complex", "amix=inputs=\(sources.count):duration=longest", "-ar", "16000", "-ac", "1", outputURL.path]
+        return await runProcess(executable: ffmpegPath, arguments: args)
+    }
+
     func resolveBinaryPath() -> String? {
         var whisperBinary = UserDefaults.standard.string(forKey: "whisperBinaryPath")
         if whisperBinary == nil || whisperBinary!.isEmpty || !FileManager.default.fileExists(atPath: whisperBinary!) {
