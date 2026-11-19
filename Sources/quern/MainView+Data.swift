@@ -42,7 +42,8 @@ extension MainView {
                    prior.manualNotes != fresh.manualNotes
                     || prior.transcript != fresh.transcript
                     || prior.summary != fresh.summary
-                    || prior.title != fresh.title {
+                    || prior.title != fresh.title
+                    || prior.template != fresh.template {
                     selectedMeeting = fresh
                     statusMessage = "Note updated from disk"
                 }
@@ -274,7 +275,9 @@ extension MainView {
         }
 
         // Notes are always template "Note" so the library filter / icons work.
-        let template = payload.kind == .note ? "Note" : payload.template
+        let template = payload.kind == .note
+            ? "Note"
+            : (payload.template == "Note" ? "Standard Summary" : payload.template)
         let m = Meeting(
             id: id,
             title: title,
