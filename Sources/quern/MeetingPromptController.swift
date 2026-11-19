@@ -144,12 +144,11 @@ final class MeetingPromptController: NSObject, ObservableObject, UNUserNotificat
             panel = livePanel
         } else {
             panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 290),
-                            styleMask: [.nonactivatingPanel, .titled, .fullSizeContentView], backing: .buffered, defer: false)
-            panel.titleVisibility = .hidden
-            panel.titlebarAppearsTransparent = true
+                            styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
             panel.isReleasedWhenClosed = false
             panel.hidesOnDeactivate = false
             panel.level = .floating
+            panel.isMovableByWindowBackground = true
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.contentView = NSHostingView(rootView: LiveRecordingCard(
                 hide: { [weak self] in self?.livePanel?.orderOut(nil) },
